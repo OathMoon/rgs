@@ -7,4 +7,10 @@ license.workspace = true
 
 [dependencies]
 clap.workspace = true
+fancy-regex.workspace = true
+hex.workspace = true
 thiserror.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

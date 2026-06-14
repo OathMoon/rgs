@@ -37,7 +37,10 @@ fn parses_dcommit_dry_run_commit_url() {
     match cli.command {
         Command::Dcommit(args) => {
             assert!(args.dry_run);
-            assert_eq!(args.commit_url.as_deref(), Some("https://svn.example/write"));
+            assert_eq!(
+                args.commit_url.as_deref(),
+                Some("https://svn.example/write")
+            );
         }
         other => panic!("expected dcommit, got {other:?}"),
     }

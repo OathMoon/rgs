@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use clap::Parser;
 use git_svn_rs_core::cli::{Cli, Command};
 
@@ -11,7 +11,10 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Unsupported(args) => {
-            let name = args.first().cloned().unwrap_or_else(|| "unknown".to_string());
+            let name = args
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string());
             bail!("unsupported in v1: {name}")
         }
         Command::Branch(_) => bail!("unsupported in v1: branch"),

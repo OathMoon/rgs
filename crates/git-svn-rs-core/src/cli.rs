@@ -1,7 +1,11 @@
 use clap::{Args, Parser, Subcommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "git-svn-rs", version, about = "Rust replacement for core git-svn workflows")]
+#[command(
+    name = "git-svn-rs",
+    version,
+    about = "Rust replacement for core git-svn workflows"
+)]
 pub struct Cli {
     #[arg(short, long, global = true, action = clap::ArgAction::Count)]
     pub verbose: u8,
