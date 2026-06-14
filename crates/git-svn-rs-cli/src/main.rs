@@ -7,6 +7,8 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Init(args) => commands::init::run(args).map_err(anyhow::Error::msg),
+        Command::Clone(args) => commands::clone::run(args).map_err(anyhow::Error::msg),
+        Command::Fetch(args) => commands::fetch::run(args).map_err(anyhow::Error::msg),
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
             println!("libsvn feature: disabled");

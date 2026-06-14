@@ -1,5 +1,6 @@
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 pub trait GitBackend {
     fn init(&self) -> Result<(), String>;
@@ -8,6 +9,7 @@ pub trait GitBackend {
     fn config_add(&self, key: &str, value: &str) -> Result<(), String>;
     fn config_get(&self, key: &str) -> Result<Option<String>, String>;
     fn config_get_all(&self, key: &str) -> Result<Vec<String>, String>;
+    fn fast_import(&self, input: &[u8]) -> Result<(), String>;
 }
 
 #[derive(Debug, Clone)]
@@ -48,6 +50,10 @@ impl GitCli {
 
     pub fn config_get_all(&self, key: &str) -> Result<Vec<String>, String> {
         <Self as GitBackend>::config_get_all(self, key)
+    }
+
+    pub fn fast_import(&self, input: &[u8]) -> Result<(), String> {
+        <Self as GitBackend>::fast_import(self, input)
     }
 
     pub fn run_for_test<const N: usize>(&self, args: [&str; N]) -> Result<String, String> {
@@ -117,6 +123,27 @@ impl GitBackend for GitCli {
         } else {
             Err(stderr_or_status(output))
         }
+    }
+
+    fn fast_import(&self, input: &[u8]) -> Result<(), String> {
+        let mut child = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(["fast-import", "--quiet"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| e.to_string())?;
+
+        child
+            .stdin
+            .as_mut()
+            .ok_or_else(|| "failed to open git fast-import stdin".to_string())?
+            .write_all(input)
+            .map_err(|e| e.to_string())?;
+
+        let output = child.wait_with_output().map_err(|e| e.to_string())?;
+        command_output(output).map(|_| ())
     }
 }
 
