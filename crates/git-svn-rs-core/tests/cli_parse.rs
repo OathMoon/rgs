@@ -1,0 +1,69 @@
+use clap::Parser;
+use git_svn_rs_core::cli::{Cli, Command};
+
+#[test]
+fn parses_clone_with_standard_layout() {
+    let cli = Cli::parse_from([
+        "git-svn-rs",
+        "clone",
+        "file:///tmp/repo",
+        "work",
+        "--stdlayout",
+        "--authors-file",
+        "authors.txt",
+    ]);
+
+    match cli.command {
+        Command::Clone(args) => {
+            assert_eq!(args.url, "file:///tmp/repo");
+            assert_eq!(args.path.as_deref(), Some("work"));
+            assert!(args.layout.stdlayout);
+            assert_eq!(args.shared.authors_file.as_deref(), Some("authors.txt"));
+        }
+        other => panic!("expected clone, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_dcommit_dry_run_commit_url() {
+    let cli = Cli::parse_from([
+        "git-svn-rs",
+        "dcommit",
+        "--dry-run",
+        "--commit-url",
+        "https://svn.example/write",
+    ]);
+
+    match cli.command {
+        Command::Dcommit(args) => {
+            assert!(args.dry_run);
+            assert_eq!(args.commit_url.as_deref(), Some("https://svn.example/write"));
+        }
+        other => panic!("expected dcommit, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_dcommit_explicit_mergeinfo() {
+    let cli = Cli::parse_from([
+        "git-svn-rs",
+        "dcommit",
+        "--mergeinfo",
+        "/branches/foo:1-10",
+        "--dry-run",
+    ]);
+
+    match cli.command {
+        Command::Dcommit(args) => {
+            assert!(args.dry_run);
+            assert_eq!(args.mergeinfo.as_deref(), Some("/branches/foo:1-10"));
+        }
+        other => panic!("expected dcommit, got {other:?}"),
+    }
+}
+
+#[test]
+fn parses_known_unsupported_command() {
+    let cli = Cli::parse_from(["git-svn-rs", "branch", "feature"]);
+    assert!(matches!(cli.command, Command::Branch(_)));
+}

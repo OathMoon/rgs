@@ -1,0 +1,19 @@
+[workspace]
+members = [
+    "crates/git-svn-rs-cli",
+    "crates/git-svn-rs-core",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.95"
+license = "MIT OR Apache-2.0"
+
+[workspace.dependencies]
+anyhow = "1"
+assert_cmd = "2"
+clap = { version = "4", features = ["derive", "env"] }
+predicates = "3"
+tempfile = "3"
+thiserror = "2"
