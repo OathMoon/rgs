@@ -1,10 +1,12 @@
 use anyhow::{Result, bail};
 use clap::Parser;
 use git_svn_rs_core::cli::{Cli, Command};
+use git_svn_rs_core::commands;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Command::Init(args) => commands::init::run(args).map_err(anyhow::Error::msg),
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
             println!("libsvn feature: disabled");

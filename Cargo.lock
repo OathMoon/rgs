@@ -268,6 +268,7 @@ dependencies = [
  "clap",
  "git-svn-rs-core",
  "predicates",
+ "tempfile",
 ]
 
 [[package]]

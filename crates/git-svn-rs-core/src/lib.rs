@@ -1,7 +1,9 @@
 pub mod authors;
 pub mod cli;
+pub mod commands;
 pub mod config;
 pub mod error;
+pub mod fast_import;
 pub mod filters;
 pub mod git;
 pub mod git_svn_id;
@@ -11,3 +13,4 @@ pub mod metadata;
 pub mod migration;
 pub mod path_url;
 pub mod rev_map;
+pub mod svn;

@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+svn-libsvn = []
+
 [dependencies]
 clap.workspace = true
 fancy-regex.workspace = true
