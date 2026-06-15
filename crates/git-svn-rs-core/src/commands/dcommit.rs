@@ -122,7 +122,14 @@ fn dcommit_file_svn(
     for commit in &commits {
         let changes = git.diff_name_status(&diff_base, &commit.id)?;
         for change in changes {
-            apply_file_svn_change(git, &temp.wc, &commit.id, &change.status, &change.path)?;
+            apply_file_svn_change(
+                git,
+                &temp.wc,
+                &diff_base,
+                &commit.id,
+                &change.status,
+                &change.path,
+            )?;
         }
         let revision = svn_commit(&temp.wc, &commit.subject)?;
         fetch::run_in_work_tree(git.work_tree().to_path_buf(), default_fetch_args())?;
@@ -153,6 +160,7 @@ fn dcommit_file_svn(
 fn apply_file_svn_change(
     git: &GitCli,
     wc: &Path,
+    base: &str,
     commit: &str,
     status: &str,
     path: &str,
@@ -178,7 +186,8 @@ fn apply_file_svn_change(
         "M" => {
             std::fs::write(&target, svn_file_content(git, commit, path)?)
                 .map_err(|e| e.to_string())?;
-            apply_file_props(git, wc, commit, path, "100644")?;
+            let old_mode = git.ls_tree_file(base, path)?.mode;
+            apply_file_props(git, wc, commit, path, &old_mode)?;
         }
         "D" => {
             run_svn(Some(wc), &["delete".to_string(), path.replace('\\', "/")])?;

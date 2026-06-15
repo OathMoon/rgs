@@ -294,6 +294,57 @@ fn dcommit_writes_executable_property_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_removes_executable_property_from_file_svn_when_mode_is_cleared() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    run_git(&work, &["update-index", "--chmod=-x", "run.sh"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "clear executable bit",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("clear executable bit"));
+
+    svn_propget_missing("svn:executable", &format!("{}/trunk/run.sh", fixture.url()));
+}
+
+#[test]
 fn dcommit_writes_special_property_to_file_svn_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
@@ -502,4 +553,16 @@ fn svn_stdout(args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn svn_propget_missing(name: &str, url: &str) {
+    let output = std::process::Command::new("svn")
+        .args(["propget", "--strict", name, url])
+        .output()
+        .unwrap();
+    assert!(
+        !output.status.success(),
+        "svn propget unexpectedly succeeded: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
 }
