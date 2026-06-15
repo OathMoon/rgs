@@ -320,6 +320,47 @@ fn clone_file_url_applies_include_paths_filter() {
 }
 
 #[test]
+fn clone_file_url_applies_ignore_refs_filter() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--ignore-refs",
+            "^refs/remotes/origin/main$",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let refs = git
+        .run_for_test(["for-each-ref", "--format=%(refname)", "refs/remotes/origin"])
+        .unwrap();
+    assert!(refs.lines().any(|line| line == "refs/remotes/origin/trunk"));
+    assert!(!refs.lines().any(|line| line == "refs/remotes/origin/main"));
+    assert!(
+        refs.lines()
+            .any(|line| line == "refs/remotes/origin/tags/v1")
+    );
+}
+
+#[test]
 fn clone_file_url_applies_authors_file_mapping() {
     match require_svn_tools() {
         Ok(()) => {}

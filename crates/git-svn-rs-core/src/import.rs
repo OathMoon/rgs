@@ -10,6 +10,7 @@ use crate::glob_spec::GlobSpec;
 use crate::mapping::RefMapping;
 use crate::rev_map::{ObjectFormat, RevMap};
 use crate::svn::{ChangeAction, NodeKind, RevisionEvent, SvnBackend};
+use fancy_regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportOptions {
@@ -125,12 +126,21 @@ fn concrete_mappings(
     config: &SvnRemoteConfig,
     revisions: &[RevisionEvent],
 ) -> Result<Vec<RefMapping>, String> {
-    let mut mappings = config.fetch.clone();
+    let ignore_refs = compile_ref_filter(config.ignore_refs.as_deref())?;
+    let mut mappings = Vec::new();
+    for mapping in &config.fetch {
+        if ref_is_included(&mapping.git_ref, &ignore_refs)? {
+            mappings.push(mapping.clone());
+        }
+    }
     for mapping in config.branches.iter().chain(config.tags.iter()) {
         let spec = GlobSpec::new(&mapping.svn_path, true)?;
         for wildcard in wildcard_matches(&spec, revisions) {
             let svn_path = spec.full_path(&wildcard);
             let git_ref = mapping.git_ref.replace('*', &wildcard);
+            if !ref_is_included(&git_ref, &ignore_refs)? {
+                continue;
+            }
             if !mappings
                 .iter()
                 .any(|candidate| candidate.svn_path == svn_path && candidate.git_ref == git_ref)
@@ -144,6 +154,23 @@ fn concrete_mappings(
         }
     }
     Ok(mappings)
+}
+
+fn compile_ref_filter(pattern: Option<&str>) -> Result<Option<Regex>, String> {
+    pattern
+        .map(Regex::new)
+        .transpose()
+        .map_err(|err| err.to_string())
+}
+
+fn ref_is_included(refname: &str, ignore_refs: &Option<Regex>) -> Result<bool, String> {
+    match ignore_refs {
+        Some(ignore_refs) => ignore_refs
+            .is_match(refname)
+            .map(|matches| !matches)
+            .map_err(|err| err.to_string()),
+        None => Ok(true),
+    }
 }
 
 fn wildcard_matches(spec: &GlobSpec, revisions: &[RevisionEvent]) -> Vec<String> {
