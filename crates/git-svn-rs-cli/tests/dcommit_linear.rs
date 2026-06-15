@@ -178,6 +178,61 @@ fn dcommit_rebases_after_file_svn_write_by_default() {
 }
 
 #[test]
+fn dcommit_writes_file_adds_and_deletes_to_file_svn_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(work.join("added.txt"), "added\n").unwrap();
+    std::fs::remove_file(work.join("run.sh")).unwrap();
+    run_git(&work, &["add", "added.txt", "run.sh"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "add and delete files",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("add and delete files"));
+
+    let listing = svn_stdout(&["list", "-R", &format!("{}/trunk", fixture.url())]);
+    assert!(listing.lines().any(|line| line == "added.txt"));
+    assert!(!listing.lines().any(|line| line == "run.sh"));
+}
+
+#[test]
 fn dcommit_mergeinfo_reports_v1_scope_message() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
@@ -271,4 +326,18 @@ fn git_stdout(work: &std::path::Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn svn_stdout(args: &[&str]) -> String {
+    let output = std::process::Command::new("svn")
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "svn {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap()
 }
