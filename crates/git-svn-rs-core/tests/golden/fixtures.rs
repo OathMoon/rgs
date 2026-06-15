@@ -63,6 +63,7 @@ pub struct GoldenComparisonArtifacts {
     pub git_svn_id_footers: Vec<String>,
     pub rev_map: Vec<RevMapArtifactRecord>,
     pub file_modes: Vec<FileModeArtifact>,
+    pub empty_dir_placeholders: Vec<String>,
     pub log_oneline: String,
     pub find_rev: String,
     pub info_url: String,
@@ -225,6 +226,9 @@ pub fn run_standard_trunk_golden_comparison(
         &[
             "svn",
             "clone",
+            "--preserve-empty-dirs",
+            "--placeholder-filename",
+            ".gitkeep",
             "--trunk",
             "trunk",
             "--prefix=origin/",
@@ -241,6 +245,10 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("perl/rev-map.txt", &format_rev_map(&perl.rev_map))?;
     capture.write_text("perl/file-modes.txt", &format_file_modes(&perl.file_modes))?;
+    capture.write_text(
+        "perl/empty-dir-placeholders.txt",
+        &perl.empty_dir_placeholders.join("\n"),
+    )?;
     capture.write_text("perl/log-oneline.txt", &perl.log_oneline)?;
     capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
@@ -272,6 +280,10 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("rust/rev-map.txt", &format_rev_map(&rust.rev_map))?;
     capture.write_text("rust/file-modes.txt", &format_file_modes(&rust.file_modes))?;
+    capture.write_text(
+        "rust/empty-dir-placeholders.txt",
+        &rust.empty_dir_placeholders.join("\n"),
+    )?;
     capture.write_text("rust/log-oneline.txt", &rust.log_oneline)?;
     capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
@@ -317,6 +329,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "file modes differ\nperl: {:?}\nrust: {:?}",
             perl.file_modes, rust.file_modes
+        ));
+    }
+    if perl.empty_dir_placeholders != rust.empty_dir_placeholders {
+        mismatches.push(format!(
+            "empty dir placeholders differ\nperl: {:?}\nrust: {:?}",
+            perl.empty_dir_placeholders, rust.empty_dir_placeholders
         ));
     }
     if perl.log_oneline != rust.log_oneline {
@@ -526,6 +544,7 @@ fn collect_supported_artifacts(
         .collect::<Vec<_>>();
     let rev_map = supported_rev_map(work_tree)?;
     let file_modes = supported_file_modes(work_tree, rev)?;
+    let empty_dir_placeholders = supported_empty_dir_placeholders(work_tree, rev)?;
     let first_revision = rev_map
         .first()
         .ok_or_else(|| "golden clone did not write a rev_map record".to_string())?
@@ -544,6 +563,7 @@ fn collect_supported_artifacts(
         git_svn_id_footers,
         rev_map,
         file_modes,
+        empty_dir_placeholders,
         log_oneline,
         find_rev,
         info_url,
@@ -791,6 +811,19 @@ fn supported_file_modes(work_tree: &Path, refname: &str) -> Result<Vec<FileModeA
     .collect())
 }
 
+fn supported_empty_dir_placeholders(
+    work_tree: &Path,
+    refname: &str,
+) -> Result<Vec<String>, String> {
+    Ok(
+        run_text(work_tree, "git", &["ls-tree", "-r", "--name-only", refname])?
+            .lines()
+            .filter(|line| line.ends_with("/.gitkeep"))
+            .map(str::to_string)
+            .collect(),
+    )
+}
+
 fn supported_config(work_tree: &Path) -> Result<Vec<(String, String)>, String> {
     let keys = ["svn-remote.svn.url", "svn-remote.svn.fetch"];
     let mut config = Vec::new();
@@ -875,8 +908,8 @@ fn default_shared_fetch_args() -> SharedFetchArgs {
         username: None,
         config_dir: None,
         no_auth_cache: false,
-        preserve_empty_dirs: false,
-        placeholder_filename: ".gitignore".to_string(),
+        preserve_empty_dirs: true,
+        placeholder_filename: ".gitkeep".to_string(),
     }
 }
 
