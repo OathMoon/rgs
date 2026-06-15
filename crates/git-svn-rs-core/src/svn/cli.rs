@@ -65,21 +65,25 @@ impl SvnCliBackend {
             self.url.trim_end_matches('/'),
             path.trim_start_matches('/')
         );
-        let executable = match self.run_text(&[
-            "propget",
-            "--strict",
-            "--non-interactive",
-            "-r",
-            &revision.to_string(),
-            "svn:executable",
-            &url,
-        ]) {
-            Ok(value) => value,
-            Err(error) if error.contains("Property 'svn:executable' not found") => String::new(),
-            Err(error) => return Err(error),
-        };
-        if !executable.is_empty() {
-            properties.insert("svn:executable".to_string(), executable);
+        for name in ["svn:executable", "svn:special"] {
+            let value = match self.run_text(&[
+                "propget",
+                "--strict",
+                "--non-interactive",
+                "-r",
+                &revision.to_string(),
+                name,
+                &url,
+            ]) {
+                Ok(value) => value,
+                Err(error) if error.contains(&format!("Property '{name}' not found")) => {
+                    String::new()
+                }
+                Err(error) => return Err(error),
+            };
+            if !value.is_empty() {
+                properties.insert(name.to_string(), value);
+            }
         }
         Ok(properties)
     }

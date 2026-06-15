@@ -142,6 +142,18 @@ fn clone_stdlayout_file_url_imports_branch_tag_and_copy_contents() {
             .next(),
         Some("100755")
     );
+    assert_eq!(
+        git.run_for_test(["ls-tree", "refs/remotes/origin/trunk", "link-to-lib"])
+            .unwrap()
+            .split_whitespace()
+            .next(),
+        Some("120000")
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:link-to-lib"])
+            .unwrap(),
+        "src/lib.rs".to_string()
+    );
 
     let trunk_tree = git
         .run_for_test(["ls-tree", "-r", "--name-only", "refs/remotes/origin/trunk"])

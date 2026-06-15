@@ -74,6 +74,8 @@ impl StandardSvnFixture {
         .map_err(|e| e.to_string())?;
         std::fs::write(wc.join("trunk/run.sh"), "#!/bin/sh\necho hi\n")
             .map_err(|e| e.to_string())?;
+        std::fs::write(wc.join("trunk/link-to-lib"), "link src/lib.rs")
+            .map_err(|e| e.to_string())?;
         run(
             &wc,
             "svn",
@@ -82,6 +84,7 @@ impl StandardSvnFixture {
                 "--non-interactive",
                 "trunk/src",
                 "trunk/run.sh",
+                "trunk/link-to-lib",
                 "trunk/empty-dir",
             ],
         )?;
@@ -94,6 +97,17 @@ impl StandardSvnFixture {
                 "svn:executable",
                 "x",
                 "trunk/run.sh",
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "propset",
+                "--non-interactive",
+                "svn:special",
+                "x",
+                "trunk/link-to-lib",
             ],
         )?;
         run(

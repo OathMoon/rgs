@@ -194,7 +194,7 @@ fn changes_for_revision(revision: &RevisionEvent, strip_prefix: &str) -> Vec<Fil
                     Some(FileChange::Modify {
                         path,
                         mode: mode_for_change(changed_path),
-                        content: changed_path.content.clone().unwrap_or_default(),
+                        content: content_for_change(changed_path),
                     })
                 }
                 _ => None,
@@ -204,7 +204,8 @@ fn changes_for_revision(revision: &RevisionEvent, strip_prefix: &str) -> Vec<Fil
 }
 
 fn mode_for_change(changed_path: &crate::svn::ChangedPath) -> String {
-    if changed_path.kind == NodeKind::Symlink {
+    if changed_path.kind == NodeKind::Symlink || changed_path.properties.contains_key("svn:special")
+    {
         "120000"
     } else if changed_path.properties.contains_key("svn:executable") {
         "100755"
@@ -212,6 +213,15 @@ fn mode_for_change(changed_path: &crate::svn::ChangedPath) -> String {
         "100644"
     }
     .to_string()
+}
+
+fn content_for_change(changed_path: &crate::svn::ChangedPath) -> Vec<u8> {
+    let content = changed_path.content.clone().unwrap_or_default();
+    if changed_path.properties.contains_key("svn:special") && content.starts_with(b"link ") {
+        content[5..].to_vec()
+    } else {
+        content
+    }
 }
 
 fn mock_fixture_changes(revision: u32) -> Vec<FileChange> {
