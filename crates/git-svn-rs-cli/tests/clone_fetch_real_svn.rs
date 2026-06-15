@@ -376,6 +376,53 @@ fn clone_file_url_applies_authors_file_mapping() {
 }
 
 #[test]
+fn clone_file_url_honors_revision_range_end() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--revision",
+            "1:2",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let refs = git
+        .run_for_test(["for-each-ref", "--format=%(refname)", "refs/remotes/origin"])
+        .unwrap();
+    assert!(refs.lines().any(|line| line == "refs/remotes/origin/trunk"));
+    assert!(!refs.lines().any(|line| line == "refs/remotes/origin/main"));
+    assert!(
+        !refs
+            .lines()
+            .any(|line| line == "refs/remotes/origin/tags/v1")
+    );
+    let trunk_tree = git
+        .run_for_test(["ls-tree", "-r", "--name-only", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert!(trunk_tree.lines().any(|line| line == "src/lib.rs"));
+    assert!(trunk_tree.lines().any(|line| line == "run.sh"));
+}
+
+#[test]
 fn fetch_file_url_applies_persisted_authors_file_mapping() {
     match require_svn_tools() {
         Ok(()) => {}

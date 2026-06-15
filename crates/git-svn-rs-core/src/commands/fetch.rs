@@ -8,6 +8,7 @@ use crate::svn::SvnBackend;
 use crate::svn::cli::SvnCliBackend;
 use crate::svn::mock::MockRaSession;
 use crate::svn::ra::RaSession;
+use std::cmp;
 
 pub fn run(args: FetchArgs) -> Result<(), String> {
     run_in_work_tree(".", args)
@@ -24,14 +25,12 @@ pub fn run_in_work_tree(
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
         let start_revision = next_revision(&git, &config, "mock-uuid")?;
+        let import_options = import_options(start_revision, args.shared.revision.as_deref())?;
         import_mock_revisions(
             &MockBackendFromSession(&session),
             &git,
             &config,
-            ImportOptions {
-                start_revision,
-                end_revision: None,
-            },
+            import_options,
         )?;
         return Ok(());
     }
@@ -39,16 +38,57 @@ pub fn run_in_work_tree(
     let backend = SvnCliBackend::new(&config.url)?;
     let uuid = backend.uuid()?;
     let start_revision = next_revision(&git, &config, &uuid)?;
-    import_mock_revisions(
-        &backend,
-        &git,
-        &config,
-        ImportOptions {
-            start_revision,
-            end_revision: None,
-        },
-    )?;
+    let import_options = import_options(start_revision, args.shared.revision.as_deref())?;
+    import_mock_revisions(&backend, &git, &config, import_options)?;
     Ok(())
+}
+
+fn import_options(next_revision: u32, revision: Option<&str>) -> Result<ImportOptions, String> {
+    let Some(revision) = revision else {
+        return Ok(ImportOptions {
+            start_revision: next_revision,
+            end_revision: None,
+        });
+    };
+    let range = parse_revision_range(revision)?;
+    Ok(ImportOptions {
+        start_revision: cmp::max(next_revision, range.start.unwrap_or(next_revision)),
+        end_revision: range.end,
+    })
+}
+
+struct RevisionRange {
+    start: Option<u32>,
+    end: Option<u32>,
+}
+
+fn parse_revision_range(value: &str) -> Result<RevisionRange, String> {
+    if let Some((start, end)) = value.split_once(':') {
+        return Ok(RevisionRange {
+            start: parse_optional_revision(start)?,
+            end: parse_optional_revision(end)?,
+        });
+    }
+    let revision = parse_revision(value)?;
+    Ok(RevisionRange {
+        start: Some(revision),
+        end: Some(revision),
+    })
+}
+
+fn parse_optional_revision(value: &str) -> Result<Option<u32>, String> {
+    if value.trim().is_empty() {
+        return Ok(None);
+    }
+    parse_revision(value).map(Some)
+}
+
+fn parse_revision(value: &str) -> Result<u32, String> {
+    let trimmed = value.trim();
+    let revision = trimmed.strip_prefix('r').unwrap_or(trimmed);
+    revision
+        .parse()
+        .map_err(|_| format!("invalid SVN revision: {value}"))
 }
 
 fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
