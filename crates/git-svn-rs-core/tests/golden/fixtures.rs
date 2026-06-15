@@ -66,6 +66,7 @@ pub struct GoldenComparisonArtifacts {
     pub log_oneline: String,
     pub find_rev: String,
     pub info_url: String,
+    pub info_summary: String,
 }
 
 impl GoldenFixture {
@@ -240,6 +241,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/log-oneline.txt", &perl.log_oneline)?;
     capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
+    capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -267,6 +269,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/log-oneline.txt", &rust.log_oneline)?;
     capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
+    capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -323,6 +326,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "info --url output differs\nperl: {:?}\nrust: {:?}",
             perl.info_url, rust.info_url
+        ));
+    }
+    if perl.info_summary != rust.info_summary {
+        mismatches.push(format!(
+            "info output differs\nperl: {:?}\nrust: {:?}",
+            perl.info_summary, rust.info_summary
         ));
     }
 
@@ -497,6 +506,7 @@ fn collect_supported_artifacts(
     let log_oneline = supported_log_oneline(work_tree, tool)?;
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
     let info_url = supported_info_url(work_tree, tool)?;
+    let info_summary = supported_info_summary(work_tree, tool)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -507,6 +517,7 @@ fn collect_supported_artifacts(
         log_oneline,
         find_rev,
         info_url,
+        info_summary,
     })
 }
 
@@ -550,6 +561,28 @@ fn supported_info_url(work_tree: &Path, tool: GoldenTool) -> Result<String, Stri
         GoldenTool::Rust => commands::info::run_in_work_tree(work_tree, InfoArgs { url: true })?,
     };
     Ok(output.trim().replace('\\', "/"))
+}
+
+fn supported_info_summary(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "info"])?,
+        GoldenTool::Rust => commands::info::run_in_work_tree(work_tree, InfoArgs { url: false })?,
+    };
+    Ok(normalize_info_summary(&output))
+}
+
+fn normalize_info_summary(output: &str) -> String {
+    let supported = ["URL:", "Repository Root:", "Repository UUID:", "Revision:"];
+    output
+        .lines()
+        .filter_map(|line| {
+            supported
+                .iter()
+                .find(|prefix| line.starts_with(**prefix))
+                .map(|_| line.replace('\\', "/"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn normalize_log_oneline(output: &str) -> String {
