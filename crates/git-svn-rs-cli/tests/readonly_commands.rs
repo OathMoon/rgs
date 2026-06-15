@@ -132,6 +132,43 @@ fn log_revision_filters_to_requested_svn_revision() {
 }
 
 #[test]
+fn log_revision_range_filters_to_requested_svn_revisions() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", ":refs/remotes/git-svn");
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "two.txt",
+        "two\n",
+        "second\n\ngit-svn-id: mock://repo@2 mock-uuid",
+    );
+    let rev3 = commit_file(
+        work,
+        "three.txt",
+        "three\n",
+        "third\n\ngit-svn-id: mock://repo@3 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2, &rev3]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev3]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--revision", "1:2", "--oneline"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("r1 | first"))
+        .stdout(predicate::str::contains("r2 | second"))
+        .stdout(predicate::str::contains("r3 | third").not());
+}
+
+#[test]
 fn gc_removes_stale_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
