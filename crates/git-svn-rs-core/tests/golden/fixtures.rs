@@ -875,6 +875,8 @@ fn default_shared_fetch_args() -> SharedFetchArgs {
         username: None,
         config_dir: None,
         no_auth_cache: false,
+        preserve_empty_dirs: false,
+        placeholder_filename: ".gitignore".to_string(),
     }
 }
 

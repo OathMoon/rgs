@@ -81,7 +81,7 @@ fn import_revisions_for_mapping(
         if revision.revision <= max_imported_revision {
             continue;
         }
-        let changes = changes_for_revision(revision, &strip_prefix);
+        let changes = changes_for_revision(revision, &strip_prefix, config);
         if changes.is_empty() {
             continue;
         }
@@ -192,17 +192,38 @@ fn wildcard_from_exact_match(spec: &GlobSpec, path: &str) -> Option<String> {
     (!relative.is_empty()).then(|| relative.to_string())
 }
 
-fn changes_for_revision(revision: &RevisionEvent, strip_prefix: &str) -> Vec<FileChange> {
+fn changes_for_revision(
+    revision: &RevisionEvent,
+    strip_prefix: &str,
+    config: &SvnRemoteConfig,
+) -> Vec<FileChange> {
     if revision.changed_paths.is_empty() {
         return mock_fixture_changes(revision.revision);
     }
 
-    revision
+    let file_paths = revision
+        .changed_paths
+        .iter()
+        .filter(|changed_path| {
+            matches!(
+                changed_path.action,
+                ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
+            ) && changed_path.kind == NodeKind::File
+        })
+        .filter_map(|changed_path| import_path(&changed_path.path, strip_prefix))
+        .collect::<Vec<_>>();
+
+    let mut changes = revision
         .changed_paths
         .iter()
         .filter_map(|changed_path| {
             let path = import_path(&changed_path.path, strip_prefix)?;
             match changed_path.action {
+                ChangeAction::Delete if changed_path.kind == NodeKind::Directory => {
+                    config.preserve_empty_dirs.then(|| FileChange::Delete {
+                        path: placeholder_path(&path, config),
+                    })
+                }
                 ChangeAction::Delete => Some(FileChange::Delete { path }),
                 ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
                     if changed_path.kind == NodeKind::File =>
@@ -216,7 +237,44 @@ fn changes_for_revision(revision: &RevisionEvent, strip_prefix: &str) -> Vec<Fil
                 _ => None,
             }
         })
-        .collect()
+        .collect::<Vec<_>>();
+
+    if config.preserve_empty_dirs {
+        for changed_path in &revision.changed_paths {
+            if !matches!(
+                changed_path.action,
+                ChangeAction::Add | ChangeAction::Replace | ChangeAction::Modify
+            ) || changed_path.kind != NodeKind::Directory
+            {
+                continue;
+            }
+            let Some(path) = import_path(&changed_path.path, strip_prefix) else {
+                continue;
+            };
+            let child_prefix = format!("{}/", path.trim_end_matches('/'));
+            if file_paths
+                .iter()
+                .any(|file_path| file_path == &path || file_path.starts_with(&child_prefix))
+            {
+                continue;
+            }
+            changes.push(FileChange::Modify {
+                path: placeholder_path(&path, config),
+                mode: "100644".to_string(),
+                content: Vec::new(),
+            });
+        }
+    }
+
+    changes
+}
+
+fn placeholder_path(path: &str, config: &SvnRemoteConfig) -> String {
+    format!(
+        "{}/{}",
+        path.trim_end_matches('/'),
+        config.placeholder_filename.trim_matches('/')
+    )
 }
 
 fn mode_for_change(changed_path: &crate::svn::ChangedPath) -> String {

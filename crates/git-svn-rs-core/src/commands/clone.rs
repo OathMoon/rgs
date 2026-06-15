@@ -3,6 +3,7 @@ use crate::commands::{fetch, init};
 
 pub fn run(args: CloneArgs) -> Result<(), String> {
     let path = args.path.clone().unwrap_or_else(|| default_path(&args.url));
+    let fetch_args = fetch_args(args.shared.clone());
     let init_args = InitArgs {
         url: args.url,
         path: Some(path.clone()),
@@ -12,28 +13,13 @@ pub fn run(args: CloneArgs) -> Result<(), String> {
 
     init::run(init_args)?;
 
-    fetch::run_in_work_tree(path, default_fetch_args())
+    fetch::run_in_work_tree(path, fetch_args)
 }
 
-fn default_fetch_args() -> crate::cli::FetchArgs {
+fn fetch_args(shared: crate::cli::SharedFetchArgs) -> crate::cli::FetchArgs {
     crate::cli::FetchArgs {
         remote: None,
-        shared: crate::cli::SharedFetchArgs {
-            authors_file: None,
-            authors_prog: None,
-            ignore_paths: None,
-            include_paths: None,
-            ignore_refs: None,
-            revision: None,
-            log_window_size: None,
-            localtime: false,
-            no_metadata: false,
-            rewrite_root: None,
-            rewrite_uuid: None,
-            username: None,
-            config_dir: None,
-            no_auth_cache: false,
-        },
+        shared,
         fetch_all: false,
         parent: false,
     }

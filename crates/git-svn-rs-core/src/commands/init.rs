@@ -36,6 +36,9 @@ fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfi
     if let Some(value) = args.shared.ignore_refs {
         config = config.with_ignore_refs(value);
     }
+    if args.shared.preserve_empty_dirs {
+        config = config.with_preserve_empty_dirs(args.shared.placeholder_filename);
+    }
 
     config
 }
@@ -56,6 +59,13 @@ fn write_svn_remote_config(git: &GitCli, config: &SvnRemoteConfig) -> Result<(),
     }
     if let Some(value) = &config.ignore_refs {
         git.config_set(&format!("{prefix}.ignore-refs"), value)?;
+    }
+    if config.preserve_empty_dirs {
+        git.config_set(&format!("{prefix}.preserve-empty-dirs"), "true")?;
+        git.config_set(
+            &format!("{prefix}.placeholder-filename"),
+            &config.placeholder_filename,
+        )?;
     }
 
     Ok(())

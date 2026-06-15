@@ -10,6 +10,8 @@ pub struct SvnRemoteConfig {
     pub ignore_paths: Option<String>,
     pub include_paths: Option<String>,
     pub ignore_refs: Option<String>,
+    pub preserve_empty_dirs: bool,
+    pub placeholder_filename: String,
 }
 
 impl SvnRemoteConfig {
@@ -23,6 +25,8 @@ impl SvnRemoteConfig {
             ignore_paths: None,
             include_paths: None,
             ignore_refs: None,
+            preserve_empty_dirs: false,
+            placeholder_filename: ".gitignore".to_string(),
         }
     }
 
@@ -38,6 +42,12 @@ impl SvnRemoteConfig {
 
     pub fn with_ignore_refs(mut self, value: impl Into<String>) -> Self {
         self.ignore_refs = Some(value.into());
+        self
+    }
+
+    pub fn with_preserve_empty_dirs(mut self, placeholder_filename: impl Into<String>) -> Self {
+        self.preserve_empty_dirs = true;
+        self.placeholder_filename = placeholder_filename.into();
         self
     }
 
@@ -72,6 +82,13 @@ impl SvnRemoteConfig {
         }
         if let Some(value) = &self.ignore_refs {
             entries.push((format!("{prefix}.ignore-refs"), value.clone()));
+        }
+        if self.preserve_empty_dirs {
+            entries.push((format!("{prefix}.preserve-empty-dirs"), "true".to_string()));
+            entries.push((
+                format!("{prefix}.placeholder-filename"),
+                self.placeholder_filename.clone(),
+            ));
         }
 
         entries

@@ -75,6 +75,12 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
         ignore_paths: git.config_get(&format!("{prefix}.ignore-paths"))?,
         include_paths: git.config_get(&format!("{prefix}.include-paths"))?,
         ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
+        preserve_empty_dirs: git
+            .config_get(&format!("{prefix}.preserve-empty-dirs"))?
+            .is_some_and(|value| value == "true"),
+        placeholder_filename: git
+            .config_get(&format!("{prefix}.placeholder-filename"))?
+            .unwrap_or_else(|| ".gitignore".to_string()),
     })
 }
 

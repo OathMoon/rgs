@@ -160,3 +160,86 @@ fn clone_stdlayout_file_url_imports_branch_tag_and_copy_contents() {
         .unwrap();
     assert!(!trunk_tree.lines().any(|line| line == "empty-dir"));
 }
+
+#[test]
+fn clone_stdlayout_file_url_preserves_empty_dirs_when_requested() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--preserve-empty-dirs",
+            "--placeholder-filename",
+            ".gitkeep",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
+}
+
+#[test]
+fn fetch_file_url_preserves_empty_dirs_from_persisted_config() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--preserve-empty-dirs",
+            "--placeholder-filename",
+            ".gitkeep",
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
+}

@@ -60,7 +60,7 @@ pub struct LayoutArgs {
     pub prefix: Option<String>,
 }
 
-#[derive(Debug, Args)]
+#[derive(Debug, Clone, Args)]
 pub struct SharedFetchArgs {
     #[arg(short = 'A', long = "authors-file")]
     pub authors_file: Option<String>,
@@ -90,6 +90,10 @@ pub struct SharedFetchArgs {
     pub config_dir: Option<String>,
     #[arg(long = "no-auth-cache")]
     pub no_auth_cache: bool,
+    #[arg(long = "preserve-empty-dirs")]
+    pub preserve_empty_dirs: bool,
+    #[arg(long = "placeholder-filename", default_value = ".gitignore")]
+    pub placeholder_filename: String,
 }
 
 #[derive(Debug, Args)]
