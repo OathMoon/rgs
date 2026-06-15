@@ -39,6 +39,9 @@ fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfi
     if let Some(value) = args.shared.authors_file {
         config = config.with_authors_file(value);
     }
+    if args.shared.no_metadata {
+        config = config.without_metadata();
+    }
     if args.shared.preserve_empty_dirs {
         config = config.with_preserve_empty_dirs(args.shared.placeholder_filename);
     }
@@ -65,6 +68,9 @@ fn write_svn_remote_config(git: &GitCli, config: &SvnRemoteConfig) -> Result<(),
     }
     if let Some(value) = &config.authors_file {
         git.config_set(&format!("{prefix}.authors-file"), value)?;
+    }
+    if config.no_metadata {
+        git.config_set(&format!("{prefix}.noMetadata"), "true")?;
     }
     if config.preserve_empty_dirs {
         git.config_set(&format!("{prefix}.preserve-empty-dirs"), "true")?;

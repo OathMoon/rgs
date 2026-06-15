@@ -370,6 +370,10 @@ fn commit_message(
     uuid: &str,
     strip_prefix: &str,
 ) -> String {
+    if config.no_metadata {
+        return revision.message.clone();
+    }
+
     let url = if strip_prefix.is_empty() {
         config.url.clone()
     } else {

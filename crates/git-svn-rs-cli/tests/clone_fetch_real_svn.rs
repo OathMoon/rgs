@@ -56,6 +56,42 @@ fn clone_stdlayout_file_url_imports_trunk_history() {
 }
 
 #[test]
+fn clone_file_url_no_metadata_omits_git_svn_id_footer() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--no-metadata",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let commit = git
+        .run_for_test(["show", "-s", "--format=%B", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert!(commit.contains("add trunk file"));
+    assert!(!commit.contains("git-svn-id: "));
+}
+
+#[test]
 fn fetch_stdlayout_file_url_imports_trunk_history_after_init() {
     match require_svn_tools() {
         Ok(()) => {}
