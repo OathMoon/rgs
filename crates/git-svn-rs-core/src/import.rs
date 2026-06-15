@@ -193,7 +193,7 @@ fn changes_for_revision(revision: &RevisionEvent, strip_prefix: &str) -> Vec<Fil
                 {
                     Some(FileChange::Modify {
                         path,
-                        mode: "100644".to_string(),
+                        mode: mode_for_change(changed_path),
                         content: changed_path.content.clone().unwrap_or_default(),
                     })
                 }
@@ -201,6 +201,17 @@ fn changes_for_revision(revision: &RevisionEvent, strip_prefix: &str) -> Vec<Fil
             }
         })
         .collect()
+}
+
+fn mode_for_change(changed_path: &crate::svn::ChangedPath) -> String {
+    if changed_path.kind == NodeKind::Symlink {
+        "120000"
+    } else if changed_path.properties.contains_key("svn:executable") {
+        "100755"
+    } else {
+        "100644"
+    }
+    .to_string()
 }
 
 fn mock_fixture_changes(revision: u32) -> Vec<FileChange> {

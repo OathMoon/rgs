@@ -72,10 +72,29 @@ impl StandardSvnFixture {
             "pub fn answer() -> u8 { 42 }\n",
         )
         .map_err(|e| e.to_string())?;
+        std::fs::write(wc.join("trunk/run.sh"), "#!/bin/sh\necho hi\n")
+            .map_err(|e| e.to_string())?;
         run(
             &wc,
             "svn",
-            &["add", "--non-interactive", "trunk/src", "trunk/empty-dir"],
+            &[
+                "add",
+                "--non-interactive",
+                "trunk/src",
+                "trunk/run.sh",
+                "trunk/empty-dir",
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "propset",
+                "--non-interactive",
+                "svn:executable",
+                "x",
+                "trunk/run.sh",
+            ],
         )?;
         run(
             &wc,

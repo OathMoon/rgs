@@ -135,6 +135,13 @@ fn clone_stdlayout_file_url_imports_branch_tag_and_copy_contents() {
             .unwrap(),
         "pub fn answer() -> u8 { 42 }\n".to_string()
     );
+    assert_eq!(
+        git.run_for_test(["ls-tree", "refs/remotes/origin/trunk", "run.sh"])
+            .unwrap()
+            .split_whitespace()
+            .next(),
+        Some("100755")
+    );
 
     let trunk_tree = git
         .run_for_test(["ls-tree", "-r", "--name-only", "refs/remotes/origin/trunk"])

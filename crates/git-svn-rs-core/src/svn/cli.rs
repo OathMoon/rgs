@@ -54,6 +54,36 @@ impl SvnCliBackend {
         ])
     }
 
+    fn file_properties(
+        &self,
+        path: &str,
+        revision: u32,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let mut properties = BTreeMap::new();
+        let url = format!(
+            "{}/{}",
+            self.url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        let executable = match self.run_text(&[
+            "propget",
+            "--strict",
+            "--non-interactive",
+            "-r",
+            &revision.to_string(),
+            "svn:executable",
+            &url,
+        ]) {
+            Ok(value) => value,
+            Err(error) if error.contains("Property 'svn:executable' not found") => String::new(),
+            Err(error) => return Err(error),
+        };
+        if !executable.is_empty() {
+            properties.insert("svn:executable".to_string(), executable);
+        }
+        Ok(properties)
+    }
+
     fn list_files(&self, path: &str, revision: u32) -> Result<Vec<String>, String> {
         let url = format!(
             "{}/{}",
@@ -105,6 +135,7 @@ impl SvnBackend for SvnCliBackend {
                 ) && path.kind == NodeKind::File
                 {
                     path.content = Some(self.cat(&path.path, revision.revision)?);
+                    path.properties = self.file_properties(&path.path, revision.revision)?;
                 }
                 if matches!(path.action, ChangeAction::Add | ChangeAction::Replace)
                     && path.kind == NodeKind::Directory
@@ -120,7 +151,7 @@ impl SvnBackend for SvnCliBackend {
                             }),
                             copy_from_rev: path.copy_from_rev,
                             kind: NodeKind::File,
-                            properties: BTreeMap::new(),
+                            properties: self.file_properties(&file_path, revision.revision)?,
                             content: Some(self.cat(&file_path, revision.revision)?),
                         });
                     }
