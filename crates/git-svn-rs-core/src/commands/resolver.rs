@@ -79,6 +79,8 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
         no_metadata: git
             .config_get(&format!("{prefix}.noMetadata"))?
             .is_some_and(|value| value == "true"),
+        rewrite_root: git.config_get(&format!("{prefix}.rewriteRoot"))?,
+        rewrite_uuid: git.config_get(&format!("{prefix}.rewriteUUID"))?,
         preserve_empty_dirs: git
             .config_get(&format!("{prefix}.preserve-empty-dirs"))?
             .is_some_and(|value| value == "true"),

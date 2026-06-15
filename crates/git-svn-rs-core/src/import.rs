@@ -374,15 +374,19 @@ fn commit_message(
         return revision.message.clone();
     }
 
+    let root_url = config.rewrite_root.as_ref().unwrap_or(&config.url);
     let url = if strip_prefix.is_empty() {
-        config.url.clone()
+        root_url.clone()
     } else {
-        format!("{}/{}", config.url.trim_end_matches('/'), strip_prefix)
+        format!("{}/{}", root_url.trim_end_matches('/'), strip_prefix)
     };
     let footer = GitSvnId {
         url,
         revision: revision.revision,
-        uuid: uuid.to_string(),
+        uuid: config
+            .rewrite_uuid
+            .clone()
+            .unwrap_or_else(|| uuid.to_string()),
     }
     .to_footer();
     format!("{}\n\n{}", revision.message, footer)

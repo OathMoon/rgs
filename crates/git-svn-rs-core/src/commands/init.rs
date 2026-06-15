@@ -42,6 +42,12 @@ fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfi
     if args.shared.no_metadata {
         config = config.without_metadata();
     }
+    if let Some(value) = args.shared.rewrite_root {
+        config = config.with_rewrite_root(value);
+    }
+    if let Some(value) = args.shared.rewrite_uuid {
+        config = config.with_rewrite_uuid(value);
+    }
     if args.shared.preserve_empty_dirs {
         config = config.with_preserve_empty_dirs(args.shared.placeholder_filename);
     }
@@ -71,6 +77,12 @@ fn write_svn_remote_config(git: &GitCli, config: &SvnRemoteConfig) -> Result<(),
     }
     if config.no_metadata {
         git.config_set(&format!("{prefix}.noMetadata"), "true")?;
+    }
+    if let Some(value) = &config.rewrite_root {
+        git.config_set(&format!("{prefix}.rewriteRoot"), value)?;
+    }
+    if let Some(value) = &config.rewrite_uuid {
+        git.config_set(&format!("{prefix}.rewriteUUID"), value)?;
     }
     if config.preserve_empty_dirs {
         git.config_set(&format!("{prefix}.preserve-empty-dirs"), "true")?;

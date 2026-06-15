@@ -12,6 +12,8 @@ pub struct SvnRemoteConfig {
     pub ignore_refs: Option<String>,
     pub authors_file: Option<String>,
     pub no_metadata: bool,
+    pub rewrite_root: Option<String>,
+    pub rewrite_uuid: Option<String>,
     pub preserve_empty_dirs: bool,
     pub placeholder_filename: String,
 }
@@ -29,6 +31,8 @@ impl SvnRemoteConfig {
             ignore_refs: None,
             authors_file: None,
             no_metadata: false,
+            rewrite_root: None,
+            rewrite_uuid: None,
             preserve_empty_dirs: false,
             placeholder_filename: ".gitignore".to_string(),
         }
@@ -56,6 +60,16 @@ impl SvnRemoteConfig {
 
     pub fn without_metadata(mut self) -> Self {
         self.no_metadata = true;
+        self
+    }
+
+    pub fn with_rewrite_root(mut self, value: impl Into<String>) -> Self {
+        self.rewrite_root = Some(value.into());
+        self
+    }
+
+    pub fn with_rewrite_uuid(mut self, value: impl Into<String>) -> Self {
+        self.rewrite_uuid = Some(value.into());
         self
     }
 
@@ -102,6 +116,12 @@ impl SvnRemoteConfig {
         }
         if self.no_metadata {
             entries.push((format!("{prefix}.noMetadata"), "true".to_string()));
+        }
+        if let Some(value) = &self.rewrite_root {
+            entries.push((format!("{prefix}.rewriteRoot"), value.clone()));
+        }
+        if let Some(value) = &self.rewrite_uuid {
+            entries.push((format!("{prefix}.rewriteUUID"), value.clone()));
         }
         if self.preserve_empty_dirs {
             entries.push((format!("{prefix}.preserve-empty-dirs"), "true".to_string()));

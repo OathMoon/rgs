@@ -92,6 +92,47 @@ fn clone_file_url_no_metadata_omits_git_svn_id_footer() {
 }
 
 #[test]
+fn clone_file_url_rewrites_git_svn_id_metadata() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let rewritten_uuid = "00000000-1111-2222-3333-444444444444";
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--rewrite-root",
+            "https://mirror.example/svn/project",
+            "--rewrite-uuid",
+            rewritten_uuid,
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let commit = git
+        .run_for_test(["show", "-s", "--format=%B", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert!(commit.contains(
+        "git-svn-id: https://mirror.example/svn/project/trunk@2 00000000-1111-2222-3333-444444444444"
+    ));
+}
+
+#[test]
 fn fetch_stdlayout_file_url_imports_trunk_history_after_init() {
     match require_svn_tools() {
         Ok(()) => {}
