@@ -68,6 +68,7 @@ pub struct GoldenComparisonArtifacts {
     pub info_url: String,
     pub info_summary: String,
     pub log_revision_oneline: String,
+    pub find_rev_nearest: String,
 }
 
 impl GoldenFixture {
@@ -244,6 +245,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
     capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
     capture.write_text("perl/log-revision-oneline.txt", &perl.log_revision_oneline)?;
+    capture.write_text("perl/find-rev-nearest.txt", &perl.find_rev_nearest)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -273,6 +275,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
     capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
     capture.write_text("rust/log-revision-oneline.txt", &rust.log_revision_oneline)?;
+    capture.write_text("rust/find-rev-nearest.txt", &rust.find_rev_nearest)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -341,6 +344,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "log --revision output differs\nperl: {:?}\nrust: {:?}",
             perl.log_revision_oneline, rust.log_revision_oneline
+        ));
+    }
+    if perl.find_rev_nearest != rust.find_rev_nearest {
+        mismatches.push(format!(
+            "find-rev nearest output differs\nperl: {:?}\nrust: {:?}",
+            perl.find_rev_nearest, rust.find_rev_nearest
         ));
     }
 
@@ -517,6 +526,7 @@ fn collect_supported_artifacts(
     let info_url = supported_info_url(work_tree, tool)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
     let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
+    let find_rev_nearest = supported_find_rev_nearest(work_tree, tool, first_revision + 1)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -529,6 +539,7 @@ fn collect_supported_artifacts(
         info_url,
         info_summary,
         log_revision_oneline,
+        find_rev_nearest,
     })
 }
 
@@ -587,6 +598,62 @@ fn supported_find_rev(work_tree: &Path, tool: GoldenTool, revision: u32) -> Resu
                 rev_or_commit: revision_arg,
                 before: false,
                 after: false,
+            },
+        )?,
+    };
+    Ok(normalize_find_rev_output(revision, &output))
+}
+
+fn supported_find_rev_nearest(
+    work_tree: &Path,
+    tool: GoldenTool,
+    revision: u32,
+) -> Result<String, String> {
+    let before =
+        supported_find_rev_with_direction(work_tree, tool, revision, FindRevDirection::Before)?;
+    let after =
+        supported_find_rev_with_direction(work_tree, tool, revision, FindRevDirection::After)?;
+    Ok(format!("before {before}\nafter {after}"))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum FindRevDirection {
+    Before,
+    After,
+}
+
+fn supported_find_rev_with_direction(
+    work_tree: &Path,
+    tool: GoldenTool,
+    revision: u32,
+    direction: FindRevDirection,
+) -> Result<String, String> {
+    let revision_arg = format!("r{revision}");
+    let output = match (tool, direction) {
+        (GoldenTool::Perl, FindRevDirection::Before) => run_text(
+            work_tree,
+            "git",
+            &["svn", "find-rev", "--before", &revision_arg],
+        )?,
+        (GoldenTool::Perl, FindRevDirection::After) => run_text(
+            work_tree,
+            "git",
+            &["svn", "find-rev", "--after", &revision_arg],
+        )?,
+        (GoldenTool::Rust, FindRevDirection::Before) => commands::find_rev::run_in_work_tree(
+            work_tree,
+            FindRevArgs {
+                rev_or_commit: revision_arg,
+                before: true,
+                after: false,
+            },
+        )?,
+        (GoldenTool::Rust, FindRevDirection::After) => commands::find_rev::run_in_work_tree(
+            work_tree,
+            FindRevArgs {
+                rev_or_commit: revision_arg,
+                before: false,
+                after: true,
             },
         )?,
     };
