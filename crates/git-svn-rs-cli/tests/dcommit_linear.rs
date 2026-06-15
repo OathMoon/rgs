@@ -136,6 +136,48 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_rebases_after_file_svn_write_by_default() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    make_commit(&work, "rebased.txt", "rebased\n", "add rebased file");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("dcommit")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 1 local Git commit(s)"));
+
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "HEAD"]),
+        git_stdout(&work, &["rev-parse", "refs/remotes/origin/trunk"])
+    );
+}
+
+#[test]
 fn dcommit_mergeinfo_reports_v1_scope_message() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
