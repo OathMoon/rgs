@@ -3,6 +3,7 @@ pub mod cli;
 pub mod commands;
 pub mod config;
 pub mod dcommit;
+pub mod diagnostics;
 pub mod error;
 pub mod fast_import;
 pub mod fetch_editor;

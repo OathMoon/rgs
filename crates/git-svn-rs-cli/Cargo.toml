@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+svn-libsvn = ["git-svn-rs-core/svn-libsvn"]
+
 [[bin]]
 name = "git-svn-rs"
 path = "src/main.rs"

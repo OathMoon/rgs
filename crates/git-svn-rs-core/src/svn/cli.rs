@@ -1,0 +1,206 @@
+use std::collections::BTreeMap;
+use std::num::ParseIntError;
+use std::process::Command;
+
+use crate::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent, SvnBackend};
+
+#[derive(Debug, Clone)]
+pub struct SvnCliBackend {
+    url: String,
+}
+
+impl SvnCliBackend {
+    pub fn new(url: impl Into<String>) -> Result<Self, String> {
+        let url = url.into();
+        if !url.starts_with("file://") {
+            return Err("real SVN fetch currently supports file:// URLs via svn CLI".to_string());
+        }
+        Ok(Self { url })
+    }
+
+    fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
+        let output = Command::new("svn")
+            .args(args)
+            .output()
+            .map_err(|e| format!("svn failed to start: {e}"))?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            Err(if stderr.is_empty() {
+                format!("svn exited with status {}", output.status)
+            } else {
+                stderr
+            })
+        }
+    }
+
+    fn run_text(&self, args: &[&str]) -> Result<String, String> {
+        String::from_utf8(self.run(args)?).map_err(|e| e.to_string())
+    }
+
+    fn cat(&self, path: &str, revision: u32) -> Result<Vec<u8>, String> {
+        let url = format!(
+            "{}/{}",
+            self.url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        self.run(&[
+            "cat",
+            "--non-interactive",
+            "-r",
+            &revision.to_string(),
+            &url,
+        ])
+    }
+}
+
+impl SvnBackend for SvnCliBackend {
+    fn uuid(&self) -> Result<String, String> {
+        Ok(self
+            .run_text(&["info", "--show-item", "repos-uuid", &self.url])?
+            .trim()
+            .to_string())
+    }
+
+    fn latest_revnum(&self) -> Result<u32, String> {
+        self.run_text(&["info", "--show-item", "revision", &self.url])?
+            .trim()
+            .parse()
+            .map_err(|e: ParseIntError| e.to_string())
+    }
+
+    fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
+        let range = format!("{start}:{end}");
+        let xml = self.run_text(&["log", "--xml", "-v", "-r", &range, &self.url])?;
+        let mut revisions = parse_log_xml(&xml)?;
+        for revision in &mut revisions {
+            for path in &mut revision.changed_paths {
+                if matches!(
+                    path.action,
+                    ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
+                ) && path.kind == NodeKind::File
+                {
+                    path.content = Some(self.cat(&path.path, revision.revision)?);
+                }
+            }
+        }
+        Ok(revisions)
+    }
+}
+
+fn parse_log_xml(xml: &str) -> Result<Vec<RevisionEvent>, String> {
+    let mut revisions = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<logentry") {
+        rest = &rest[start..];
+        let header_end = rest
+            .find('>')
+            .ok_or_else(|| "invalid svn log xml: unterminated logentry".to_string())?;
+        let header = &rest[..=header_end];
+        let revision = attr(header, "revision")
+            .ok_or_else(|| "invalid svn log xml: logentry without revision".to_string())?
+            .parse()
+            .map_err(|e: ParseIntError| e.to_string())?;
+        let body_start = header_end + 1;
+        let body_end = rest[body_start..]
+            .find("</logentry>")
+            .ok_or_else(|| "invalid svn log xml: unclosed logentry".to_string())?
+            + body_start;
+        let body = &rest[body_start..body_end];
+
+        revisions.push(RevisionEvent {
+            revision,
+            author: element_text(body, "author").unwrap_or_default(),
+            message: element_text(body, "msg").unwrap_or_default(),
+            timestamp: element_text(body, "date").unwrap_or_default(),
+            changed_paths: parse_changed_paths(body)?,
+        });
+        rest = &rest[body_end + "</logentry>".len()..];
+    }
+    Ok(revisions)
+}
+
+fn parse_changed_paths(body: &str) -> Result<Vec<ChangedPath>, String> {
+    let Some(paths_start) = body.find("<paths>") else {
+        return Ok(Vec::new());
+    };
+    let paths_body_start = paths_start + "<paths>".len();
+    let paths_end = body[paths_body_start..]
+        .find("</paths>")
+        .ok_or_else(|| "invalid svn log xml: unclosed paths".to_string())?
+        + paths_body_start;
+    let mut paths = Vec::new();
+    let mut rest = &body[paths_body_start..paths_end];
+
+    while let Some(start) = rest.find("<path") {
+        rest = &rest[start..];
+        let header_end = rest
+            .find('>')
+            .ok_or_else(|| "invalid svn log xml: unterminated path".to_string())?;
+        let header = &rest[..=header_end];
+        let text_end = rest[header_end + 1..]
+            .find("</path>")
+            .ok_or_else(|| "invalid svn log xml: unclosed path".to_string())?
+            + header_end
+            + 1;
+        let text = &rest[header_end + 1..text_end];
+
+        paths.push(ChangedPath {
+            path: xml_unescape(text.trim()),
+            action: parse_action(attr(header, "action").as_deref())?,
+            copy_from_path: attr(header, "copyfrom-path"),
+            copy_from_rev: attr(header, "copyfrom-rev")
+                .map(|value| value.parse().map_err(|e: ParseIntError| e.to_string()))
+                .transpose()?,
+            kind: parse_kind(attr(header, "kind").as_deref()),
+            properties: BTreeMap::new(),
+            content: None,
+        });
+        rest = &rest[text_end + "</path>".len()..];
+    }
+
+    Ok(paths)
+}
+
+fn element_text(body: &str, name: &str) -> Option<String> {
+    let open = format!("<{name}>");
+    let close = format!("</{name}>");
+    let start = body.find(&open)? + open.len();
+    let end = body[start..].find(&close)? + start;
+    Some(xml_unescape(&body[start..end]))
+}
+
+fn attr(header: &str, name: &str) -> Option<String> {
+    let needle = format!("{name}=\"");
+    let start = header.find(&needle)? + needle.len();
+    let end = header[start..].find('"')? + start;
+    Some(xml_unescape(&header[start..end]))
+}
+
+fn parse_action(action: Option<&str>) -> Result<ChangeAction, String> {
+    match action {
+        Some("A") => Ok(ChangeAction::Add),
+        Some("M") => Ok(ChangeAction::Modify),
+        Some("D") => Ok(ChangeAction::Delete),
+        Some("R") => Ok(ChangeAction::Replace),
+        Some(other) => Err(format!("unsupported svn path action: {other}")),
+        None => Err("svn path is missing action".to_string()),
+    }
+}
+
+fn parse_kind(kind: Option<&str>) -> NodeKind {
+    match kind {
+        Some("file") => NodeKind::File,
+        Some("dir") => NodeKind::Directory,
+        _ => NodeKind::Directory,
+    }
+}
+
+fn xml_unescape(text: &str) -> String {
+    text.replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}

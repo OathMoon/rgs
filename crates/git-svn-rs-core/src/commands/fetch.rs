@@ -4,6 +4,8 @@ use crate::git::GitCli;
 use crate::import::{ImportOptions, import_mock_revisions};
 use crate::mapping::{MappingKind, RefMapping};
 use crate::rev_map::{ObjectFormat, RevMap};
+use crate::svn::SvnBackend;
+use crate::svn::cli::SvnCliBackend;
 use crate::svn::mock::MockRaSession;
 use crate::svn::ra::RaSession;
 
@@ -19,14 +21,26 @@ pub fn run_in_work_tree(
     let remote = args.remote.as_deref().unwrap_or("svn");
     let config = read_remote_config(&git, remote)?;
 
-    if !config.url.starts_with("mock://") {
-        return Err("fetch shell only supports mock:// URLs in this phase".to_string());
+    if config.url.starts_with("mock://") {
+        let session = MockRaSession::standard_fixture("mock-uuid");
+        let start_revision = next_revision(&git, &config, "mock-uuid")?;
+        import_mock_revisions(
+            &MockBackendFromSession(&session),
+            &git,
+            &config,
+            ImportOptions {
+                start_revision,
+                end_revision: None,
+            },
+        )?;
+        return Ok(());
     }
 
-    let session = MockRaSession::standard_fixture("mock-uuid");
-    let start_revision = next_revision(&git, &config, "mock-uuid")?;
+    let backend = SvnCliBackend::new(&config.url)?;
+    let uuid = backend.uuid()?;
+    let start_revision = next_revision(&git, &config, &uuid)?;
     import_mock_revisions(
-        &MockBackendFromSession(&session),
+        &backend,
         &git,
         &config,
         ImportOptions {

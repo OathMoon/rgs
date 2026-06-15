@@ -40,7 +40,7 @@ fn dcommit_dry_run_reports_no_local_commits() {
 }
 
 #[test]
-fn dcommit_without_dry_run_is_guarded_until_write_back_lands() {
+fn dcommit_mock_write_back_registers_linear_commit() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
     make_commit(&work, "local.txt", "local\n", "local change");
@@ -48,11 +48,23 @@ fn dcommit_without_dry_run_is_guarded_until_write_back_lands() {
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
-        .arg("dcommit")
+        .args(["dcommit", "--no-rebase"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("dcommit without --dry-run"))
-        .stderr(predicate::str::contains("not implemented"));
+        .success()
+        .stdout(predicate::str::contains("Committed 1 local Git commit(s)"))
+        .stdout(predicate::str::contains("r3"));
+
+    let head = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let tracked = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    assert_eq!(tracked, head);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["find-rev", "HEAD"])
+        .assert()
+        .success()
+        .stdout("3\n");
 }
 
 #[test]
@@ -68,6 +80,26 @@ fn dcommit_mergeinfo_reports_v1_scope_message() {
         .failure()
         .stderr(predicate::str::contains("--mergeinfo"))
         .stderr(predicate::str::contains("v1"))
+        .stderr(predicate::str::contains("not implemented"));
+}
+
+#[test]
+fn dcommit_without_dry_run_is_guarded_for_non_mock_urls() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    make_commit(&work, "local.txt", "local\n", "local change");
+    run_git(
+        &work,
+        &["config", "svn-remote.svn.url", "https://svn.example/trunk"],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("dcommit")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("mock://"))
         .stderr(predicate::str::contains("not implemented"));
 }
 
@@ -111,4 +143,19 @@ fn run_git(work: &std::path::Path, args: &[&str]) {
         args,
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+fn git_stdout(work: &std::path::Path, args: &[&str]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(work)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
 }

@@ -2,6 +2,7 @@ use anyhow::{Result, bail};
 use clap::Parser;
 use git_svn_rs_core::cli::{Cli, Command};
 use git_svn_rs_core::commands;
+use git_svn_rs_core::diagnostics;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -42,7 +43,7 @@ fn main() -> Result<()> {
         Command::Reset(args) => commands::reset::run(args).map_err(anyhow::Error::msg),
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
-            println!("libsvn feature: disabled");
+            println!("libsvn feature: {}", diagnostics::libsvn_feature_status());
             Ok(())
         }
         Command::Unsupported(args) => {

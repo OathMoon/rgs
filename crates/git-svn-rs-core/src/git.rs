@@ -24,6 +24,17 @@ pub struct GitCommitSummary {
     pub subject: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitNameStatus {
+    pub status: String,
+    pub path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitTreeEntry {
+    pub mode: String,
+}
+
 impl GitCli {
     pub fn new(work_tree: impl Into<PathBuf>) -> Self {
         Self {
@@ -111,8 +122,36 @@ impl GitCli {
         Ok(commits)
     }
 
+    pub fn commit_author(&self, commit: &str) -> Result<String, String> {
+        self.run_args(["show", "-s", "--format=%an", commit])
+            .map(|author| author.trim().to_string())
+    }
+
     pub fn update_ref(&self, refname: &str, value: &str) -> Result<(), String> {
         self.run(["update-ref", refname, value]).map(|_| ())
+    }
+
+    pub fn diff_name_status(&self, base: &str, commit: &str) -> Result<Vec<GitNameStatus>, String> {
+        let raw = self.run_bytes([
+            "diff-tree",
+            "--no-commit-id",
+            "--name-status",
+            "-r",
+            "-z",
+            base,
+            commit,
+        ])?;
+        parse_name_status(&raw)
+    }
+
+    pub fn show_file(&self, commit: &str, path: &str) -> Result<Vec<u8>, String> {
+        let spec = format!("{commit}:{path}");
+        self.run_bytes(["show", &spec])
+    }
+
+    pub fn ls_tree_file(&self, commit: &str, path: &str) -> Result<GitTreeEntry, String> {
+        let raw = self.run_bytes(["ls-tree", "-z", commit, "--", path])?;
+        parse_ls_tree_file(&raw, path)
     }
 
     pub fn rebase(
@@ -152,6 +191,23 @@ impl GitCli {
             .output()
             .map_err(|e| e.to_string())?;
         command_output(output)
+    }
+
+    fn run_bytes<I, S>(&self, args: I) -> Result<Vec<u8>, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(args)
+            .output()
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(output.stdout)
+        } else {
+            Err(stderr_or_status(output))
+        }
     }
 }
 
@@ -247,4 +303,39 @@ fn stderr_or_status(output: std::process::Output) -> String {
     } else {
         stderr
     }
+}
+
+fn parse_name_status(raw: &[u8]) -> Result<Vec<GitNameStatus>, String> {
+    let mut parts = raw.split(|byte| *byte == 0).filter(|part| !part.is_empty());
+    let mut changes = Vec::new();
+
+    while let Some(status) = parts.next() {
+        let status = String::from_utf8(status.to_vec()).map_err(|e| e.to_string())?;
+        let path = parts
+            .next()
+            .ok_or_else(|| format!("missing path for git diff status {status}"))?;
+        if status.starts_with('R') || status.starts_with('C') {
+            return Err(format!("dcommit does not support {status} changes yet"));
+        }
+        changes.push(GitNameStatus {
+            status,
+            path: String::from_utf8(path.to_vec()).map_err(|e| e.to_string())?,
+        });
+    }
+
+    Ok(changes)
+}
+
+fn parse_ls_tree_file(raw: &[u8], path: &str) -> Result<GitTreeEntry, String> {
+    let entry = raw
+        .split(|byte| *byte == 0)
+        .find(|entry| !entry.is_empty())
+        .ok_or_else(|| format!("missing git tree entry for {path}"))?;
+    let text = String::from_utf8(entry.to_vec()).map_err(|e| e.to_string())?;
+    let (mode, _) = text
+        .split_once(' ')
+        .ok_or_else(|| format!("unexpected git ls-tree entry: {text}"))?;
+    Ok(GitTreeEntry {
+        mode: mode.to_string(),
+    })
 }

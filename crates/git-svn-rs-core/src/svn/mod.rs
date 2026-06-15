@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod cli;
 pub mod editor;
 pub mod mock;
 pub mod ra;

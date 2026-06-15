@@ -22,6 +22,17 @@ fn diagnose_prints_feature_state() {
         .stdout(predicate::str::contains("libsvn feature: disabled"));
 }
 
+#[cfg(feature = "svn-libsvn")]
+#[test]
+fn diagnose_prints_enabled_when_libsvn_feature_is_compiled() {
+    let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
+    cmd.arg("diagnose")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("git-svn-rs diagnostics"))
+        .stdout(predicate::str::contains("libsvn feature: enabled"));
+}
+
 #[test]
 fn branch_is_explicitly_unsupported() {
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
