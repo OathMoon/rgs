@@ -14,7 +14,7 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: DcommitArgs,
 ) -> Result<String, String> {
-    if args.mergeinfo.is_some() {
+    if args.mergeinfo.is_some() && !args.dry_run {
         return Err(
             "--mergeinfo is parsed for compatibility, but mergeinfo write-back is not implemented in v1"
                 .to_string(),
@@ -57,6 +57,12 @@ pub fn run_in_work_tree(
         "Dcommit dry-run against {target_url} ({}, r{revision})\n",
         tracked.refname
     );
+    if let Some(mergeinfo) = &args.mergeinfo {
+        out.push_str(&format!(
+            "explicit mergeinfo accepted for dry-run: {mergeinfo}\n"
+        ));
+        out.push_str("automatic mergeinfo generation is not implemented in v1\n");
+    }
     if commits.is_empty() {
         out.push_str("No local commits to dcommit.\n");
         return Ok(out);

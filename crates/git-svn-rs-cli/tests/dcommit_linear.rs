@@ -77,10 +77,13 @@ fn dcommit_mergeinfo_reports_v1_scope_message() {
         .current_dir(&work)
         .args(["dcommit", "--dry-run", "--mergeinfo", "/branches/main:1-2"])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("--mergeinfo"))
-        .stderr(predicate::str::contains("v1"))
-        .stderr(predicate::str::contains("not implemented"));
+        .success()
+        .stdout(predicate::str::contains(
+            "explicit mergeinfo accepted for dry-run: /branches/main:1-2",
+        ))
+        .stdout(predicate::str::contains(
+            "automatic mergeinfo generation is not implemented in v1",
+        ));
 }
 
 #[test]
