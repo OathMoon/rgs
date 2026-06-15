@@ -19,6 +19,7 @@ pub struct FastImportCommit {
     pub timestamp: i64,
     pub message: String,
     pub parent_mark: Option<u32>,
+    pub parent_ref: Option<String>,
     pub changes: Vec<FileChange>,
 }
 
@@ -47,6 +48,8 @@ impl FastImportStream {
 
         if let Some(parent_mark) = commit.parent_mark {
             self.write_line(&format!("from :{}", parent_mark));
+        } else if let Some(parent_ref) = &commit.parent_ref {
+            self.write_line(&format!("from {parent_ref}"));
         }
 
         for change in &commit.changes {

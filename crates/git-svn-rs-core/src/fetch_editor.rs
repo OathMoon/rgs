@@ -67,6 +67,7 @@ impl SvnFetchEditor {
             timestamp: self.plan.timestamp,
             message: self.plan.message,
             parent_mark: self.plan.parent_mark,
+            parent_ref: None,
             changes: self
                 .changes
                 .into_iter()

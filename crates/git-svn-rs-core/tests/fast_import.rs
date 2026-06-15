@@ -10,6 +10,7 @@ fn serializes_single_file_commit() {
         timestamp: 1_704_067_200,
         message: "add file\n\ngit-svn-id: file:///repo/trunk@2 uuid".to_string(),
         parent_mark: None,
+        parent_ref: None,
         changes: vec![FileChange::Modify {
             path: "src/lib.rs".to_string(),
             mode: "100644".to_string(),
@@ -35,6 +36,7 @@ fn serializes_delete_and_symlink_modes() {
         timestamp: 1,
         message: "change".to_string(),
         parent_mark: Some(1),
+        parent_ref: None,
         changes: vec![
             FileChange::Delete {
                 path: "old.txt".to_string(),
@@ -52,4 +54,27 @@ fn serializes_delete_and_symlink_modes() {
     assert!(stream.contains("from :1\n"));
     assert!(stream.contains("D old.txt\n"));
     assert!(stream.contains("M 120000 inline link\n"));
+}
+
+#[test]
+fn serializes_existing_ref_parent_for_incremental_import() {
+    let commit = FastImportCommit {
+        mark: 1,
+        refname: "refs/remotes/origin/trunk".to_string(),
+        author: "A <a@example.com>".to_string(),
+        committer: "A <a@example.com>".to_string(),
+        timestamp: 1,
+        message: "incremental".to_string(),
+        parent_mark: None,
+        parent_ref: Some("refs/remotes/origin/trunk".to_string()),
+        changes: vec![FileChange::Modify {
+            path: "file.txt".to_string(),
+            mode: "100644".to_string(),
+            content: b"content\n".to_vec(),
+        }],
+    };
+
+    let stream = String::from_utf8(FastImportStream::new().commit(&commit).finish()).unwrap();
+
+    assert!(stream.contains("from refs/remotes/origin/trunk\n"));
 }

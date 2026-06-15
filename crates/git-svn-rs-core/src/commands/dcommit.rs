@@ -1,10 +1,13 @@
 use crate::cli::DcommitArgs;
 use crate::commands::resolver::resolve_tracked_svn;
+use crate::commands::{fetch, rebase};
 use crate::dcommit::{GitDiffChange, GitDiffPlanner, PropertyMapper, SvnCommitEditor};
 use crate::git::{GitCli, GitCommitSummary};
 use crate::rev_map::RevMap;
 use crate::svn::CommitRecord;
 use crate::svn::mock::MockSvnBackend;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub fn run(args: DcommitArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
@@ -36,21 +39,33 @@ pub fn run_in_work_tree(
     };
 
     if !args.dry_run {
-        if !target_url.starts_with("mock://") || !tracked.config.url.starts_with("mock://") {
+        if target_url.starts_with("mock://") && tracked.config.url.starts_with("mock://") {
+            return dcommit_mock(
+                &tracked.git,
+                &tracked.refname,
+                tracked.open_rev_map()?,
+                &tracked.uuid,
+                revision,
+                commits,
+                args.no_rebase,
+            );
+        }
+        if target_url.starts_with("file://") && tracked.config.url.starts_with("file://") {
+            return dcommit_file_svn(
+                &tracked.git,
+                &tracked.config.url,
+                &tracked.svn_path,
+                &tracked.refname,
+                commits,
+                args.no_rebase,
+            );
+        }
+        {
             return Err(
-                "dcommit write-back is only implemented for mock:// URLs; production SVN write-back is not implemented"
+                "dcommit write-back is only implemented for mock:// and file:// URLs; production remote SVN write-back is not implemented"
                     .to_string(),
             );
         }
-        return dcommit_mock(
-            &tracked.git,
-            &tracked.refname,
-            tracked.open_rev_map()?,
-            &tracked.uuid,
-            revision,
-            commits,
-            args.no_rebase,
-        );
     }
 
     let mut out = format!(
@@ -76,6 +91,254 @@ pub fn run_in_work_tree(
         out.push_str(&format!("{} {}\n", commit.short_id, commit.subject));
     }
     Ok(out)
+}
+
+fn dcommit_file_svn(
+    git: &GitCli,
+    svn_root_url: &str,
+    svn_path: &str,
+    refname: &str,
+    commits: Vec<GitCommitSummary>,
+    no_rebase: bool,
+) -> Result<String, String> {
+    if commits.is_empty() {
+        return Ok("No local commits to dcommit.\n".to_string());
+    }
+
+    let temp = TempCheckout::new()?;
+    let checkout_url = svn_checkout_url(svn_root_url, svn_path);
+    run_svn(
+        None,
+        &[
+            "checkout".to_string(),
+            "--quiet".to_string(),
+            checkout_url,
+            temp.wc.display().to_string(),
+        ],
+    )?;
+
+    let mut out = format!("Committed {} local Git commit(s)\n", commits.len());
+    let mut diff_base = refname.to_string();
+    for commit in &commits {
+        let changes = git.diff_name_status(&diff_base, &commit.id)?;
+        for change in changes {
+            apply_file_svn_change(git, &temp.wc, &commit.id, &change.status, &change.path)?;
+        }
+        let revision = svn_commit(&temp.wc, &commit.subject)?;
+        fetch::run_in_work_tree(git.work_tree().to_path_buf(), default_fetch_args())?;
+        diff_base = commit.id.clone();
+        out.push_str(&format!(
+            "Committed {} {} as r{revision}\n",
+            commit.short_id, commit.subject
+        ));
+    }
+
+    if no_rebase {
+        out.push_str("Skipped rebase (--no-rebase).\n");
+    } else {
+        out.push_str(&rebase::run_in_work_tree(
+            git.work_tree().to_path_buf(),
+            crate::cli::RebaseArgs {
+                dry_run: false,
+                merge: false,
+                strategy: None,
+                shared: default_shared_args(),
+            },
+        )?);
+    }
+
+    Ok(out)
+}
+
+fn apply_file_svn_change(
+    git: &GitCli,
+    wc: &Path,
+    commit: &str,
+    status: &str,
+    path: &str,
+) -> Result<(), String> {
+    let target = wc.join(path);
+    match status {
+        "A" => {
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+            }
+            std::fs::write(&target, svn_file_content(git, commit, path)?)
+                .map_err(|e| e.to_string())?;
+            run_svn(
+                Some(wc),
+                &[
+                    "add".to_string(),
+                    "--parents".to_string(),
+                    path.replace('\\', "/"),
+                ],
+            )?;
+            apply_file_props(git, wc, commit, path, "000000")?;
+        }
+        "M" => {
+            std::fs::write(&target, svn_file_content(git, commit, path)?)
+                .map_err(|e| e.to_string())?;
+            apply_file_props(git, wc, commit, path, "100644")?;
+        }
+        "D" => {
+            run_svn(Some(wc), &["delete".to_string(), path.replace('\\', "/")])?;
+        }
+        other => {
+            return Err(format!(
+                "dcommit does not support git diff status {other} yet"
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn svn_file_content(git: &GitCli, commit: &str, path: &str) -> Result<Vec<u8>, String> {
+    let mode = git.ls_tree_file(commit, path)?.mode;
+    let content = git.show_file(commit, path)?;
+    if mode == "120000" {
+        let mut special = b"link ".to_vec();
+        special.extend(content);
+        Ok(special)
+    } else {
+        Ok(content)
+    }
+}
+
+fn apply_file_props(
+    git: &GitCli,
+    wc: &Path,
+    commit: &str,
+    path: &str,
+    old_mode: &str,
+) -> Result<(), String> {
+    let new_mode = git.ls_tree_file(commit, path)?.mode;
+    if new_mode == "100755" {
+        run_svn(
+            Some(wc),
+            &[
+                "propset".to_string(),
+                "svn:executable".to_string(),
+                "*".to_string(),
+                path.replace('\\', "/"),
+            ],
+        )?;
+    } else if old_mode == "100755" {
+        run_svn(
+            Some(wc),
+            &[
+                "propdel".to_string(),
+                "svn:executable".to_string(),
+                path.replace('\\', "/"),
+            ],
+        )?;
+    }
+    if new_mode == "120000" {
+        run_svn(
+            Some(wc),
+            &[
+                "propset".to_string(),
+                "svn:special".to_string(),
+                "*".to_string(),
+                path.replace('\\', "/"),
+            ],
+        )?;
+    } else if old_mode == "120000" {
+        run_svn(
+            Some(wc),
+            &[
+                "propdel".to_string(),
+                "svn:special".to_string(),
+                path.replace('\\', "/"),
+            ],
+        )?;
+    }
+    Ok(())
+}
+
+fn svn_commit(wc: &Path, message: &str) -> Result<u32, String> {
+    let output = run_svn_output(
+        Some(wc),
+        &["commit".to_string(), "-m".to_string(), message.to_string()],
+    )?;
+    parse_committed_revision(&output)
+}
+
+fn parse_committed_revision(output: &str) -> Result<u32, String> {
+    output
+        .split(|c: char| !c.is_ascii_digit())
+        .rfind(|part| !part.is_empty())
+        .ok_or_else(|| format!("svn commit output did not include a revision: {output}"))?
+        .parse()
+        .map_err(|e| format!("invalid svn commit revision: {e}"))
+}
+
+fn svn_checkout_url(root_url: &str, svn_path: &str) -> String {
+    if svn_path.is_empty() {
+        root_url.trim_end_matches('/').to_string()
+    } else {
+        format!(
+            "{}/{}",
+            root_url.trim_end_matches('/'),
+            svn_path.trim_matches('/')
+        )
+    }
+}
+
+fn run_svn(cwd: Option<&Path>, args: &[String]) -> Result<(), String> {
+    run_svn_output(cwd, args).map(|_| ())
+}
+
+fn run_svn_output(cwd: Option<&Path>, args: &[String]) -> Result<String, String> {
+    let mut command = Command::new("svn");
+    if let Some(cwd) = cwd {
+        command.current_dir(cwd);
+    }
+    let output = command
+        .args(args)
+        .output()
+        .map_err(|e| format!("svn failed to start: {e}"))?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        Err(if stderr.is_empty() {
+            format!("svn exited with status {}", output.status)
+        } else {
+            stderr
+        })
+    }
+}
+
+struct TempCheckout {
+    root: PathBuf,
+    wc: PathBuf,
+}
+
+impl TempCheckout {
+    fn new() -> Result<Self, String> {
+        let mut root = std::env::temp_dir();
+        root.push(format!(
+            "git-svn-rs-dcommit-{}-{}",
+            std::process::id(),
+            unique_suffix()
+        ));
+        let wc = root.join("wc");
+        std::fs::create_dir_all(&wc).map_err(|e| e.to_string())?;
+        Ok(Self { root, wc })
+    }
+}
+
+impl Drop for TempCheckout {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn unique_suffix() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default()
 }
 
 fn dcommit_mock(
@@ -136,6 +399,34 @@ fn dcommit_mock(
     }
 
     Ok(out)
+}
+
+fn default_fetch_args() -> crate::cli::FetchArgs {
+    crate::cli::FetchArgs {
+        remote: None,
+        shared: default_shared_args(),
+        fetch_all: false,
+        parent: false,
+    }
+}
+
+fn default_shared_args() -> crate::cli::SharedFetchArgs {
+    crate::cli::SharedFetchArgs {
+        authors_file: None,
+        authors_prog: None,
+        ignore_paths: None,
+        include_paths: None,
+        ignore_refs: None,
+        revision: None,
+        log_window_size: None,
+        localtime: false,
+        no_metadata: false,
+        rewrite_root: None,
+        rewrite_uuid: None,
+        username: None,
+        config_dir: None,
+        no_auth_cache: false,
+    }
 }
 
 fn git_changes_for_commit(

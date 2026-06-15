@@ -71,8 +71,16 @@ fn import_revisions_for_mapping(
     let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
     let mut stream = FastImportStream::new();
     let mut imported_revisions = Vec::new();
+    let max_imported_revision = max_imported_revision(git, &mapping.git_ref, uuid)?;
+    let existing_parent_ref = git
+        .rev_parse(&mapping.git_ref)
+        .ok()
+        .map(|commit| commit.trim().to_string());
 
     for (index, revision) in revisions.iter().enumerate() {
+        if revision.revision <= max_imported_revision {
+            continue;
+        }
         let changes = changes_for_revision(revision, &strip_prefix);
         if changes.is_empty() {
             continue;
@@ -88,6 +96,9 @@ fn import_revisions_for_mapping(
             message: commit_message(config, revision, uuid, &strip_prefix),
             parent_mark: (imported_revisions.len() > 1)
                 .then_some(imported_revisions.len() as u32 - 1),
+            parent_ref: (imported_revisions.len() == 1)
+                .then(|| existing_parent_ref.clone())
+                .flatten(),
             changes,
         });
     }
@@ -100,6 +111,11 @@ fn import_revisions_for_mapping(
     write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
+}
+
+fn max_imported_revision(git: &GitCli, refname: &str, uuid: &str) -> Result<u32, String> {
+    let rev_map = RevMap::open(rev_map_path(git, refname, uuid)?, ObjectFormat::Sha1)?;
+    Ok(rev_map.max_revision(false)?.unwrap_or(0))
 }
 
 fn concrete_mappings(
