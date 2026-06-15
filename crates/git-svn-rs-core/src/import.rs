@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use crate::config::SvnRemoteConfig;
 use crate::fast_import::{FastImportCommit, FastImportStream, FileChange};
+use crate::filters::{FilterDecision, PathFilters};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::glob_spec::GlobSpec;
@@ -81,7 +82,7 @@ fn import_revisions_for_mapping(
         if revision.revision <= max_imported_revision {
             continue;
         }
-        let changes = changes_for_revision(revision, &strip_prefix, config);
+        let changes = changes_for_revision(revision, &strip_prefix, config)?;
         if changes.is_empty() {
             continue;
         }
@@ -196,48 +197,54 @@ fn changes_for_revision(
     revision: &RevisionEvent,
     strip_prefix: &str,
     config: &SvnRemoteConfig,
-) -> Vec<FileChange> {
+) -> Result<Vec<FileChange>, String> {
     if revision.changed_paths.is_empty() {
-        return mock_fixture_changes(revision.revision);
+        return Ok(mock_fixture_changes(revision.revision));
+    }
+    let filters = PathFilters::new(config.include_paths.clone(), config.ignore_paths.clone())?;
+
+    let mut file_paths = Vec::new();
+    for changed_path in &revision.changed_paths {
+        if matches!(
+            changed_path.action,
+            ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
+        ) && changed_path.kind == NodeKind::File
+            && path_is_included(&filters, &changed_path.path)?
+            && let Some(path) = import_path(&changed_path.path, strip_prefix)
+        {
+            file_paths.push(path);
+        }
     }
 
-    let file_paths = revision
-        .changed_paths
-        .iter()
-        .filter(|changed_path| {
-            matches!(
-                changed_path.action,
-                ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
-            ) && changed_path.kind == NodeKind::File
-        })
-        .filter_map(|changed_path| import_path(&changed_path.path, strip_prefix))
-        .collect::<Vec<_>>();
-
-    let mut changes = revision
-        .changed_paths
-        .iter()
-        .filter_map(|changed_path| {
-            let path = import_path(&changed_path.path, strip_prefix)?;
-            match changed_path.action {
-                ChangeAction::Delete if changed_path.kind == NodeKind::Directory => {
-                    config.preserve_empty_dirs.then(|| FileChange::Delete {
-                        path: placeholder_path(&path, config),
-                    })
-                }
-                ChangeAction::Delete => Some(FileChange::Delete { path }),
-                ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
-                    if changed_path.kind == NodeKind::File =>
-                {
-                    Some(FileChange::Modify {
-                        path,
-                        mode: mode_for_change(changed_path),
-                        content: content_for_change(changed_path),
-                    })
-                }
-                _ => None,
+    let mut changes = Vec::new();
+    for changed_path in &revision.changed_paths {
+        if !path_is_included(&filters, &changed_path.path)? {
+            continue;
+        }
+        let Some(path) = import_path(&changed_path.path, strip_prefix) else {
+            continue;
+        };
+        match changed_path.action {
+            ChangeAction::Delete
+                if changed_path.kind == NodeKind::Directory && config.preserve_empty_dirs =>
+            {
+                changes.push(FileChange::Delete {
+                    path: placeholder_path(&path, config),
+                });
             }
-        })
-        .collect::<Vec<_>>();
+            ChangeAction::Delete => changes.push(FileChange::Delete { path }),
+            ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
+                if changed_path.kind == NodeKind::File =>
+            {
+                changes.push(FileChange::Modify {
+                    path,
+                    mode: mode_for_change(changed_path),
+                    content: content_for_change(changed_path),
+                });
+            }
+            _ => {}
+        }
+    }
 
     if config.preserve_empty_dirs {
         for changed_path in &revision.changed_paths {
@@ -246,6 +253,9 @@ fn changes_for_revision(
                 ChangeAction::Add | ChangeAction::Replace | ChangeAction::Modify
             ) || changed_path.kind != NodeKind::Directory
             {
+                continue;
+            }
+            if !path_is_included(&filters, &changed_path.path)? {
                 continue;
             }
             let Some(path) = import_path(&changed_path.path, strip_prefix) else {
@@ -266,7 +276,12 @@ fn changes_for_revision(
         }
     }
 
-    changes
+    Ok(changes)
+}
+
+fn path_is_included(filters: &PathFilters, path: &str) -> Result<bool, String> {
+    let path = path.trim_matches('/');
+    Ok(filters.decide(path)? == FilterDecision::Include)
 }
 
 fn placeholder_path(path: &str, config: &SvnRemoteConfig) -> String {

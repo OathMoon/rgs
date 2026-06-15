@@ -243,3 +243,78 @@ fn fetch_file_url_preserves_empty_dirs_from_persisted_config() {
         String::new()
     );
 }
+
+#[test]
+fn clone_file_url_applies_ignore_paths_filter() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--ignore-paths",
+            "^trunk/run\\.sh$",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let trunk_tree = git
+        .run_for_test(["ls-tree", "-r", "--name-only", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert!(!trunk_tree.lines().any(|line| line == "run.sh"));
+    assert!(trunk_tree.lines().any(|line| line == "src/lib.rs"));
+}
+
+#[test]
+fn clone_file_url_applies_include_paths_filter() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--include-paths",
+            "^trunk/src/",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let trunk_tree = git
+        .run_for_test(["ls-tree", "-r", "--name-only", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert!(trunk_tree.lines().any(|line| line == "src/lib.rs"));
+    assert!(!trunk_tree.lines().any(|line| line == "run.sh"));
+    assert!(!trunk_tree.lines().any(|line| line == "link-to-lib"));
+}
