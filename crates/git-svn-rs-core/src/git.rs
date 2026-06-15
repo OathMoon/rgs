@@ -56,11 +56,36 @@ impl GitCli {
         <Self as GitBackend>::fast_import(self, input)
     }
 
+    pub fn rev_parse(&self, rev: &str) -> Result<String, String> {
+        self.run_args(["rev-parse", rev])
+    }
+
+    pub fn log_records(&self, rev: &str, limit: Option<u32>) -> Result<String, String> {
+        let mut args = vec![
+            "log".to_string(),
+            "--reverse".to_string(),
+            "--format=%H%x1f%an%x1f%aI%x1f%B%x1e".to_string(),
+        ];
+        if let Some(limit) = limit {
+            args.push(format!("-n{limit}"));
+        }
+        args.push(rev.to_string());
+        self.run_args(args)
+    }
+
     pub fn run_for_test<const N: usize>(&self, args: [&str; N]) -> Result<String, String> {
         self.run(args)
     }
 
     fn run<const N: usize>(&self, args: [&str; N]) -> Result<String, String> {
+        self.run_args(args)
+    }
+
+    fn run_args<I, S>(&self, args: I) -> Result<String, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<std::ffi::OsStr>,
+    {
         let output = Command::new("git")
             .current_dir(&self.work_tree)
             .args(args)

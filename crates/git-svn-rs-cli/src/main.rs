@@ -9,6 +9,22 @@ fn main() -> Result<()> {
         Command::Init(args) => commands::init::run(args).map_err(anyhow::Error::msg),
         Command::Clone(args) => commands::clone::run(args).map_err(anyhow::Error::msg),
         Command::Fetch(args) => commands::fetch::run(args).map_err(anyhow::Error::msg),
+        Command::FindRev(args) => {
+            print!(
+                "{}",
+                commands::find_rev::run(args).map_err(anyhow::Error::msg)?
+            );
+            Ok(())
+        }
+        Command::Info(args) => {
+            print!("{}", commands::info::run(args).map_err(anyhow::Error::msg)?);
+            Ok(())
+        }
+        Command::Log(args) => {
+            print!("{}", commands::log::run(args).map_err(anyhow::Error::msg)?);
+            Ok(())
+        }
+        Command::Gc(args) => commands::gc::run(args).map_err(anyhow::Error::msg),
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
             println!("libsvn feature: disabled");

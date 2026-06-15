@@ -1,13 +1,22 @@
 use std::collections::BTreeMap;
 
+use super::editor::CommitEditor;
 use super::editor::FetchEditor;
 use super::ra::{DirEntry, DirListing, RaSession, SvnNodeKind};
-use super::{RevisionEvent, SvnBackend};
+use super::{CommitRecord, RevisionEvent, SvnBackend};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MockCommit {
+    pub record: CommitRecord,
+    pub revision: u32,
+    pub operations: Vec<String>,
+}
 
 #[derive(Debug, Clone)]
 pub struct MockSvnBackend {
     uuid: String,
     revisions: Vec<RevisionEvent>,
+    commits: Vec<MockCommit>,
 }
 
 impl MockSvnBackend {
@@ -15,7 +24,21 @@ impl MockSvnBackend {
         Self {
             uuid: uuid.into(),
             revisions,
+            commits: Vec::new(),
         }
+    }
+
+    pub fn commit_editor(&mut self, record: CommitRecord) -> MockCommitEditor<'_> {
+        MockCommitEditor {
+            backend: self,
+            record,
+            operations: Vec::new(),
+            closed: false,
+        }
+    }
+
+    pub fn commits(&self) -> &[MockCommit] {
+        &self.commits
     }
 }
 
@@ -25,11 +48,17 @@ impl SvnBackend for MockSvnBackend {
     }
 
     fn latest_revnum(&self) -> Result<u32, String> {
-        Ok(self
+        let latest_revision = self
             .revisions
             .last()
             .map(|revision| revision.revision)
-            .unwrap_or(0))
+            .unwrap_or(0);
+        let latest_commit = self
+            .commits
+            .last()
+            .map(|commit| commit.revision)
+            .unwrap_or(0);
+        Ok(latest_revision.max(latest_commit))
     }
 
     fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
@@ -39,6 +68,70 @@ impl SvnBackend for MockSvnBackend {
             .filter(|revision| revision.revision >= start && revision.revision <= end)
             .cloned()
             .collect())
+    }
+}
+
+#[derive(Debug)]
+pub struct MockCommitEditor<'a> {
+    backend: &'a mut MockSvnBackend,
+    record: CommitRecord,
+    operations: Vec<String>,
+    closed: bool,
+}
+
+impl CommitEditor for MockCommitEditor<'_> {
+    fn ensure_path(&mut self, path: &str) -> Result<(), String> {
+        self.operations.push(format!("ensure {path}"));
+        Ok(())
+    }
+
+    fn add_file(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
+        self.operations
+            .push(format!("add {path} {}", String::from_utf8_lossy(content)));
+        Ok(())
+    }
+
+    fn open_file(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
+        self.operations
+            .push(format!("open {path} {}", String::from_utf8_lossy(content)));
+        Ok(())
+    }
+
+    fn delete_entry(&mut self, path: &str) -> Result<(), String> {
+        self.operations.push(format!("delete {path}"));
+        Ok(())
+    }
+
+    fn change_file_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        self.operations.push(format!(
+            "prop {path} {name} {}",
+            value.unwrap_or("<deleted>")
+        ));
+        Ok(())
+    }
+
+    fn close_edit(&mut self) -> Result<u32, String> {
+        if self.closed {
+            return Err("commit editor already closed".to_string());
+        }
+        let revision = self.record.base_revision + 1;
+        self.backend.commits.push(MockCommit {
+            record: self.record.clone(),
+            revision,
+            operations: self.operations.clone(),
+        });
+        self.closed = true;
+        Ok(revision)
+    }
+
+    fn abort_edit(&mut self) -> Result<(), String> {
+        self.closed = true;
+        Ok(())
     }
 }
 

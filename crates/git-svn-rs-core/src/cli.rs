@@ -7,10 +7,10 @@ use clap::{Args, Parser, Subcommand};
     about = "Rust replacement for core git-svn workflows"
 )]
 pub struct Cli {
-    #[arg(short, long, global = true, action = clap::ArgAction::Count)]
+    #[arg(short, long, action = clap::ArgAction::Count)]
     pub verbose: u8,
 
-    #[arg(short, long, global = true)]
+    #[arg(short, long)]
     pub quiet: bool,
 
     #[command(subcommand)]

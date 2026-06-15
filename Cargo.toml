@@ -2,6 +2,7 @@
 members = [
     "crates/git-svn-rs-cli",
     "crates/git-svn-rs-core",
+    "crates/git-svn-rs-shim",
 ]
 resolver = "2"
 

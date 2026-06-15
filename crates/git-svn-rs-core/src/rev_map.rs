@@ -111,6 +111,16 @@ impl RevMap {
         Ok(None)
     }
 
+    pub fn records(&self) -> Result<Vec<RevMapRecord>, String> {
+        let mut file = File::open(&self.path).map_err(|e| e.to_string())?;
+        let size = self.validated_size(&file)?;
+        let mut records = Vec::new();
+        for index in 0..(size / self.format.record_size()) {
+            records.push(self.read_record_at(&mut file, index)?);
+        }
+        Ok(records)
+    }
+
     pub fn max_revision(&self, require_commit: bool) -> Result<Option<u32>, String> {
         Ok(self
             .max_record(require_commit)?

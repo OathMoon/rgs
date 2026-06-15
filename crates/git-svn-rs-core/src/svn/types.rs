@@ -34,3 +34,10 @@ pub enum NodeKind {
     Directory,
     Symlink,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitRecord {
+    pub author: String,
+    pub message: String,
+    pub base_revision: u32,
+}
