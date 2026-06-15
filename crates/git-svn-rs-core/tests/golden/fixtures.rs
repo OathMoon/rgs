@@ -69,6 +69,7 @@ pub struct GoldenComparisonArtifacts {
     pub info_summary: String,
     pub log_revision_oneline: String,
     pub find_rev_nearest: String,
+    pub find_rev_commit: String,
 }
 
 impl GoldenFixture {
@@ -246,6 +247,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
     capture.write_text("perl/log-revision-oneline.txt", &perl.log_revision_oneline)?;
     capture.write_text("perl/find-rev-nearest.txt", &perl.find_rev_nearest)?;
+    capture.write_text("perl/find-rev-commit.txt", &perl.find_rev_commit)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -276,6 +278,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
     capture.write_text("rust/log-revision-oneline.txt", &rust.log_revision_oneline)?;
     capture.write_text("rust/find-rev-nearest.txt", &rust.find_rev_nearest)?;
+    capture.write_text("rust/find-rev-commit.txt", &rust.find_rev_commit)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -350,6 +353,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "find-rev nearest output differs\nperl: {:?}\nrust: {:?}",
             perl.find_rev_nearest, rust.find_rev_nearest
+        ));
+    }
+    if perl.find_rev_commit != rust.find_rev_commit {
+        mismatches.push(format!(
+            "find-rev commit output differs\nperl: {:?}\nrust: {:?}",
+            perl.find_rev_commit, rust.find_rev_commit
         ));
     }
 
@@ -527,6 +536,7 @@ fn collect_supported_artifacts(
     let info_summary = supported_info_summary(work_tree, tool)?;
     let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
     let find_rev_nearest = supported_find_rev_nearest(work_tree, tool, first_revision + 1)?;
+    let find_rev_commit = supported_find_rev_commit(work_tree, tool, rev, first_revision)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -540,6 +550,7 @@ fn collect_supported_artifacts(
         info_summary,
         log_revision_oneline,
         find_rev_nearest,
+        find_rev_commit,
     })
 }
 
@@ -614,6 +625,48 @@ fn supported_find_rev_nearest(
     let after =
         supported_find_rev_with_direction(work_tree, tool, revision, FindRevDirection::After)?;
     Ok(format!("before {before}\nafter {after}"))
+}
+
+fn supported_find_rev_commit(
+    work_tree: &Path,
+    tool: GoldenTool,
+    refname: &str,
+    expected_revision: u32,
+) -> Result<String, String> {
+    let commit = run_text(
+        work_tree,
+        "git",
+        &["rev-list", "--reverse", "-n", "1", refname],
+    )?
+    .trim()
+    .to_string();
+    if commit.is_empty() {
+        return Err(format!("no commit found for {refname}"));
+    }
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "find-rev", &commit])?,
+        GoldenTool::Rust => commands::find_rev::run_in_work_tree(
+            work_tree,
+            FindRevArgs {
+                rev_or_commit: commit,
+                before: false,
+                after: false,
+            },
+        )?,
+    };
+    Ok(format!(
+        "<commit> -> {}",
+        normalize_commit_to_revision_output(&output, expected_revision)
+    ))
+}
+
+fn normalize_commit_to_revision_output(output: &str, expected_revision: u32) -> String {
+    let trimmed = output.trim();
+    if trimmed == expected_revision.to_string() {
+        format!("r{trimmed}")
+    } else {
+        trimmed.to_string()
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
