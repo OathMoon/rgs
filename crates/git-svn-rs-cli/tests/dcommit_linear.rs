@@ -419,6 +419,74 @@ fn dcommit_writes_special_property_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_removes_special_property_from_file_svn_when_link_becomes_file() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    let blob = git_stdout_with_stdin(&work, &["hash-object", "-w", "--stdin"], "regular\n");
+    run_git(
+        &work,
+        &[
+            "update-index",
+            "--cacheinfo",
+            "100644",
+            &blob,
+            "link-to-lib",
+        ],
+    );
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "turn link into file",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("turn link into file"));
+
+    svn_propget_missing(
+        "svn:special",
+        &format!("{}/trunk/link-to-lib", fixture.url()),
+    );
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/link-to-lib", fixture.url())]),
+        "regular\n"
+    );
+}
+
+#[test]
 fn dcommit_mergeinfo_reports_v1_scope_message() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

@@ -183,7 +183,7 @@ fn apply_file_svn_change(
             )?;
             apply_file_props(git, wc, commit, path, "000000")?;
         }
-        "M" => {
+        "M" | "T" => {
             std::fs::write(&target, svn_file_content(git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             let old_mode = git.ls_tree_file(base, path)?.mode;
@@ -459,7 +459,7 @@ fn git_changes_for_commit(
                     .with_executable(mode == "100755")
                     .with_symlink(mode == "120000"))
             }
-            "M" => {
+            "M" | "T" => {
                 let content = git.show_file(&commit.id, &change.path)?;
                 let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
                 Ok(GitDiffChange::modify_file(change.path, content)
