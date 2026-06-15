@@ -19,7 +19,8 @@ fn diagnose_prints_feature_state() {
         .assert()
         .success()
         .stdout(predicate::str::contains("git-svn-rs diagnostics"))
-        .stdout(predicate::str::contains("libsvn feature: disabled"));
+        .stdout(predicate::str::contains("libsvn feature: disabled"))
+        .stdout(predicate::str::contains("libsvn link: not-compiled"));
 }
 
 #[cfg(feature = "svn-libsvn")]
@@ -30,7 +31,8 @@ fn diagnose_prints_enabled_when_libsvn_feature_is_compiled() {
         .assert()
         .success()
         .stdout(predicate::str::contains("git-svn-rs diagnostics"))
-        .stdout(predicate::str::contains("libsvn feature: enabled"));
+        .stdout(predicate::str::contains("libsvn feature: enabled"))
+        .stdout(predicate::str::contains("libsvn link: not-linked"));
 }
 
 #[test]

@@ -66,12 +66,17 @@ impl StandardSvnFixture {
         run(&wc, "svn", &["commit", "--non-interactive", "-m", "layout"])?;
 
         std::fs::create_dir_all(wc.join("trunk/src")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(wc.join("trunk/empty-dir")).map_err(|e| e.to_string())?;
         std::fs::write(
             wc.join("trunk/src/lib.rs"),
             "pub fn answer() -> u8 { 42 }\n",
         )
         .map_err(|e| e.to_string())?;
-        run(&wc, "svn", &["add", "--non-interactive", "trunk/src"])?;
+        run(
+            &wc,
+            "svn",
+            &["add", "--non-interactive", "trunk/src", "trunk/empty-dir"],
+        )?;
         run(
             &wc,
             "svn",

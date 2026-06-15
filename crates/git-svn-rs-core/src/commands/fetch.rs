@@ -57,29 +57,39 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
         .config_get(&format!("{prefix}.url"))?
         .ok_or_else(|| format!("missing {prefix}.url"))?;
     let fetch = git.config_get_all(&format!("{prefix}.fetch"))?;
+    let branches = git.config_get_all(&format!("{prefix}.branches"))?;
+    let tags = git.config_get_all(&format!("{prefix}.tags"))?;
     let mappings = fetch
         .into_iter()
-        .map(|value| parse_fetch_mapping(&value))
+        .map(|value| parse_mapping(&value, MappingKind::Fetch))
+        .collect::<Result<Vec<_>, _>>()?;
+    let branch_mappings = branches
+        .into_iter()
+        .map(|value| parse_mapping(&value, MappingKind::Branches))
+        .collect::<Result<Vec<_>, _>>()?;
+    let tag_mappings = tags
+        .into_iter()
+        .map(|value| parse_mapping(&value, MappingKind::Tags))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(SvnRemoteConfig {
         name: remote.to_string(),
         url,
         fetch: mappings,
-        branches: Vec::new(),
-        tags: Vec::new(),
+        branches: branch_mappings,
+        tags: tag_mappings,
         ignore_paths: git.config_get(&format!("{prefix}.ignore-paths"))?,
         include_paths: git.config_get(&format!("{prefix}.include-paths"))?,
         ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
     })
 }
 
-fn parse_fetch_mapping(value: &str) -> Result<RefMapping, String> {
+fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
     let (svn_path, git_ref) = value
         .split_once(':')
         .ok_or_else(|| format!("invalid fetch mapping: {value}"))?;
     Ok(RefMapping {
-        kind: MappingKind::Fetch,
+        kind,
         svn_path: svn_path.to_string(),
         git_ref: git_ref.to_string(),
     })

@@ -44,6 +44,7 @@ fn main() -> Result<()> {
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
             println!("libsvn feature: {}", diagnostics::libsvn_feature_status());
+            println!("libsvn link: {}", diagnostics::libsvn_link_status());
             Ok(())
         }
         Command::Unsupported(args) => {

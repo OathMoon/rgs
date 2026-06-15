@@ -91,3 +91,53 @@ fn fetch_stdlayout_file_url_imports_trunk_history_after_init() {
         "pub fn answer() -> u8 { 42 }\n".to_string()
     );
 }
+
+#[test]
+fn clone_stdlayout_file_url_imports_branch_tag_and_copy_contents() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let refs = git
+        .run_for_test(["for-each-ref", "--format=%(refname)", "refs/remotes/origin"])
+        .unwrap();
+    assert!(refs.lines().any(|line| line == "refs/remotes/origin/trunk"));
+    assert!(refs.lines().any(|line| line == "refs/remotes/origin/main"));
+    assert!(
+        refs.lines()
+            .any(|line| line == "refs/remotes/origin/tags/v1")
+    );
+
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/main:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/tags/v1:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+
+    let trunk_tree = git
+        .run_for_test(["ls-tree", "-r", "--name-only", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert!(!trunk_tree.lines().any(|line| line == "empty-dir"));
+}

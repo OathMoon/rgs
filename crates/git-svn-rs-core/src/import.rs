@@ -4,6 +4,8 @@ use crate::config::SvnRemoteConfig;
 use crate::fast_import::{FastImportCommit, FastImportStream, FileChange};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
+use crate::glob_spec::GlobSpec;
+use crate::mapping::RefMapping;
 use crate::rev_map::{ObjectFormat, RevMap};
 use crate::svn::{ChangeAction, NodeKind, RevisionEvent, SvnBackend};
 
@@ -39,10 +41,33 @@ pub fn import_mock_revisions(
     }
 
     let uuid = backend.uuid()?;
-    let mapping = config
-        .fetch
-        .first()
-        .ok_or_else(|| "svn remote has no fetch mapping".to_string())?;
+    let mappings = concrete_mappings(config, &revisions)?;
+    if mappings.is_empty() {
+        return Ok(ImportSummary {
+            imported_revisions: Vec::new(),
+        });
+    }
+    let mut all_imported_revisions = Vec::new();
+
+    for mapping in mappings {
+        let summary = import_revisions_for_mapping(git, config, &uuid, &mapping, &revisions)?;
+        all_imported_revisions.extend(summary.imported_revisions);
+    }
+
+    all_imported_revisions.sort_unstable();
+    all_imported_revisions.dedup();
+    Ok(ImportSummary {
+        imported_revisions: all_imported_revisions,
+    })
+}
+
+fn import_revisions_for_mapping(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    uuid: &str,
+    mapping: &RefMapping,
+    revisions: &[RevisionEvent],
+) -> Result<ImportSummary, String> {
     let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
     let mut stream = FastImportStream::new();
     let mut imported_revisions = Vec::new();
@@ -60,7 +85,7 @@ pub fn import_mock_revisions(
             author: author_ident(&revision.author),
             committer: author_ident(&revision.author),
             timestamp: index as i64,
-            message: commit_message(config, revision, &uuid, &strip_prefix),
+            message: commit_message(config, revision, uuid, &strip_prefix),
             parent_mark: (imported_revisions.len() > 1)
                 .then_some(imported_revisions.len() as u32 - 1),
             changes,
@@ -72,9 +97,83 @@ pub fn import_mock_revisions(
     }
 
     git.fast_import(&stream.finish())?;
-    write_rev_map(git, &mapping.git_ref, &uuid, &imported_revisions)?;
+    write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
+}
+
+fn concrete_mappings(
+    config: &SvnRemoteConfig,
+    revisions: &[RevisionEvent],
+) -> Result<Vec<RefMapping>, String> {
+    let mut mappings = config.fetch.clone();
+    for mapping in config.branches.iter().chain(config.tags.iter()) {
+        let spec = GlobSpec::new(&mapping.svn_path, true)?;
+        for wildcard in wildcard_matches(&spec, revisions) {
+            let svn_path = spec.full_path(&wildcard);
+            let git_ref = mapping.git_ref.replace('*', &wildcard);
+            if !mappings
+                .iter()
+                .any(|candidate| candidate.svn_path == svn_path && candidate.git_ref == git_ref)
+            {
+                mappings.push(RefMapping {
+                    kind: mapping.kind.clone(),
+                    svn_path,
+                    git_ref,
+                });
+            }
+        }
+    }
+    Ok(mappings)
+}
+
+fn wildcard_matches(spec: &GlobSpec, revisions: &[RevisionEvent]) -> Vec<String> {
+    let mut matches = Vec::new();
+    for revision in revisions {
+        for changed_path in &revision.changed_paths {
+            let path = changed_path.path.trim_matches('/');
+            if let Some(wildcard) = wildcard_for_path(spec, path)
+                && !matches.contains(&wildcard)
+            {
+                matches.push(wildcard);
+            }
+        }
+    }
+    matches
+}
+
+fn wildcard_for_path(spec: &GlobSpec, path: &str) -> Option<String> {
+    if spec.is_match(path) {
+        return wildcard_from_exact_match(spec, path);
+    }
+
+    let left = spec.left();
+    let relative = if left.is_empty() {
+        path
+    } else {
+        path.strip_prefix(&format!("{left}/"))?
+    };
+    let wildcard = relative
+        .split('/')
+        .take(spec.depth())
+        .collect::<Vec<_>>()
+        .join("/");
+    if wildcard.is_empty() {
+        return None;
+    }
+    let full_path = spec.full_path(&wildcard);
+    (path == full_path || path.starts_with(&format!("{full_path}/"))).then_some(wildcard)
+}
+
+fn wildcard_from_exact_match(spec: &GlobSpec, path: &str) -> Option<String> {
+    let mut relative = path;
+    if !spec.left().is_empty() {
+        relative = relative.strip_prefix(spec.left())?.trim_start_matches('/');
+    }
+    if !spec.right().is_empty() {
+        relative = relative.strip_suffix(spec.right())?.trim_end_matches('/');
+    }
+    (!relative.is_empty()).then(|| relative.to_string())
 }
 
 fn changes_for_revision(revision: &RevisionEvent, strip_prefix: &str) -> Vec<FileChange> {

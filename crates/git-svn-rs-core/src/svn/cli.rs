@@ -53,6 +53,28 @@ impl SvnCliBackend {
             &url,
         ])
     }
+
+    fn list_files(&self, path: &str, revision: u32) -> Result<Vec<String>, String> {
+        let url = format!(
+            "{}/{}",
+            self.url.trim_end_matches('/'),
+            path.trim_start_matches('/')
+        );
+        let output = self.run_text(&[
+            "list",
+            "--recursive",
+            "--non-interactive",
+            "-r",
+            &revision.to_string(),
+            &url,
+        ])?;
+        Ok(output
+            .lines()
+            .filter(|line| !line.ends_with('/'))
+            .map(|line| line.trim_matches('/').to_string())
+            .filter(|line| !line.is_empty())
+            .collect())
+    }
 }
 
 impl SvnBackend for SvnCliBackend {
@@ -75,6 +97,7 @@ impl SvnBackend for SvnCliBackend {
         let xml = self.run_text(&["log", "--xml", "-v", "-r", &range, &self.url])?;
         let mut revisions = parse_log_xml(&xml)?;
         for revision in &mut revisions {
+            let mut copied_files = Vec::new();
             for path in &mut revision.changed_paths {
                 if matches!(
                     path.action,
@@ -83,7 +106,27 @@ impl SvnBackend for SvnCliBackend {
                 {
                     path.content = Some(self.cat(&path.path, revision.revision)?);
                 }
+                if matches!(path.action, ChangeAction::Add | ChangeAction::Replace)
+                    && path.kind == NodeKind::Directory
+                    && path.copy_from_path.is_some()
+                {
+                    for relative in self.list_files(&path.path, revision.revision)? {
+                        let file_path = format!("{}/{}", path.path.trim_end_matches('/'), relative);
+                        copied_files.push(ChangedPath {
+                            path: file_path.clone(),
+                            action: ChangeAction::Add,
+                            copy_from_path: path.copy_from_path.as_ref().map(|source| {
+                                format!("{}/{}", source.trim_end_matches('/'), relative)
+                            }),
+                            copy_from_rev: path.copy_from_rev,
+                            kind: NodeKind::File,
+                            properties: BTreeMap::new(),
+                            content: Some(self.cat(&file_path, revision.revision)?),
+                        });
+                    }
+                }
             }
+            revision.changed_paths.extend(copied_files);
         }
         Ok(revisions)
     }

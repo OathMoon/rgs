@@ -2,8 +2,10 @@
 mod golden_fixtures;
 
 use golden_fixtures::{
-    CompatDecision, GoldenArtifactCapture, GoldenFixture, GoldenFixtureStep, ToolAvailability,
-    missing_perl_git_svn_policy, perl_git_svn_available, require_perl_git_svn,
+    CompatDecision, GoldenArtifactCapture, GoldenComparisonArtifacts, GoldenFixture,
+    GoldenFixtureStep, RevMapArtifactRecord, ToolAvailability, compare_supported_subset,
+    missing_perl_git_svn_policy, perl_git_svn_available, require_golden_tools,
+    run_standard_trunk_golden_comparison,
 };
 
 #[test]
@@ -71,12 +73,45 @@ fn artifact_capture_writes_normalized_text_files() {
 }
 
 #[test]
-fn rust_vs_perl_comparison_placeholder_skips_until_fetch_artifacts_exist() {
-    match require_perl_git_svn() {
+fn artifact_comparison_reports_supported_subset_mismatches() {
+    let perl = GoldenComparisonArtifacts {
+        config: vec![(
+            "svn-remote.svn.fetch".to_string(),
+            "trunk:refs/remotes/origin/trunk".to_string(),
+        )],
+        refs: vec!["refs/remotes/origin/trunk".to_string()],
+        git_svn_id_footers: vec!["git-svn-id: file:///repo/trunk@2 uuid".to_string()],
+        rev_map: vec![RevMapArtifactRecord {
+            revision: 2,
+            has_commit: true,
+        }],
+    };
+    let rust = GoldenComparisonArtifacts {
+        config: vec![(
+            "svn-remote.svn.fetch".to_string(),
+            ":refs/remotes/git-svn".to_string(),
+        )],
+        refs: vec!["refs/remotes/git-svn".to_string()],
+        git_svn_id_footers: vec!["git-svn-id: file:///repo@2 uuid".to_string()],
+        rev_map: vec![RevMapArtifactRecord {
+            revision: 2,
+            has_commit: false,
+        }],
+    };
+
+    let err = compare_supported_subset(&perl, &rust).unwrap_err();
+
+    assert!(err.contains("config differs"));
+    assert!(err.contains("refs differ"));
+    assert!(err.contains("git-svn-id footers differ"));
+    assert!(err.contains("rev_map records differ"));
+}
+
+#[test]
+fn standard_trunk_fixture_matches_perl_git_svn_supported_subset() {
+    match require_golden_tools() {
         Ok(version) => {
-            eprintln!(
-                "Perl git-svn available ({version}); golden comparison awaits production fetch artifacts"
-            );
+            eprintln!("Perl git-svn available ({version}); running golden comparison");
         }
         Err(CompatDecision::Skip(message)) => {
             eprintln!("{message}");
@@ -85,6 +120,11 @@ fn rust_vs_perl_comparison_placeholder_skips_until_fetch_artifacts_exist() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let fixture = GoldenFixture::standard_linear_history();
-    assert_eq!(fixture.name(), "standard-linear-history");
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_trunk_golden_comparison(tmp.path()).unwrap();
+
+    comparison.assert_supported_subset_matches().unwrap();
 }
