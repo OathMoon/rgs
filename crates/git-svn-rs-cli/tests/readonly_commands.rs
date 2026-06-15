@@ -80,6 +80,24 @@ fn info_url_prints_only_url() {
 }
 
 #[test]
+fn info_url_includes_tracked_fetch_path() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/git-svn");
+    let rev1 = commit_file(work, "one.txt", "one\n", "r1");
+    write_rev_map(work, &[&rev1]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "--url"])
+        .assert()
+        .success()
+        .stdout("mock://repo/trunk\n");
+}
+
+#[test]
 fn log_prints_svn_revisions_from_git_history() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
@@ -227,19 +245,15 @@ fn clone_mock_repo(parent: &std::path::Path) -> std::path::PathBuf {
 }
 
 fn init_git_svn_work_tree(work: &std::path::Path) {
+    init_git_svn_work_tree_with_remote(work, "mock://repo/trunk", ":refs/remotes/git-svn");
+}
+
+fn init_git_svn_work_tree_with_remote(work: &std::path::Path, url: &str, fetch: &str) {
     git(work, ["init"]);
     git(work, ["config", "user.name", "Test User"]);
     git(work, ["config", "user.email", "test@example.com"]);
-    git(work, ["config", "svn-remote.svn.url", "mock://repo/trunk"]);
-    git(
-        work,
-        [
-            "config",
-            "--add",
-            "svn-remote.svn.fetch",
-            ":refs/remotes/git-svn",
-        ],
-    );
+    git(work, ["config", "svn-remote.svn.url", url]);
+    git(work, ["config", "--add", "svn-remote.svn.fetch", fetch]);
 }
 
 fn commit_file(work: &std::path::Path, path: &str, content: &str, message: &str) -> String {

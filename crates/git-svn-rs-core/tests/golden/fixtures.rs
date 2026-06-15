@@ -2,7 +2,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use git_svn_rs_core::cli::{CloneArgs, FindRevArgs, LayoutArgs, LogArgs, SharedFetchArgs};
+use git_svn_rs_core::cli::{
+    CloneArgs, FindRevArgs, InfoArgs, LayoutArgs, LogArgs, SharedFetchArgs,
+};
 use git_svn_rs_core::commands;
 
 const PERL_GIT_SVN_REQUIRED: &str = "Perl git-svn is required";
@@ -63,6 +65,7 @@ pub struct GoldenComparisonArtifacts {
     pub file_modes: Vec<FileModeArtifact>,
     pub log_oneline: String,
     pub find_rev: String,
+    pub info_url: String,
 }
 
 impl GoldenFixture {
@@ -236,6 +239,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/file-modes.txt", &format_file_modes(&perl.file_modes))?;
     capture.write_text("perl/log-oneline.txt", &perl.log_oneline)?;
     capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
+    capture.write_text("perl/info-url.txt", &perl.info_url)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -262,6 +266,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/file-modes.txt", &format_file_modes(&rust.file_modes))?;
     capture.write_text("rust/log-oneline.txt", &rust.log_oneline)?;
     capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
+    capture.write_text("rust/info-url.txt", &rust.info_url)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -312,6 +317,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "find-rev output differs\nperl: {:?}\nrust: {:?}",
             perl.find_rev, rust.find_rev
+        ));
+    }
+    if perl.info_url != rust.info_url {
+        mismatches.push(format!(
+            "info --url output differs\nperl: {:?}\nrust: {:?}",
+            perl.info_url, rust.info_url
         ));
     }
 
@@ -485,6 +496,7 @@ fn collect_supported_artifacts(
         .revision;
     let log_oneline = supported_log_oneline(work_tree, tool)?;
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
+    let info_url = supported_info_url(work_tree, tool)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -494,6 +506,7 @@ fn collect_supported_artifacts(
         file_modes,
         log_oneline,
         find_rev,
+        info_url,
     })
 }
 
@@ -529,6 +542,14 @@ fn supported_find_rev(work_tree: &Path, tool: GoldenTool, revision: u32) -> Resu
         )?,
     };
     Ok(normalize_find_rev_output(revision, &output))
+}
+
+fn supported_info_url(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "info", "--url"])?,
+        GoldenTool::Rust => commands::info::run_in_work_tree(work_tree, InfoArgs { url: true })?,
+    };
+    Ok(output.trim().replace('\\', "/"))
 }
 
 fn normalize_log_oneline(output: &str) -> String {

@@ -1,5 +1,6 @@
 use crate::cli::InfoArgs;
 use crate::commands::resolver::resolve_tracked_svn;
+use crate::path_url::add_path_to_url;
 
 pub fn run(args: InfoArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
@@ -10,8 +11,9 @@ pub fn run_in_work_tree(
     args: InfoArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
+    let url = add_path_to_url(&tracked.config.url, &tracked.svn_path);
     if args.url {
-        return Ok(format!("{}\n", tracked.config.url));
+        return Ok(format!("{url}\n"));
     }
     let revision = tracked
         .max_record()?
@@ -20,6 +22,6 @@ pub fn run_in_work_tree(
 
     Ok(format!(
         "URL: {}\nRepository Root: {}\nRepository UUID: {}\nRevision: {}\n",
-        tracked.config.url, tracked.config.url, tracked.uuid, revision
+        url, tracked.config.url, tracked.uuid, revision
     ))
 }

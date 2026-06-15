@@ -10,6 +10,7 @@ pub struct TrackedSvn {
     pub git: GitCli,
     pub config: SvnRemoteConfig,
     pub refname: String,
+    pub svn_path: String,
     pub uuid: String,
     pub rev_map_path: PathBuf,
 }
@@ -36,6 +37,7 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
         .first()
         .ok_or_else(|| "svn remote has no fetch mapping".to_string())?;
     let refname = mapping.git_ref.clone();
+    let svn_path = mapping.svn_path.clone();
     let git_dir = git.git_dir()?;
     let metadata_dir = svn_metadata_dir(
         &git.work_tree().join(git_dir),
@@ -47,6 +49,7 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
         git,
         config,
         refname,
+        svn_path,
         uuid,
         rev_map_path,
     })
