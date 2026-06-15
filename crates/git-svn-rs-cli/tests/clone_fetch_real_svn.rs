@@ -318,3 +318,140 @@ fn clone_file_url_applies_include_paths_filter() {
     assert!(!trunk_tree.lines().any(|line| line == "run.sh"));
     assert!(!trunk_tree.lines().any(|line| line == "link-to-lib"));
 }
+
+#[test]
+fn clone_file_url_applies_authors_file_mapping() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let svn_author = svn_stdout(&["log", "-r", "2", "--quiet", &fixture.url()])
+        .lines()
+        .find_map(|line| {
+            let parts = line.split('|').map(str::trim).collect::<Vec<_>>();
+            (parts.len() >= 2 && parts[0].starts_with('r')).then(|| parts[1].to_string())
+        })
+        .expect("svn log should include an author");
+    let authors = temp.path().join("authors.txt");
+    std::fs::write(
+        &authors,
+        format!("{svn_author} = Ada Lovelace <ada@example.com>\n"),
+    )
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--authors-file",
+            authors.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test([
+            "show",
+            "-s",
+            "--format=%an <%ae>",
+            "refs/remotes/origin/trunk"
+        ])
+        .unwrap()
+        .trim(),
+        "Ada Lovelace <ada@example.com>"
+    );
+}
+
+#[test]
+fn fetch_file_url_applies_persisted_authors_file_mapping() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let svn_author = fixture_author(&fixture);
+    let authors = temp.path().join("authors.txt");
+    std::fs::write(
+        &authors,
+        format!("{svn_author} = Grace Hopper <grace@example.com>\n"),
+    )
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--authors-file",
+            authors.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test([
+            "show",
+            "-s",
+            "--format=%an <%ae>",
+            "refs/remotes/origin/trunk"
+        ])
+        .unwrap()
+        .trim(),
+        "Grace Hopper <grace@example.com>"
+    );
+}
+
+fn fixture_author(fixture: &StandardSvnFixture) -> String {
+    svn_stdout(&["log", "-r", "2", "--quiet", &fixture.url()])
+        .lines()
+        .find_map(|line| {
+            let parts = line.split('|').map(str::trim).collect::<Vec<_>>();
+            (parts.len() >= 2 && parts[0].starts_with('r')).then(|| parts[1].to_string())
+        })
+        .expect("svn log should include an author")
+}
+
+fn svn_stdout(args: &[&str]) -> String {
+    let output = std::process::Command::new("svn")
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "svn {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8_lossy(&output.stdout).to_string()
+}

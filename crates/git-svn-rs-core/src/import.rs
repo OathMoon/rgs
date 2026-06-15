@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::config::SvnRemoteConfig;
 use crate::fast_import::{FastImportCommit, FastImportStream, FileChange};
 use crate::filters::{FilterDecision, PathFilters};
@@ -77,6 +78,7 @@ fn import_revisions_for_mapping(
         .rev_parse(&mapping.git_ref)
         .ok()
         .map(|commit| commit.trim().to_string());
+    let authors = author_resolver(config)?;
 
     for (index, revision) in revisions.iter().enumerate() {
         if revision.revision <= max_imported_revision {
@@ -91,8 +93,8 @@ fn import_revisions_for_mapping(
         stream = stream.commit(&FastImportCommit {
             mark: imported_revisions.len() as u32,
             refname: mapping.git_ref.clone(),
-            author: author_ident(&revision.author),
-            committer: author_ident(&revision.author),
+            author: author_ident(&revision.author, authors.as_ref()),
+            committer: author_ident(&revision.author, authors.as_ref()),
             timestamp: index as i64,
             message: commit_message(config, revision, uuid, &strip_prefix),
             parent_mark: (imported_revisions.len() > 1)
@@ -355,8 +357,20 @@ fn commit_message(
     format!("{}\n\n{}", revision.message, footer)
 }
 
-fn author_ident(author: &str) -> String {
-    format!("{author} <{author}@example.invalid>")
+fn author_resolver(config: &SvnRemoteConfig) -> Result<Option<AuthorResolver>, String> {
+    let Some(path) = &config.authors_file else {
+        return Ok(None);
+    };
+    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+    parse_authors_file(&contents).map(Some)
+}
+
+fn author_ident(author: &str, resolver: Option<&AuthorResolver>) -> String {
+    if let Some(mapped) = resolver.and_then(|resolver| resolver.resolve(author)) {
+        format!("{} <{}>", mapped.name, mapped.email)
+    } else {
+        format!("{author} <{author}@example.invalid>")
+    }
 }
 
 fn strip_prefix_for(config: &SvnRemoteConfig, svn_path: &str) -> String {
