@@ -1,8 +1,11 @@
 pub mod clone;
+pub mod dcommit;
 pub mod fetch;
 pub mod find_rev;
 pub mod gc;
 pub mod info;
 pub mod init;
 pub mod log;
+pub mod rebase;
+pub mod reset;
 pub mod resolver;

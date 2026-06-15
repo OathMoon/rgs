@@ -9,6 +9,13 @@ fn main() -> Result<()> {
         Command::Init(args) => commands::init::run(args).map_err(anyhow::Error::msg),
         Command::Clone(args) => commands::clone::run(args).map_err(anyhow::Error::msg),
         Command::Fetch(args) => commands::fetch::run(args).map_err(anyhow::Error::msg),
+        Command::Rebase(args) => {
+            print!(
+                "{}",
+                commands::rebase::run(args).map_err(anyhow::Error::msg)?
+            );
+            Ok(())
+        }
         Command::FindRev(args) => {
             print!(
                 "{}",
@@ -24,7 +31,15 @@ fn main() -> Result<()> {
             print!("{}", commands::log::run(args).map_err(anyhow::Error::msg)?);
             Ok(())
         }
+        Command::Dcommit(args) => {
+            print!(
+                "{}",
+                commands::dcommit::run(args).map_err(anyhow::Error::msg)?
+            );
+            Ok(())
+        }
         Command::Gc(args) => commands::gc::run(args).map_err(anyhow::Error::msg),
+        Command::Reset(args) => commands::reset::run(args).map_err(anyhow::Error::msg),
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
             println!("libsvn feature: disabled");
@@ -45,6 +60,5 @@ fn main() -> Result<()> {
         Command::Proplist(_) => bail!("unsupported in v1: proplist"),
         Command::ShowIgnore(_) => bail!("unsupported in v1: show-ignore"),
         Command::ShowExternals(_) => bail!("unsupported in v1: show-externals"),
-        other => bail!("command parsed but not implemented in phase 1: {other:?}"),
     }
 }

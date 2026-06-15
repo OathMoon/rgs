@@ -14,4 +14,6 @@ On Windows, run the local verification script from the repository root:
 
 The script runs `cargo fmt --all -- --check`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings`.
 
-Some fixture tests use external Subversion tools. By default they skip when `svnadmin` and `svn` are unavailable. Set `GIT_SVN_RS_STRICT_COMPAT=1` or pass `-StrictCompat` to `scripts/verify.ps1` to make missing Subversion tools fail the run.
+Some fixture and golden compatibility tests use external Subversion tools or Perl `git-svn`. By default they skip when those tools are unavailable. Set `GIT_SVN_RS_STRICT_COMPAT=1` or pass `-StrictCompat` to `scripts/verify.ps1` to make missing compatibility tools fail the run.
+
+The golden compatibility harness currently provides deterministic fixture manifests, tool detection, and artifact capture skeletons. Rust-vs-Perl output comparison is intentionally skip-aware until production fetch artifacts exist.

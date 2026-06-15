@@ -17,6 +17,13 @@ pub struct GitCli {
     work_tree: PathBuf,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitCommitSummary {
+    pub id: String,
+    pub short_id: String,
+    pub subject: String,
+}
+
 impl GitCli {
     pub fn new(work_tree: impl Into<PathBuf>) -> Self {
         Self {
@@ -70,6 +77,59 @@ impl GitCli {
             args.push(format!("-n{limit}"));
         }
         args.push(rev.to_string());
+        self.run_args(args)
+    }
+
+    pub fn commit_summaries_between(
+        &self,
+        base: &str,
+        head: &str,
+    ) -> Result<Vec<GitCommitSummary>, String> {
+        let rev_range = format!("{base}..{head}");
+        let raw = self.run_args([
+            "log",
+            "--reverse",
+            "--format=%H%x1f%h%x1f%s%x1e",
+            &rev_range,
+        ])?;
+        let mut commits = Vec::new();
+        for record in raw.split('\x1e') {
+            let record = record.trim_matches('\n');
+            if record.is_empty() {
+                continue;
+            }
+            let fields = record.splitn(3, '\x1f').collect::<Vec<_>>();
+            if fields.len() != 3 {
+                return Err(format!("unexpected git log record: {record}"));
+            }
+            commits.push(GitCommitSummary {
+                id: fields[0].to_string(),
+                short_id: fields[1].to_string(),
+                subject: fields[2].to_string(),
+            });
+        }
+        Ok(commits)
+    }
+
+    pub fn update_ref(&self, refname: &str, value: &str) -> Result<(), String> {
+        self.run(["update-ref", refname, value]).map(|_| ())
+    }
+
+    pub fn rebase(
+        &self,
+        upstream: &str,
+        merge: bool,
+        strategy: Option<&str>,
+    ) -> Result<String, String> {
+        let mut args = vec!["rebase".to_string()];
+        if merge {
+            args.push("--merge".to_string());
+        }
+        if let Some(strategy) = strategy {
+            args.push("--strategy".to_string());
+            args.push(strategy.to_string());
+        }
+        args.push(upstream.to_string());
         self.run_args(args)
     }
 

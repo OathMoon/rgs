@@ -126,6 +126,95 @@ fn gc_removes_stale_rev_map_lock_files() {
     assert!(!lock.exists());
 }
 
+#[test]
+fn reset_moves_tracked_ref_and_truncates_rev_map() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(work, "one.txt", "one\n", "r1");
+    let rev2 = commit_file(work, "two.txt", "two\n", "r2");
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+
+    let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
+    cmd.current_dir(work)
+        .args(["reset", "--revision", "1"])
+        .assert()
+        .success();
+
+    let tracked = git_output(work, ["rev-parse", "refs/remotes/git-svn"]);
+    assert_eq!(tracked.trim(), rev1);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", "r2"])
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn reset_missing_revision_fails_without_moving_tracked_ref() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(work, "one.txt", "one\n", "r1");
+    write_rev_map(work, &[&rev1]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
+
+    let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
+    cmd.current_dir(work)
+        .args(["reset", "--revision", "9"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "no Git commit found for SVN revision r9",
+        ));
+
+    let tracked = git_output(work, ["rev-parse", "refs/remotes/git-svn"]);
+    assert_eq!(tracked.trim(), rev1);
+}
+
+#[test]
+fn rebase_dry_run_prints_planned_actions() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+
+    let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
+    cmd.current_dir(work)
+        .args(["rebase", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("would run fetch"))
+        .stdout(predicate::str::contains(
+            "would run git rebase refs/remotes/git-svn",
+        ));
+}
+
+#[test]
+fn rebase_fetches_and_runs_git_rebase_against_tracked_ref() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let base = commit_file(work, "base.txt", "base\n", "base");
+    let upstream = commit_file(work, "upstream.txt", "upstream\n", "upstream");
+    write_rev_map(work, &[&base, &upstream]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &upstream]);
+    git(work, ["checkout", "-b", "topic", &base]);
+    let topic = commit_file(work, "topic.txt", "topic\n", "topic");
+
+    let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
+    cmd.current_dir(work).arg("rebase").assert().success();
+
+    let head = git_output(work, ["rev-parse", "HEAD"]);
+    let merge_base = git_output(work, ["merge-base", "HEAD", "refs/remotes/git-svn"]);
+    let tracked = git_output(work, ["rev-parse", "refs/remotes/git-svn"]);
+    assert_ne!(head.trim(), topic);
+    assert_eq!(merge_base.trim(), tracked.trim());
+}
+
 fn clone_mock_repo(parent: &std::path::Path) -> std::path::PathBuf {
     let work = parent.join("work");
     Command::cargo_bin("git-svn-rs")
@@ -135,4 +224,58 @@ fn clone_mock_repo(parent: &std::path::Path) -> std::path::PathBuf {
         .assert()
         .success();
     work
+}
+
+fn init_git_svn_work_tree(work: &std::path::Path) {
+    git(work, ["init"]);
+    git(work, ["config", "user.name", "Test User"]);
+    git(work, ["config", "user.email", "test@example.com"]);
+    git(work, ["config", "svn-remote.svn.url", "mock://repo/trunk"]);
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            ":refs/remotes/git-svn",
+        ],
+    );
+}
+
+fn commit_file(work: &std::path::Path, path: &str, content: &str, message: &str) -> String {
+    std::fs::write(work.join(path), content).unwrap();
+    git(work, ["add", path]);
+    git(work, ["commit", "-m", message]);
+    git_output(work, ["rev-parse", "HEAD"]).trim().to_string()
+}
+
+fn write_rev_map(work: &std::path::Path, commits: &[&str]) {
+    let rev_map_path = work.join(".git/svn/git-svn/.rev_map.mock-uuid");
+    let mut rev_map = git_svn_rs_core::rev_map::RevMap::open(
+        rev_map_path,
+        git_svn_rs_core::rev_map::ObjectFormat::Sha1,
+    )
+    .unwrap();
+    for (index, commit) in commits.iter().enumerate() {
+        rev_map.append(index as u32 + 1, commit).unwrap();
+    }
+}
+
+fn git<const N: usize>(work: &std::path::Path, args: [&str; N]) {
+    let status = std::process::Command::new("git")
+        .current_dir(work)
+        .args(args)
+        .status()
+        .unwrap();
+    assert!(status.success());
+}
+
+fn git_output<const N: usize>(work: &std::path::Path, args: [&str; N]) -> String {
+    let output = std::process::Command::new("git")
+        .current_dir(work)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).to_string()
 }
