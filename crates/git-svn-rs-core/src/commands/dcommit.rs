@@ -217,8 +217,9 @@ fn apply_file_props(
             Some(wc),
             &[
                 "propset".to_string(),
+                "--non-interactive".to_string(),
                 "svn:executable".to_string(),
-                "*".to_string(),
+                "x".to_string(),
                 path.replace('\\', "/"),
             ],
         )?;
@@ -227,6 +228,7 @@ fn apply_file_props(
             Some(wc),
             &[
                 "propdel".to_string(),
+                "--non-interactive".to_string(),
                 "svn:executable".to_string(),
                 path.replace('\\', "/"),
             ],
@@ -237,8 +239,9 @@ fn apply_file_props(
             Some(wc),
             &[
                 "propset".to_string(),
+                "--non-interactive".to_string(),
                 "svn:special".to_string(),
-                "*".to_string(),
+                "x".to_string(),
                 path.replace('\\', "/"),
             ],
         )?;
@@ -247,6 +250,7 @@ fn apply_file_props(
             Some(wc),
             &[
                 "propdel".to_string(),
+                "--non-interactive".to_string(),
                 "svn:special".to_string(),
                 path.replace('\\', "/"),
             ],
