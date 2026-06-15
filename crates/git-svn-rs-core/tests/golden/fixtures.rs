@@ -2,7 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use git_svn_rs_core::cli::{CloneArgs, LayoutArgs, SharedFetchArgs};
+use git_svn_rs_core::cli::{CloneArgs, FindRevArgs, LayoutArgs, LogArgs, SharedFetchArgs};
 use git_svn_rs_core::commands;
 
 const PERL_GIT_SVN_REQUIRED: &str = "Perl git-svn is required";
@@ -61,6 +61,8 @@ pub struct GoldenComparisonArtifacts {
     pub git_svn_id_footers: Vec<String>,
     pub rev_map: Vec<RevMapArtifactRecord>,
     pub file_modes: Vec<FileModeArtifact>,
+    pub log_oneline: String,
+    pub find_rev: String,
 }
 
 impl GoldenFixture {
@@ -223,7 +225,7 @@ pub fn run_standard_trunk_golden_comparison(
             path_arg(&perl_path)?,
         ],
     )?;
-    let perl = collect_supported_artifacts(&perl_path)?;
+    let perl = collect_supported_artifacts(&perl_path, GoldenTool::Perl)?;
     capture.write_text("perl/config.txt", &format_config(&perl.config))?;
     capture.write_text("perl/refs.txt", &perl.refs.join("\n"))?;
     capture.write_text(
@@ -232,6 +234,8 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("perl/rev-map.txt", &format_rev_map(&perl.rev_map))?;
     capture.write_text("perl/file-modes.txt", &format_file_modes(&perl.file_modes))?;
+    capture.write_text("perl/log-oneline.txt", &perl.log_oneline)?;
+    capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -247,7 +251,7 @@ pub fn run_standard_trunk_golden_comparison(
         shared: default_shared_fetch_args(),
         no_checkout: false,
     })?;
-    let rust = collect_supported_artifacts(&rust_path)?;
+    let rust = collect_supported_artifacts(&rust_path, GoldenTool::Rust)?;
     capture.write_text("rust/config.txt", &format_config(&rust.config))?;
     capture.write_text("rust/refs.txt", &rust.refs.join("\n"))?;
     capture.write_text(
@@ -256,6 +260,8 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("rust/rev-map.txt", &format_rev_map(&rust.rev_map))?;
     capture.write_text("rust/file-modes.txt", &format_file_modes(&rust.file_modes))?;
+    capture.write_text("rust/log-oneline.txt", &rust.log_oneline)?;
+    capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -294,6 +300,18 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "file modes differ\nperl: {:?}\nrust: {:?}",
             perl.file_modes, rust.file_modes
+        ));
+    }
+    if perl.log_oneline != rust.log_oneline {
+        mismatches.push(format!(
+            "log --oneline differs\nperl: {:?}\nrust: {:?}",
+            perl.log_oneline, rust.log_oneline
+        ));
+    }
+    if perl.find_rev != rust.find_rev {
+        mismatches.push(format!(
+            "find-rev output differs\nperl: {:?}\nrust: {:?}",
+            perl.find_rev, rust.find_rev
         ));
     }
 
@@ -430,7 +448,16 @@ impl MaterializedSvnFixture {
     }
 }
 
-fn collect_supported_artifacts(work_tree: &Path) -> Result<GoldenComparisonArtifacts, String> {
+#[derive(Debug, Clone, Copy)]
+enum GoldenTool {
+    Perl,
+    Rust,
+}
+
+fn collect_supported_artifacts(
+    work_tree: &Path,
+    tool: GoldenTool,
+) -> Result<GoldenComparisonArtifacts, String> {
     let refs = run_text(
         work_tree,
         "git",
@@ -452,6 +479,12 @@ fn collect_supported_artifacts(work_tree: &Path) -> Result<GoldenComparisonArtif
         .collect::<Vec<_>>();
     let rev_map = supported_rev_map(work_tree)?;
     let file_modes = supported_file_modes(work_tree, rev)?;
+    let first_revision = rev_map
+        .first()
+        .ok_or_else(|| "golden clone did not write a rev_map record".to_string())?
+        .revision;
+    let log_oneline = supported_log_oneline(work_tree, tool)?;
+    let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -459,7 +492,74 @@ fn collect_supported_artifacts(work_tree: &Path) -> Result<GoldenComparisonArtif
         git_svn_id_footers,
         rev_map,
         file_modes,
+        log_oneline,
+        find_rev,
     })
+}
+
+fn supported_log_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "log", "--oneline"])?,
+        GoldenTool::Rust => commands::log::run_in_work_tree(
+            work_tree,
+            LogArgs {
+                revision: None,
+                limit: None,
+                verbose: false,
+                incremental: false,
+                oneline: true,
+                show_commit: false,
+            },
+        )?,
+    };
+    Ok(normalize_log_oneline(&output))
+}
+
+fn supported_find_rev(work_tree: &Path, tool: GoldenTool, revision: u32) -> Result<String, String> {
+    let revision_arg = format!("r{revision}");
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "find-rev", &revision_arg])?,
+        GoldenTool::Rust => commands::find_rev::run_in_work_tree(
+            work_tree,
+            FindRevArgs {
+                rev_or_commit: revision_arg,
+                before: false,
+                after: false,
+            },
+        )?,
+    };
+    Ok(normalize_find_rev_output(revision, &output))
+}
+
+fn normalize_log_oneline(output: &str) -> String {
+    output
+        .lines()
+        .filter_map(|line| {
+            let parts = line.split(" | ").collect::<Vec<_>>();
+            let revision = parts.first()?.trim();
+            if !revision.starts_with('r') {
+                return None;
+            }
+            let subject = if parts.len() >= 4 {
+                parts[2].trim()
+            } else {
+                parts.get(1)?.trim()
+            };
+            Some(format!("{revision} | {subject}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_find_rev_output(revision: u32, output: &str) -> String {
+    if output.trim().is_empty() {
+        return format!("r{revision} -> ");
+    }
+    if output.trim().chars().all(|c| c.is_ascii_hexdigit()) {
+        format!("r{revision} -> <commit>")
+    } else {
+        format!("r{revision} -> {}", output.trim())
+    }
 }
 
 fn supported_file_modes(work_tree: &Path, refname: &str) -> Result<Vec<FileModeArtifact>, String> {

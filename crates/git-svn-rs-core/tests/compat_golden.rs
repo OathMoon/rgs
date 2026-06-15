@@ -104,6 +104,8 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             mode: "100755".to_string(),
             path: "run.sh".to_string(),
         }],
+        log_oneline: "r2 | add files\n".to_string(),
+        find_rev: "abc123\n".to_string(),
     };
     let rust = GoldenComparisonArtifacts {
         config: vec![(
@@ -120,6 +122,8 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             mode: "100644".to_string(),
             path: "run.sh".to_string(),
         }],
+        log_oneline: "r2 | add trunk file\n".to_string(),
+        find_rev: "def456\n".to_string(),
     };
 
     let err = compare_supported_subset(&perl, &rust).unwrap_err();
@@ -129,6 +133,8 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("git-svn-id footers differ"));
     assert!(err.contains("rev_map records differ"));
     assert!(err.contains("file modes differ"));
+    assert!(err.contains("log --oneline differs"));
+    assert!(err.contains("find-rev output differs"));
 }
 
 #[test]
