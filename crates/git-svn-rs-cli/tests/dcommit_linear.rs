@@ -294,6 +294,80 @@ fn dcommit_writes_executable_property_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_writes_special_property_to_file_svn_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    let blob = git_stdout_with_stdin(&work, &["hash-object", "-w", "--stdin"], "src/lib.rs");
+    run_git(
+        &work,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            "120000",
+            &blob,
+            "new-link",
+        ],
+    );
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "add special link",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("add special link"));
+
+    assert_eq!(
+        svn_stdout(&[
+            "propget",
+            "--strict",
+            "svn:special",
+            &format!("{}/trunk/new-link", fixture.url())
+        ]),
+        "*"
+    );
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/new-link", fixture.url())]),
+        "link src/lib.rs"
+    );
+}
+
+#[test]
 fn dcommit_mergeinfo_reports_v1_scope_message() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
@@ -380,6 +454,33 @@ fn git_stdout(work: &std::path::Path, args: &[&str]) -> String {
         .args(args)
         .output()
         .unwrap();
+    assert!(
+        output.status.success(),
+        "git {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn git_stdout_with_stdin(work: &std::path::Path, args: &[&str], stdin: &str) -> String {
+    use std::io::Write;
+
+    let mut child = std::process::Command::new("git")
+        .current_dir(work)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
     assert!(
         output.status.success(),
         "git {:?} failed: {}",
