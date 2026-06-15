@@ -2,10 +2,10 @@
 mod golden_fixtures;
 
 use golden_fixtures::{
-    CompatDecision, GoldenArtifactCapture, GoldenComparisonArtifacts, GoldenFixture,
-    GoldenFixtureStep, RevMapArtifactRecord, ToolAvailability, compare_supported_subset,
-    missing_perl_git_svn_policy, perl_git_svn_available, require_golden_tools,
-    run_standard_trunk_golden_comparison,
+    CompatDecision, FileModeArtifact, GoldenArtifactCapture, GoldenComparisonArtifacts,
+    GoldenFixture, GoldenFixtureStep, RevMapArtifactRecord, ToolAvailability,
+    compare_supported_subset, missing_perl_git_svn_policy, perl_git_svn_available,
+    require_golden_tools, run_standard_trunk_golden_comparison,
 };
 
 #[test]
@@ -40,6 +40,14 @@ fn standard_fixture_manifest_is_deterministic() {
             GoldenFixtureStep::AddFile {
                 path: "trunk/src/lib.rs",
                 contents: "pub fn answer() -> u8 { 42 }\n",
+            },
+            GoldenFixtureStep::AddFile {
+                path: "trunk/run.sh",
+                contents: "#!/bin/sh\necho hi\n",
+            },
+            GoldenFixtureStep::AddFile {
+                path: "trunk/link-to-lib",
+                contents: "link src/lib.rs",
             },
             GoldenFixtureStep::Copy {
                 from: "trunk",
@@ -85,6 +93,10 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             revision: 2,
             has_commit: true,
         }],
+        file_modes: vec![FileModeArtifact {
+            mode: "100755".to_string(),
+            path: "run.sh".to_string(),
+        }],
     };
     let rust = GoldenComparisonArtifacts {
         config: vec![(
@@ -97,6 +109,10 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             revision: 2,
             has_commit: false,
         }],
+        file_modes: vec![FileModeArtifact {
+            mode: "100644".to_string(),
+            path: "run.sh".to_string(),
+        }],
     };
 
     let err = compare_supported_subset(&perl, &rust).unwrap_err();
@@ -105,6 +121,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("refs differ"));
     assert!(err.contains("git-svn-id footers differ"));
     assert!(err.contains("rev_map records differ"));
+    assert!(err.contains("file modes differ"));
 }
 
 #[test]

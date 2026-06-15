@@ -45,12 +45,19 @@ pub struct RevMapArtifactRecord {
     pub has_commit: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileModeArtifact {
+    pub mode: String,
+    pub path: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GoldenComparisonArtifacts {
     pub config: Vec<(String, String)>,
     pub refs: Vec<String>,
     pub git_svn_id_footers: Vec<String>,
     pub rev_map: Vec<RevMapArtifactRecord>,
+    pub file_modes: Vec<FileModeArtifact>,
 }
 
 impl GoldenFixture {
@@ -62,6 +69,14 @@ impl GoldenFixture {
                 GoldenFixtureStep::AddFile {
                     path: "trunk/src/lib.rs",
                     contents: "pub fn answer() -> u8 { 42 }\n",
+                },
+                GoldenFixtureStep::AddFile {
+                    path: "trunk/run.sh",
+                    contents: "#!/bin/sh\necho hi\n",
+                },
+                GoldenFixtureStep::AddFile {
+                    path: "trunk/link-to-lib",
+                    contents: "link src/lib.rs",
                 },
                 GoldenFixtureStep::Copy {
                     from: "trunk",
@@ -194,6 +209,7 @@ pub fn run_standard_trunk_golden_comparison(
         &perl.git_svn_id_footers.join("\n"),
     )?;
     capture.write_text("perl/rev-map.txt", &format_rev_map(&perl.rev_map))?;
+    capture.write_text("perl/file-modes.txt", &format_file_modes(&perl.file_modes))?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -217,6 +233,7 @@ pub fn run_standard_trunk_golden_comparison(
         &rust.git_svn_id_footers.join("\n"),
     )?;
     capture.write_text("rust/rev-map.txt", &format_rev_map(&rust.rev_map))?;
+    capture.write_text("rust/file-modes.txt", &format_file_modes(&rust.file_modes))?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -249,6 +266,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "rev_map records differ\nperl: {:?}\nrust: {:?}",
             perl.rev_map, rust.rev_map
+        ));
+    }
+    if perl.file_modes != rust.file_modes {
+        mismatches.push(format!(
+            "file modes differ\nperl: {:?}\nrust: {:?}",
+            perl.file_modes, rust.file_modes
         ));
     }
 
@@ -305,7 +328,41 @@ impl MaterializedSvnFixture {
             "pub fn answer() -> u8 { 42 }\n",
         )
         .map_err(|e| e.to_string())?;
-        run(&wc, "svn", &["add", "--non-interactive", "trunk/src"])?;
+        fs::write(wc.join("trunk/run.sh"), "#!/bin/sh\necho hi\n").map_err(|e| e.to_string())?;
+        fs::write(wc.join("trunk/link-to-lib"), "link src/lib.rs").map_err(|e| e.to_string())?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "add",
+                "--non-interactive",
+                "trunk/src",
+                "trunk/run.sh",
+                "trunk/link-to-lib",
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "propset",
+                "--non-interactive",
+                "svn:executable",
+                "x",
+                "trunk/run.sh",
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "propset",
+                "--non-interactive",
+                "svn:special",
+                "x",
+                "trunk/link-to-lib",
+            ],
+        )?;
         run(
             &wc,
             "svn",
@@ -359,13 +416,32 @@ fn collect_supported_artifacts(work_tree: &Path) -> Result<GoldenComparisonArtif
         .map(str::to_string)
         .collect::<Vec<_>>();
     let rev_map = supported_rev_map(work_tree)?;
+    let file_modes = supported_file_modes(work_tree, rev)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
         refs,
         git_svn_id_footers,
         rev_map,
+        file_modes,
     })
+}
+
+fn supported_file_modes(work_tree: &Path, refname: &str) -> Result<Vec<FileModeArtifact>, String> {
+    Ok(run_text(
+        work_tree,
+        "git",
+        &["ls-tree", "-r", "--format=%(objectmode) %(path)", refname],
+    )?
+    .lines()
+    .filter_map(|line| {
+        let (mode, path) = line.split_once(' ')?;
+        Some(FileModeArtifact {
+            mode: mode.to_string(),
+            path: path.to_string(),
+        })
+    })
+    .collect())
 }
 
 fn supported_config(work_tree: &Path) -> Result<Vec<(String, String)>, String> {
@@ -467,6 +543,14 @@ fn format_rev_map(records: &[RevMapArtifactRecord]) -> String {
     records
         .iter()
         .map(|record| format!("{} {}", record.revision, record.has_commit))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_file_modes(records: &[FileModeArtifact]) -> String {
+    records
+        .iter()
+        .map(|record| format!("{} {}", record.mode, record.path))
         .collect::<Vec<_>>()
         .join("\n")
 }
