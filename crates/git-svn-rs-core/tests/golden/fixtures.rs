@@ -67,6 +67,7 @@ pub struct GoldenComparisonArtifacts {
     pub find_rev: String,
     pub info_url: String,
     pub info_summary: String,
+    pub log_revision_oneline: String,
 }
 
 impl GoldenFixture {
@@ -242,6 +243,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
     capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
+    capture.write_text("perl/log-revision-oneline.txt", &perl.log_revision_oneline)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -270,6 +272,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
     capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
+    capture.write_text("rust/log-revision-oneline.txt", &rust.log_revision_oneline)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -332,6 +335,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "info output differs\nperl: {:?}\nrust: {:?}",
             perl.info_summary, rust.info_summary
+        ));
+    }
+    if perl.log_revision_oneline != rust.log_revision_oneline {
+        mismatches.push(format!(
+            "log --revision output differs\nperl: {:?}\nrust: {:?}",
+            perl.log_revision_oneline, rust.log_revision_oneline
         ));
     }
 
@@ -507,6 +516,7 @@ fn collect_supported_artifacts(
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
     let info_url = supported_info_url(work_tree, tool)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
+    let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -518,6 +528,7 @@ fn collect_supported_artifacts(
         find_rev,
         info_url,
         info_summary,
+        log_revision_oneline,
     })
 }
 
@@ -528,6 +539,33 @@ fn supported_log_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, S
             work_tree,
             LogArgs {
                 revision: None,
+                limit: None,
+                verbose: false,
+                incremental: false,
+                oneline: true,
+                show_commit: false,
+            },
+        )?,
+    };
+    Ok(normalize_log_oneline(&output))
+}
+
+fn supported_log_revision_oneline(
+    work_tree: &Path,
+    tool: GoldenTool,
+    revision: u32,
+) -> Result<String, String> {
+    let revision_arg = format!("r{revision}");
+    let output = match tool {
+        GoldenTool::Perl => run_text(
+            work_tree,
+            "git",
+            &["svn", "log", "--revision", &revision_arg, "--oneline"],
+        )?,
+        GoldenTool::Rust => commands::log::run_in_work_tree(
+            work_tree,
+            LogArgs {
+                revision: Some(revision_arg),
                 limit: None,
                 verbose: false,
                 incremental: false,

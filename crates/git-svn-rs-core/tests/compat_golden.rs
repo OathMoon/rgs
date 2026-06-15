@@ -108,6 +108,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         find_rev: "abc123\n".to_string(),
         info_url: "file:///repo/trunk\n".to_string(),
         info_summary: "URL: file:///repo/trunk\nRevision: 2".to_string(),
+        log_revision_oneline: "r2 | add files".to_string(),
     };
     let rust = GoldenComparisonArtifacts {
         config: vec![(
@@ -128,6 +129,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         find_rev: "def456\n".to_string(),
         info_url: "file:///repo\n".to_string(),
         info_summary: "URL: file:///repo\nRevision: 1".to_string(),
+        log_revision_oneline: "r3 | branch main".to_string(),
     };
 
     let err = compare_supported_subset(&perl, &rust).unwrap_err();
@@ -141,6 +143,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("find-rev output differs"));
     assert!(err.contains("info --url output differs"));
     assert!(err.contains("info output differs"));
+    assert!(err.contains("log --revision output differs"));
 }
 
 #[test]
