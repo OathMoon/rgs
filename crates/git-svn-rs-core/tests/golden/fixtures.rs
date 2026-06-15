@@ -27,6 +27,9 @@ pub enum GoldenFixtureStep {
         path: &'static str,
         contents: &'static str,
     },
+    Delete {
+        path: &'static str,
+    },
     Copy {
         from: &'static str,
         to: &'static str,
@@ -78,6 +81,10 @@ impl GoldenFixture {
                     path: "trunk/link-to-lib",
                     contents: "link src/lib.rs",
                 },
+                GoldenFixtureStep::AddFile {
+                    path: "trunk/deleted.txt",
+                    contents: "temporary\n",
+                },
                 GoldenFixtureStep::Copy {
                     from: "trunk",
                     to: "branches/main",
@@ -85,6 +92,9 @@ impl GoldenFixture {
                 GoldenFixtureStep::Copy {
                     from: "trunk",
                     to: "tags/v1",
+                },
+                GoldenFixtureStep::Delete {
+                    path: "trunk/deleted.txt",
                 },
             ],
         }
@@ -140,15 +150,27 @@ impl GoldenComparison {
 pub fn perl_git_svn_available() -> ToolAvailability {
     let output = Command::new("git").args(["svn", "--version"]).output();
     match output {
-        Ok(output) if output.status.success() => ToolAvailability::Available {
-            version: String::from_utf8_lossy(&output.stdout).trim().to_string(),
-        },
+        Ok(output) if output.status.success() => {
+            classify_git_svn_version(String::from_utf8_lossy(&output.stdout).trim())
+        }
         Ok(output) => ToolAvailability::Missing {
             reason: String::from_utf8_lossy(&output.stderr).trim().to_string(),
         },
         Err(error) => ToolAvailability::Missing {
             reason: error.to_string(),
         },
+    }
+}
+
+fn classify_git_svn_version(version: &str) -> ToolAvailability {
+    if version.contains("git-svn-rs") {
+        ToolAvailability::Missing {
+            reason: format!("git svn resolved to git-svn-rs shim, not Perl git-svn: {version}"),
+        }
+    } else {
+        ToolAvailability::Available {
+            version: version.to_string(),
+        }
     }
 }
 
@@ -330,6 +352,7 @@ impl MaterializedSvnFixture {
         .map_err(|e| e.to_string())?;
         fs::write(wc.join("trunk/run.sh"), "#!/bin/sh\necho hi\n").map_err(|e| e.to_string())?;
         fs::write(wc.join("trunk/link-to-lib"), "link src/lib.rs").map_err(|e| e.to_string())?;
+        fs::write(wc.join("trunk/deleted.txt"), "temporary\n").map_err(|e| e.to_string())?;
         run(
             &wc,
             "svn",
@@ -339,6 +362,7 @@ impl MaterializedSvnFixture {
                 "trunk/src",
                 "trunk/run.sh",
                 "trunk/link-to-lib",
+                "trunk/deleted.txt",
             ],
         )?;
         run(
@@ -386,6 +410,17 @@ impl MaterializedSvnFixture {
             &["copy", "--non-interactive", "trunk", "tags/v1"],
         )?;
         run(&wc, "svn", &["commit", "--non-interactive", "-m", "tag v1"])?;
+
+        run(
+            &wc,
+            "svn",
+            &["delete", "--non-interactive", "trunk/deleted.txt"],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &["commit", "--non-interactive", "-m", "delete temporary file"],
+        )?;
 
         Ok(Self { repo })
     }
@@ -611,4 +646,20 @@ fn file_url(path: &Path) -> Result<String, String> {
         .replace('\\', "/");
     let raw = raw.strip_prefix("//?/").unwrap_or(&raw);
     Ok(format!("file:///{}", raw.trim_start_matches('/')))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_git_svn_rs_shim_as_perl_git_svn() {
+        assert_eq!(
+            classify_git_svn_version("git-svn-rs 0.1.0"),
+            ToolAvailability::Missing {
+                reason: "git svn resolved to git-svn-rs shim, not Perl git-svn: git-svn-rs 0.1.0"
+                    .to_string()
+            }
+        );
+    }
 }

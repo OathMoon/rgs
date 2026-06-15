@@ -49,6 +49,10 @@ fn standard_fixture_manifest_is_deterministic() {
                 path: "trunk/link-to-lib",
                 contents: "link src/lib.rs",
             },
+            GoldenFixtureStep::AddFile {
+                path: "trunk/deleted.txt",
+                contents: "temporary\n",
+            },
             GoldenFixtureStep::Copy {
                 from: "trunk",
                 to: "branches/main",
@@ -56,6 +60,9 @@ fn standard_fixture_manifest_is_deterministic() {
             GoldenFixtureStep::Copy {
                 from: "trunk",
                 to: "tags/v1",
+            },
+            GoldenFixtureStep::Delete {
+                path: "trunk/deleted.txt",
             },
         ]
     );

@@ -40,11 +40,7 @@ impl SvnCliBackend {
     }
 
     fn cat(&self, path: &str, revision: u32) -> Result<Vec<u8>, String> {
-        let url = format!(
-            "{}/{}",
-            self.url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
+        let url = self.versioned_url(path, revision);
         self.run(&[
             "cat",
             "--non-interactive",
@@ -60,11 +56,7 @@ impl SvnCliBackend {
         revision: u32,
     ) -> Result<BTreeMap<String, String>, String> {
         let mut properties = BTreeMap::new();
-        let url = format!(
-            "{}/{}",
-            self.url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
+        let url = self.versioned_url(path, revision);
         for name in ["svn:executable", "svn:special"] {
             let value = match self.run_text(&[
                 "propget",
@@ -89,11 +81,7 @@ impl SvnCliBackend {
     }
 
     fn list_files(&self, path: &str, revision: u32) -> Result<Vec<String>, String> {
-        let url = format!(
-            "{}/{}",
-            self.url.trim_end_matches('/'),
-            path.trim_start_matches('/')
-        );
+        let url = self.versioned_url(path, revision);
         let output = self.run_text(&[
             "list",
             "--recursive",
@@ -108,6 +96,15 @@ impl SvnCliBackend {
             .map(|line| line.trim_matches('/').to_string())
             .filter(|line| !line.is_empty())
             .collect())
+    }
+
+    fn versioned_url(&self, path: &str, revision: u32) -> String {
+        format!(
+            "{}/{}@{}",
+            self.url.trim_end_matches('/'),
+            path.trim_start_matches('/'),
+            revision
+        )
     }
 }
 
@@ -281,4 +278,29 @@ fn xml_unescape(text: &str) -> String {
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&amp;", "&")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_deleted_file_path_action() {
+        let paths = parse_changed_paths(
+            r#"
+<paths>
+<path
+   action="D"
+   prop-mods="false"
+   text-mods="false"
+   kind="file">/trunk/deleted.txt</path>
+</paths>
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(paths[0].path, "/trunk/deleted.txt");
+        assert_eq!(paths[0].action, ChangeAction::Delete);
+        assert_eq!(paths[0].kind, NodeKind::File);
+    }
 }
