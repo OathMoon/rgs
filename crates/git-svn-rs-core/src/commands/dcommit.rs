@@ -383,6 +383,8 @@ fn svn_file_attributes_for_path(
                 svn_props.push(("svn:eol-style".to_string(), value.to_string()));
             } else if let Some(value) = attr.strip_prefix("svn:mime-type=") {
                 svn_props.push(("svn:mime-type".to_string(), value.to_string()));
+            } else if let Some(value) = attr.strip_prefix("svn:keywords=") {
+                svn_props.push(("svn:keywords".to_string(), value.to_string()));
             }
         }
         if !svn_props.is_empty() && attribute_pattern_matches(pattern, path) {
