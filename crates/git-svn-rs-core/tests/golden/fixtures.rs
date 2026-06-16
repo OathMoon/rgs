@@ -77,6 +77,7 @@ pub struct GoldenComparisonArtifacts {
     pub find_rev_commit: String,
     pub rebase_dry_run: String,
     pub reset: String,
+    pub gc_output: String,
     pub clone_output: String,
 }
 
@@ -277,6 +278,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/find-rev-commit.txt", &perl.find_rev_commit)?;
     capture.write_text("perl/rebase-dry-run.txt", &perl.rebase_dry_run)?;
     capture.write_text("perl/reset.txt", &perl.reset)?;
+    capture.write_text("perl/gc-output.txt", &perl.gc_output)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -323,6 +325,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/find-rev-commit.txt", &rust.find_rev_commit)?;
     capture.write_text("rust/rebase-dry-run.txt", &rust.rebase_dry_run)?;
     capture.write_text("rust/reset.txt", &rust.reset)?;
+    capture.write_text("rust/gc-output.txt", &rust.gc_output)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -445,6 +448,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "reset output differs\nperl: {:?}\nrust: {:?}",
             perl.reset, rust.reset
+        ));
+    }
+    if perl.gc_output != rust.gc_output {
+        mismatches.push(format!(
+            "gc output differs\nperl: {:?}\nrust: {:?}",
+            perl.gc_output, rust.gc_output
         ));
     }
     if perl.clone_output != rust.clone_output {
@@ -637,6 +646,7 @@ fn collect_supported_artifacts(
     let find_rev_commit = supported_find_rev_commit(work_tree, tool, rev, first_revision)?;
     let rebase_dry_run = supported_rebase_dry_run(work_tree, tool)?;
     let reset = supported_reset(work_tree, tool, first_revision + 1)?;
+    let gc_output = supported_gc(work_tree, tool)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -658,8 +668,17 @@ fn collect_supported_artifacts(
         find_rev_commit,
         rebase_dry_run,
         reset,
+        gc_output,
         clone_output,
     })
+}
+
+fn supported_gc(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    match tool {
+        GoldenTool::Perl => run(work_tree, "git", &["svn", "gc"])?,
+        GoldenTool::Rust => commands::gc::run_in_work_tree(work_tree)?,
+    }
+    Ok("gc: success".to_string())
 }
 
 fn supported_reset(work_tree: &Path, tool: GoldenTool, revision: u32) -> Result<String, String> {

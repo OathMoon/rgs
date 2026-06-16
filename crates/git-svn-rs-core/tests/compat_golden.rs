@@ -118,6 +118,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         find_rev_commit: "<commit> -> r2".to_string(),
         rebase_dry_run: "would fetch\nwould rebase <ref>".to_string(),
         reset: "reset r2\nr3 -> ".to_string(),
+        gc_output: "gc: success".to_string(),
         clone_output: "Initialized empty Git repository\n".to_string(),
     };
     let rust = GoldenComparisonArtifacts {
@@ -149,6 +150,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         find_rev_commit: "<commit> -> r3".to_string(),
         rebase_dry_run: "would fetch\nwould rebase refs/remotes/git-svn".to_string(),
         reset: "reset r1\nr2 -> ".to_string(),
+        gc_output: "gc: unsupported".to_string(),
         clone_output: "unsupported output\n".to_string(),
     };
 
@@ -173,6 +175,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("find-rev commit output differs"));
     assert!(err.contains("rebase --dry-run output differs"));
     assert!(err.contains("reset output differs"));
+    assert!(err.contains("gc output differs"));
     assert!(err.contains("clone output differs"));
 }
 
