@@ -162,6 +162,48 @@ fn info_url_includes_tracked_fetch_path() {
 }
 
 #[test]
+fn info_url_uses_current_head_ref_in_multi_ref_layout() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            "branches/main:refs/remotes/origin/main",
+        ],
+    );
+    let trunk = commit_file(
+        work,
+        "trunk.txt",
+        "trunk\n",
+        "trunk\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/trunk", &trunk]);
+    write_rev_map_for_short_ref(work, "origin.trunk", &[(2, &trunk)]);
+
+    let branch = commit_file(
+        work,
+        "branch.txt",
+        "branch\n",
+        "branch\n\ngit-svn-id: mock://repo/branches/main@3 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/main", &branch]);
+    write_rev_map_for_short_ref(work, "origin.main", &[(3, &branch)]);
+    git(work, ["checkout", "--detach", &branch]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "--url"])
+        .assert()
+        .success()
+        .stdout("mock://repo/branches/main\n");
+}
+
+#[test]
 fn log_prints_svn_revisions_from_git_history() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

@@ -32,27 +32,79 @@ impl TrackedSvn {
 pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, String> {
     let git = GitCli::new(work_tree.into());
     let config = read_remote_config(&git, "svn")?;
-    let mapping = config
+    let first_mapping = config
         .fetch
         .first()
         .ok_or_else(|| "svn remote has no fetch mapping".to_string())?;
+    let git_dir = git.git_dir()?;
+    let git_metadata_dir = git.work_tree().join(git_dir);
+    let head = git
+        .rev_parse("HEAD")
+        .ok()
+        .map(|value| value.trim().to_string());
+    let mut first_tracked = None;
+
+    for mapping in &config.fetch {
+        let metadata_dir =
+            svn_metadata_dir(&git_metadata_dir, &short_ref_for_metadata(&mapping.git_ref));
+        let tracked = match tracked_from_mapping(&git, &config, mapping, &metadata_dir) {
+            Ok(tracked) => tracked,
+            Err(_) if mapping != first_mapping => continue,
+            Err(error) => return Err(error),
+        };
+        if first_tracked.is_none() {
+            first_tracked = Some(tracked);
+            continue;
+        }
+        if let Some(head) = &head
+            && rev_map_contains_commit(&tracked.rev_map_path, head)?
+        {
+            return Ok(tracked);
+        }
+    }
+
+    if let Some(tracked) = first_tracked {
+        if let Some(head) = &head
+            && rev_map_contains_commit(&tracked.rev_map_path, head)?
+        {
+            return Ok(tracked);
+        }
+        return Ok(tracked);
+    }
+
+    let metadata_dir = svn_metadata_dir(
+        &git_metadata_dir,
+        &short_ref_for_metadata(&first_mapping.git_ref),
+    );
+    tracked_from_mapping(&git, &config, first_mapping, &metadata_dir)
+}
+
+fn tracked_from_mapping(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    mapping: &RefMapping,
+    metadata_dir: &Path,
+) -> Result<TrackedSvn, String> {
     let refname = mapping.git_ref.clone();
     let svn_path = mapping.svn_path.clone();
-    let git_dir = git.git_dir()?;
-    let metadata_dir = svn_metadata_dir(
-        &git.work_tree().join(git_dir),
-        &short_ref_for_metadata(&refname),
-    );
-    let (uuid, rev_map_path) = find_rev_map(&metadata_dir)?;
+    let (uuid, rev_map_path) = find_rev_map(metadata_dir)?;
 
     Ok(TrackedSvn {
-        git,
-        config,
+        git: git.clone(),
+        config: config.clone(),
         refname,
         svn_path,
         uuid,
         rev_map_path,
     })
+}
+
+fn rev_map_contains_commit(rev_map_path: &Path, commit: &str) -> Result<bool, String> {
+    let rev_map = RevMap::open(rev_map_path, ObjectFormat::Sha1)?;
+    Ok(rev_map
+        .records()?
+        .into_iter()
+        .any(|record| record.object_id_hex == commit))
 }
 
 fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
