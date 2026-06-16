@@ -67,6 +67,7 @@ pub struct GoldenComparisonArtifacts {
     pub empty_dir_placeholders: Vec<String>,
     pub log_oneline: String,
     pub log_incremental: String,
+    pub log_verbose: String,
     pub find_rev: String,
     pub info_url: String,
     pub info_summary: String,
@@ -260,6 +261,7 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("perl/log-oneline.txt", &perl.log_oneline)?;
     capture.write_text("perl/log-incremental.txt", &perl.log_incremental)?;
+    capture.write_text("perl/log-verbose.txt", &perl.log_verbose)?;
     capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
     capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
@@ -299,6 +301,7 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("rust/log-oneline.txt", &rust.log_oneline)?;
     capture.write_text("rust/log-incremental.txt", &rust.log_incremental)?;
+    capture.write_text("rust/log-verbose.txt", &rust.log_verbose)?;
     capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
     capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
@@ -367,6 +370,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "log --incremental differs\nperl: {:?}\nrust: {:?}",
             perl.log_incremental, rust.log_incremental
+        ));
+    }
+    if perl.log_verbose != rust.log_verbose {
+        mismatches.push(format!(
+            "log --verbose differs\nperl: {:?}\nrust: {:?}",
+            perl.log_verbose, rust.log_verbose
         ));
     }
     if perl.find_rev != rust.find_rev {
@@ -585,6 +594,7 @@ fn collect_supported_artifacts(
         .revision;
     let log_oneline = supported_log_oneline(work_tree, tool)?;
     let log_incremental = supported_log_incremental(work_tree, tool)?;
+    let log_verbose = supported_log_verbose(work_tree, tool)?;
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
     let info_url = supported_info_url(work_tree, tool)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
@@ -602,6 +612,7 @@ fn collect_supported_artifacts(
         empty_dir_placeholders,
         log_oneline,
         log_incremental,
+        log_verbose,
         find_rev,
         info_url,
         info_summary,
@@ -628,6 +639,24 @@ fn supported_log_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, S
         )?,
     };
     Ok(normalize_log_oneline(&output))
+}
+
+fn supported_log_verbose(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "log", "--verbose"])?,
+        GoldenTool::Rust => commands::log::run_in_work_tree(
+            work_tree,
+            LogArgs {
+                revision: None,
+                limit: None,
+                verbose: true,
+                incremental: false,
+                oneline: false,
+                show_commit: false,
+            },
+        )?,
+    };
+    Ok(normalize_verbose_log(&output))
 }
 
 fn supported_log_incremental(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
@@ -861,6 +890,54 @@ fn normalize_incremental_log(output: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn normalize_verbose_log(output: &str) -> String {
+    output
+        .lines()
+        .filter_map(|line| {
+            if line.starts_with("r") && line.contains(" | ") {
+                let revision = line.split(" | ").next()?.trim();
+                Some(format!("revision {revision}"))
+            } else if let Some((action, path)) = parse_changed_path_line(line) {
+                Some(format!("path {action} {path}"))
+            } else if let Some(subject) = line.strip_prefix("  ") {
+                let subject = subject.trim();
+                if subject.is_empty()
+                    || subject == "Changed paths:"
+                    || subject.starts_with("commit ")
+                {
+                    None
+                } else {
+                    Some(format!("subject {subject}"))
+                }
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn parse_changed_path_line(line: &str) -> Option<(String, String)> {
+    let trimmed = line.trim();
+    let (action, path) = if let Some((action, path)) = trimmed.split_once('\t') {
+        (action.trim(), path.trim())
+    } else {
+        let mut parts = trimmed.split_whitespace();
+        (parts.next()?, parts.next()?)
+    };
+    if !matches!(action.chars().next(), Some('A' | 'D' | 'M' | 'R' | 'C')) {
+        return None;
+    }
+    Some((action.to_string(), normalize_changed_path(path)))
+}
+
+fn normalize_changed_path(path: &str) -> String {
+    path.trim_start_matches('/')
+        .strip_prefix("trunk/")
+        .unwrap_or_else(|| path.trim_start_matches('/'))
+        .to_string()
 }
 
 fn normalize_find_rev_output(revision: u32, output: &str) -> String {

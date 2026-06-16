@@ -108,6 +108,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         empty_dir_placeholders: vec!["empty-dir/.gitkeep".to_string()],
         log_oneline: "r2 | add files\n".to_string(),
         log_incremental: "r2 | add files".to_string(),
+        log_verbose: "revision r2\npath A src/lib.rs\nsubject add files".to_string(),
         find_rev: "abc123\n".to_string(),
         info_url: "file:///repo/trunk\n".to_string(),
         info_summary: "URL: file:///repo/trunk\nRevision: 2".to_string(),
@@ -135,6 +136,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         empty_dir_placeholders: Vec::new(),
         log_oneline: "r2 | add trunk file\n".to_string(),
         log_incremental: "r2 | add trunk file".to_string(),
+        log_verbose: "revision r2\npath M src/lib.rs\nsubject add trunk file".to_string(),
         find_rev: "def456\n".to_string(),
         info_url: "file:///repo\n".to_string(),
         info_summary: "URL: file:///repo\nRevision: 1".to_string(),
@@ -155,6 +157,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("empty dir placeholders differ"));
     assert!(err.contains("log --oneline differs"));
     assert!(err.contains("log --incremental differs"));
+    assert!(err.contains("log --verbose differs"));
     assert!(err.contains("find-rev output differs"));
     assert!(err.contains("info --url output differs"));
     assert!(err.contains("info output differs"));
