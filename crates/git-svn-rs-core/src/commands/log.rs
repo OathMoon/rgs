@@ -43,13 +43,23 @@ pub fn run_in_work_tree(
             continue;
         }
         let message = strip_git_svn_footer(fields[3]);
+        let changed_paths = if args.verbose {
+            tracked
+                .git
+                .commit_name_status(fields[0])?
+                .into_iter()
+                .map(|change| format!("{}\t{}", change.status, change.path))
+                .collect()
+        } else {
+            Vec::new()
+        };
         out.push_str(&formatter.format_entry(&GitSvnLogEntry {
             revision: id.revision,
             author: fields[1].to_string(),
             date: fields[2].to_string(),
             message,
             commit: fields[0].to_string(),
-            changed_paths: Vec::new(),
+            changed_paths,
         }));
     }
     Ok(out)

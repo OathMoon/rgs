@@ -144,6 +144,19 @@ impl GitCli {
         parse_name_status(&raw)
     }
 
+    pub fn commit_name_status(&self, commit: &str) -> Result<Vec<GitNameStatus>, String> {
+        let raw = self.run_bytes([
+            "diff-tree",
+            "--root",
+            "--no-commit-id",
+            "--name-status",
+            "-r",
+            "-z",
+            commit,
+        ])?;
+        parse_name_status(&raw)
+    }
+
     pub fn show_file(&self, commit: &str, path: &str) -> Result<Vec<u8>, String> {
         let spec = format!("{commit}:{path}");
         self.run_bytes(["show", &spec])

@@ -145,6 +145,21 @@ fn log_incremental_omits_svn_log_separator() {
 }
 
 #[test]
+fn log_verbose_prints_changed_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--verbose"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Changed paths:"))
+        .stdout(predicate::str::contains("A\tsrc/lib.rs"));
+}
+
+#[test]
 fn log_revision_filters_to_requested_svn_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
