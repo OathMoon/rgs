@@ -344,7 +344,60 @@ fn apply_file_props(
             ],
         )?;
     }
+    if let Some(eol_style) = svn_eol_style_for_path(git, commit, path)? {
+        run_svn(
+            Some(wc),
+            &[
+                "propset".to_string(),
+                "--non-interactive".to_string(),
+                "svn:eol-style".to_string(),
+                eol_style,
+                path.replace('\\', "/"),
+            ],
+        )?;
+    }
     Ok(())
+}
+
+fn svn_eol_style_for_path(
+    git: &GitCli,
+    commit: &str,
+    path: &str,
+) -> Result<Option<String>, String> {
+    let attributes = match git.show_file(commit, ".gitattributes") {
+        Ok(attributes) => String::from_utf8(attributes).map_err(|e| e.to_string())?,
+        Err(_) => return Ok(None),
+    };
+    for line in attributes.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(pattern) = parts.next() else {
+            continue;
+        };
+        let mut eol_style = None;
+        for attr in parts {
+            if let Some(value) = attr.strip_prefix("svn:eol-style=") {
+                eol_style = Some(value.to_string());
+            }
+        }
+        if eol_style.is_some() && attribute_pattern_matches(pattern, path) {
+            return Ok(eol_style);
+        }
+    }
+    Ok(None)
+}
+
+fn attribute_pattern_matches(pattern: &str, path: &str) -> bool {
+    if pattern == path {
+        return true;
+    }
+    if let Some(suffix) = pattern.strip_prefix('*') {
+        return path.ends_with(suffix);
+    }
+    false
 }
 
 fn svn_commit(wc: &Path, message: &str) -> Result<u32, String> {
