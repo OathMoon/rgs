@@ -282,6 +282,16 @@ fn clone_stdlayout_file_url_preserves_empty_dirs_when_requested() {
             .unwrap(),
         String::new()
     );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/main:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/tags/v1:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
 }
 
 #[test]
