@@ -66,3 +66,45 @@ fn fetch_after_clone_is_a_noop_when_mock_rev_map_is_current() {
         .assert()
         .success();
 }
+
+#[test]
+fn fetch_all_imports_every_configured_svn_remote() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["init", "mock://repo/trunk", "work"])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["config", "svn-remote.extra.url", "mock://repo/trunk"])
+        .unwrap();
+    git.run_for_test([
+        "config",
+        "--add",
+        "svn-remote.extra.fetch",
+        ":refs/remotes/extra",
+    ])
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["fetch", "--fetch-all"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/git-svn:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/extra:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+}

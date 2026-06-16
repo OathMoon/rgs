@@ -70,6 +70,24 @@ impl GitCli {
         <Self as GitBackend>::config_get_all(self, key)
     }
 
+    pub fn config_names_matching(&self, pattern: &str) -> Result<Vec<String>, String> {
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(["config", "--name-only", "--get-regexp", pattern])
+            .output()
+            .map_err(|e| e.to_string())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|line| line.to_string())
+                .collect())
+        } else if output.status.code() == Some(1) {
+            Ok(Vec::new())
+        } else {
+            Err(stderr_or_status(output))
+        }
+    }
+
     pub fn fast_import(&self, input: &[u8]) -> Result<(), String> {
         <Self as GitBackend>::fast_import(self, input)
     }

@@ -19,16 +19,28 @@ pub fn run_in_work_tree(
     args: FetchArgs,
 ) -> Result<(), String> {
     let git = GitCli::new(work_tree.into());
-    let remote = args.remote.as_deref().unwrap_or("svn");
-    let config = read_remote_config(&git, remote)?;
+    let remotes = if args.fetch_all {
+        svn_remote_names(&git)?
+    } else {
+        vec![args.remote.clone().unwrap_or_else(|| "svn".to_string())]
+    };
+
+    for remote in remotes {
+        fetch_remote(&git, &remote, args.shared.revision.as_deref())?;
+    }
+    Ok(())
+}
+
+fn fetch_remote(git: &GitCli, remote: &str, revision: Option<&str>) -> Result<(), String> {
+    let config = read_remote_config(git, remote)?;
 
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
-        let start_revision = next_revision(&git, &config, "mock-uuid")?;
-        let import_options = import_options(start_revision, args.shared.revision.as_deref())?;
+        let start_revision = next_revision(git, &config, "mock-uuid")?;
+        let import_options = import_options(start_revision, revision)?;
         import_mock_revisions(
             &MockBackendFromSession(&session),
-            &git,
+            git,
             &config,
             import_options,
         )?;
@@ -37,10 +49,25 @@ pub fn run_in_work_tree(
 
     let backend = SvnCliBackend::new(&config.url)?;
     let uuid = backend.uuid()?;
-    let start_revision = next_revision(&git, &config, &uuid)?;
-    let import_options = import_options(start_revision, args.shared.revision.as_deref())?;
-    import_mock_revisions(&backend, &git, &config, import_options)?;
+    let start_revision = next_revision(git, &config, &uuid)?;
+    let import_options = import_options(start_revision, revision)?;
+    import_mock_revisions(&backend, git, &config, import_options)?;
     Ok(())
+}
+
+fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
+    let keys = git.config_names_matching(r"^svn-remote\..*\.url$")?;
+    let mut names = keys
+        .into_iter()
+        .filter_map(|key| {
+            key.strip_prefix("svn-remote.")
+                .and_then(|value| value.strip_suffix(".url"))
+                .map(|value| value.to_string())
+        })
+        .collect::<Vec<_>>();
+    names.sort();
+    names.dedup();
+    Ok(names)
 }
 
 fn import_options(next_revision: u32, revision: Option<&str>) -> Result<ImportOptions, String> {
