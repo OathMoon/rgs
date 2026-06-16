@@ -2,11 +2,15 @@ use std::collections::BTreeMap;
 use std::num::ParseIntError;
 use std::process::Command;
 
+use crate::config::SvnRemoteConfig;
 use crate::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent, SvnBackend};
 
 #[derive(Debug, Clone)]
 pub struct SvnCliBackend {
     url: String,
+    username: Option<String>,
+    config_dir: Option<String>,
+    no_auth_cache: bool,
 }
 
 impl SvnCliBackend {
@@ -15,12 +19,58 @@ impl SvnCliBackend {
         if !url.starts_with("file://") {
             return Err("real SVN fetch currently supports file:// URLs via svn CLI".to_string());
         }
-        Ok(Self { url })
+        Ok(Self {
+            url,
+            username: None,
+            config_dir: None,
+            no_auth_cache: false,
+        })
+    }
+
+    pub fn from_config(config: &SvnRemoteConfig) -> Result<Self, String> {
+        let mut backend = Self::new(&config.url)?;
+        backend.username.clone_from(&config.username);
+        backend.config_dir.clone_from(&config.config_dir);
+        backend.no_auth_cache = config.no_auth_cache;
+        Ok(backend)
+    }
+
+    pub fn with_username(mut self, username: impl Into<String>) -> Self {
+        self.username = Some(username.into());
+        self
+    }
+
+    pub fn with_config_dir(mut self, config_dir: impl Into<String>) -> Self {
+        self.config_dir = Some(config_dir.into());
+        self
+    }
+
+    pub fn without_auth_cache(mut self) -> Self {
+        self.no_auth_cache = true;
+        self
+    }
+
+    fn command_args(&self, args: &[&str]) -> Vec<String> {
+        let mut command_args = Vec::new();
+        if let Some(config_dir) = &self.config_dir {
+            command_args.push("--config-dir".to_string());
+            command_args.push(config_dir.clone());
+        }
+        if let Some(username) = &self.username {
+            command_args.push("--username".to_string());
+            command_args.push(username.clone());
+        }
+        if self.no_auth_cache {
+            command_args.push("--no-auth-cache".to_string());
+        }
+        command_args.extend(args.iter().map(|arg| (*arg).to_string()));
+        command_args
     }
 
     fn run(&self, args: &[&str]) -> Result<Vec<u8>, String> {
+        let command_args = self.command_args(args);
         let output = Command::new("svn")
-            .args(args)
+            .args(command_args)
             .output()
             .map_err(|e| format!("svn failed to start: {e}"))?;
         if output.status.success() {
@@ -302,5 +352,27 @@ mod tests {
         assert_eq!(paths[0].path, "/trunk/deleted.txt");
         assert_eq!(paths[0].action, ChangeAction::Delete);
         assert_eq!(paths[0].kind, NodeKind::File);
+    }
+
+    #[test]
+    fn backend_command_args_include_auth_and_config_options() {
+        let backend = SvnCliBackend::new("file:///repo")
+            .unwrap()
+            .with_username("alice")
+            .with_config_dir("svn-config")
+            .without_auth_cache();
+
+        assert_eq!(
+            backend.command_args(&["info", "file:///repo"]),
+            vec![
+                "--config-dir",
+                "svn-config",
+                "--username",
+                "alice",
+                "--no-auth-cache",
+                "info",
+                "file:///repo",
+            ]
+        );
     }
 }

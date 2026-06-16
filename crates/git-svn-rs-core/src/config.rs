@@ -14,6 +14,9 @@ pub struct SvnRemoteConfig {
     pub authors_prog: Option<String>,
     pub log_window_size: Option<u32>,
     pub localtime: bool,
+    pub username: Option<String>,
+    pub config_dir: Option<String>,
+    pub no_auth_cache: bool,
     pub no_metadata: bool,
     pub rewrite_root: Option<String>,
     pub rewrite_uuid: Option<String>,
@@ -36,6 +39,9 @@ impl SvnRemoteConfig {
             authors_prog: None,
             log_window_size: None,
             localtime: false,
+            username: None,
+            config_dir: None,
+            no_auth_cache: false,
             no_metadata: false,
             rewrite_root: None,
             rewrite_uuid: None,
@@ -76,6 +82,21 @@ impl SvnRemoteConfig {
 
     pub fn with_localtime(mut self) -> Self {
         self.localtime = true;
+        self
+    }
+
+    pub fn with_username(mut self, value: impl Into<String>) -> Self {
+        self.username = Some(value.into());
+        self
+    }
+
+    pub fn with_config_dir(mut self, value: impl Into<String>) -> Self {
+        self.config_dir = Some(value.into());
+        self
+    }
+
+    pub fn without_auth_cache(mut self) -> Self {
+        self.no_auth_cache = true;
         self
     }
 
@@ -143,6 +164,15 @@ impl SvnRemoteConfig {
         }
         if self.localtime {
             entries.push((format!("{prefix}.localtime"), "true".to_string()));
+        }
+        if let Some(value) = &self.username {
+            entries.push((format!("{prefix}.username"), value.clone()));
+        }
+        if let Some(value) = &self.config_dir {
+            entries.push((format!("{prefix}.config-dir"), value.clone()));
+        }
+        if self.no_auth_cache {
+            entries.push((format!("{prefix}.no-auth-cache"), "true".to_string()));
         }
         if self.no_metadata {
             entries.push((format!("{prefix}.noMetadata"), "true".to_string()));

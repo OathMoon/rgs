@@ -48,6 +48,15 @@ fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfi
     if args.shared.localtime {
         config = config.with_localtime();
     }
+    if let Some(value) = args.shared.username {
+        config = config.with_username(value);
+    }
+    if let Some(value) = args.shared.config_dir {
+        config = config.with_config_dir(value);
+    }
+    if args.shared.no_auth_cache {
+        config = config.without_auth_cache();
+    }
     if args.shared.no_metadata {
         config = config.without_metadata();
     }
@@ -92,6 +101,15 @@ fn write_svn_remote_config(git: &GitCli, config: &SvnRemoteConfig) -> Result<(),
     }
     if config.localtime {
         git.config_set(&format!("{prefix}.localtime"), "true")?;
+    }
+    if let Some(value) = &config.username {
+        git.config_set(&format!("{prefix}.username"), value)?;
+    }
+    if let Some(value) = &config.config_dir {
+        git.config_set(&format!("{prefix}.config-dir"), value)?;
+    }
+    if config.no_auth_cache {
+        git.config_set(&format!("{prefix}.no-auth-cache"), "true")?;
     }
     if config.no_metadata {
         git.config_set(&format!("{prefix}.noMetadata"), "true")?;

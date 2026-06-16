@@ -18,6 +18,11 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             "--log-window-size",
             "42",
             "--localtime",
+            "--username",
+            "alice",
+            "--config-dir",
+            "svn-config",
+            "--no-auth-cache",
         ])
         .assert()
         .success();
@@ -55,6 +60,24 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
     );
     assert_eq!(
         git.config_get("svn-remote.svn.localtime")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+    assert_eq!(
+        git.config_get("svn-remote.svn.username")
+            .unwrap()
+            .as_deref(),
+        Some("alice")
+    );
+    assert_eq!(
+        git.config_get("svn-remote.svn.config-dir")
+            .unwrap()
+            .as_deref(),
+        Some("svn-config")
+    );
+    assert_eq!(
+        git.config_get("svn-remote.svn.no-auth-cache")
             .unwrap()
             .as_deref(),
         Some("true")

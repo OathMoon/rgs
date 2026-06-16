@@ -47,7 +47,7 @@ fn fetch_remote(git: &GitCli, remote: &str, revision: Option<&str>) -> Result<()
         return Ok(());
     }
 
-    let backend = SvnCliBackend::new(&config.url)?;
+    let backend = SvnCliBackend::from_config(&config)?;
     let uuid = backend.uuid()?;
     let start_revision = next_revision(git, &config, &uuid)?;
     let import_options = import_options(start_revision, revision)?;
@@ -160,6 +160,11 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
             .transpose()?,
         localtime: git
             .config_get(&format!("{prefix}.localtime"))?
+            .is_some_and(|value| value == "true"),
+        username: git.config_get(&format!("{prefix}.username"))?,
+        config_dir: git.config_get(&format!("{prefix}.config-dir"))?,
+        no_auth_cache: git
+            .config_get(&format!("{prefix}.no-auth-cache"))?
             .is_some_and(|value| value == "true"),
         no_metadata: git
             .config_get(&format!("{prefix}.noMetadata"))?

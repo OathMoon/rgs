@@ -88,6 +88,11 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
         localtime: git
             .config_get(&format!("{prefix}.localtime"))?
             .is_some_and(|value| value == "true"),
+        username: git.config_get(&format!("{prefix}.username"))?,
+        config_dir: git.config_get(&format!("{prefix}.config-dir"))?,
+        no_auth_cache: git
+            .config_get(&format!("{prefix}.no-auth-cache"))?
+            .is_some_and(|value| value == "true"),
         no_metadata: git
             .config_get(&format!("{prefix}.noMetadata"))?
             .is_some_and(|value| value == "true"),
