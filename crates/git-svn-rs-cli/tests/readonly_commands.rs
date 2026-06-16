@@ -111,6 +111,26 @@ fn log_prints_svn_revisions_from_git_history() {
 }
 
 #[test]
+fn log_incremental_omits_svn_log_separator() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--incremental"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("r2 |"))
+        .stdout(
+            predicate::str::contains(
+                "------------------------------------------------------------------------",
+            )
+            .not(),
+        );
+}
+
+#[test]
 fn log_revision_filters_to_requested_svn_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

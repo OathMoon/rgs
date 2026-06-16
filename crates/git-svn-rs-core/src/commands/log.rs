@@ -13,7 +13,12 @@ pub fn run_in_work_tree(
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
     let raw = tracked.git.log_records(&tracked.refname, args.limit)?;
-    let formatter = GitSvnLogFormatter::new(args.oneline, args.show_commit, args.verbose);
+    let formatter = GitSvnLogFormatter::with_incremental(
+        args.oneline,
+        args.show_commit,
+        args.verbose,
+        args.incremental,
+    );
     let revision_filter = args.revision.as_deref().and_then(parse_revision_filter);
     let mut out = String::new();
     for record in raw.split('\x1e') {

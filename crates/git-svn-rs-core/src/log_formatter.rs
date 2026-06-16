@@ -13,19 +13,36 @@ pub struct GitSvnLogFormatter {
     oneline: bool,
     show_commit: bool,
     verbose: bool,
+    incremental: bool,
 }
+
+const SEPARATOR: &str = "------------------------------------------------------------------------";
 
 impl GitSvnLogFormatter {
     pub fn new(oneline: bool, show_commit: bool, verbose: bool) -> Self {
+        Self::with_incremental(oneline, show_commit, verbose, false)
+    }
+
+    pub fn with_incremental(
+        oneline: bool,
+        show_commit: bool,
+        verbose: bool,
+        incremental: bool,
+    ) -> Self {
         Self {
             oneline,
             show_commit,
             verbose,
+            incremental,
         }
     }
 
     pub fn oneline() -> Self {
         Self::new(true, false, false)
+    }
+
+    pub fn incremental(show_commit: bool, verbose: bool) -> Self {
+        Self::with_incremental(false, show_commit, verbose, true)
     }
 
     pub fn format_entry(&self, entry: &GitSvnLogEntry) -> String {
@@ -34,7 +51,10 @@ impl GitSvnLogFormatter {
         }
 
         let mut out = String::new();
-        out.push_str("------------------------------------------------------------------------\n");
+        if !self.incremental {
+            out.push_str(SEPARATOR);
+            out.push('\n');
+        }
         out.push_str(&format!(
             "r{} | {} | {} | {} lines\n",
             entry.revision,

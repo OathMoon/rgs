@@ -38,3 +38,24 @@ fn formats_oneline_log_entry() {
 
     assert_eq!(rendered, "r12 | update file\n");
 }
+
+#[test]
+fn incremental_log_entry_omits_separator() {
+    let entry = GitSvnLogEntry {
+        revision: 13,
+        author: "carol".to_string(),
+        date: "2026-01-03T00:00:00Z".to_string(),
+        message: "incremental entry".to_string(),
+        commit: "fedcba0987654321".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    let rendered = GitSvnLogFormatter::incremental(false, false).format_entry(&entry);
+
+    assert!(
+        !rendered
+            .contains("------------------------------------------------------------------------")
+    );
+    assert!(rendered.contains("r13 | carol | 2026-01-03T00:00:00Z | 1 lines\n"));
+    assert!(rendered.contains("incremental entry\n"));
+}
