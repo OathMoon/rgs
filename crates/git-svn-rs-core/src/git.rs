@@ -97,6 +97,19 @@ impl GitCli {
         self.run_args(["rev-parse", rev])
     }
 
+    pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, String> {
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(["merge-base", "--is-ancestor", ancestor, descendant])
+            .output()
+            .map_err(|e| e.to_string())?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(stderr_or_status(output)),
+        }
+    }
+
     pub fn log_records(&self, rev: &str, limit: Option<u32>) -> Result<String, String> {
         let mut args = vec![
             "log".to_string(),

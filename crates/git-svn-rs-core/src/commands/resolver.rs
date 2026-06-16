@@ -42,7 +42,8 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
         .rev_parse("HEAD")
         .ok()
         .map(|value| value.trim().to_string());
-    let mut first_tracked = None;
+    let mut fallback = None;
+    let mut best_ancestor: Option<(u32, TrackedSvn)> = None;
 
     for mapping in &config.fetch {
         let metadata_dir =
@@ -52,23 +53,30 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
             Err(_) if mapping != first_mapping => continue,
             Err(error) => return Err(error),
         };
-        if first_tracked.is_none() {
-            first_tracked = Some(tracked);
+        if let Some(head) = &head
+            && let Some(score) = rev_map_head_score(&tracked, head)?
+        {
+            if score == u32::MAX {
+                return Ok(tracked);
+            }
+            if best_ancestor
+                .as_ref()
+                .is_none_or(|(best_score, _)| score > *best_score)
+            {
+                best_ancestor = Some((score, tracked));
+            }
             continue;
         }
-        if let Some(head) = &head
-            && rev_map_contains_commit(&tracked.rev_map_path, head)?
-        {
-            return Ok(tracked);
+        if fallback.is_none() {
+            fallback = Some(tracked);
         }
     }
 
-    if let Some(tracked) = first_tracked {
-        if let Some(head) = &head
-            && rev_map_contains_commit(&tracked.rev_map_path, head)?
-        {
-            return Ok(tracked);
-        }
+    if let Some((_, tracked)) = best_ancestor {
+        return Ok(tracked);
+    }
+
+    if let Some(tracked) = fallback {
         return Ok(tracked);
     }
 
@@ -99,12 +107,16 @@ fn tracked_from_mapping(
     })
 }
 
-fn rev_map_contains_commit(rev_map_path: &Path, commit: &str) -> Result<bool, String> {
-    let rev_map = RevMap::open(rev_map_path, ObjectFormat::Sha1)?;
-    Ok(rev_map
-        .records()?
-        .into_iter()
-        .any(|record| record.object_id_hex == commit))
+fn rev_map_head_score(tracked: &TrackedSvn, head: &str) -> Result<Option<u32>, String> {
+    let rev_map = RevMap::open(&tracked.rev_map_path, ObjectFormat::Sha1)?;
+    let records = rev_map.records()?;
+    if records.iter().any(|record| record.object_id_hex == head) {
+        return Ok(Some(u32::MAX));
+    }
+    if tracked.git.is_ancestor(&tracked.refname, head)? {
+        return Ok(records.iter().map(|record| record.revision).max());
+    }
+    Ok(None)
 }
 
 fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
