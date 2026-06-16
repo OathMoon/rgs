@@ -368,6 +368,7 @@ fn svn_file_attributes_for_path(
         Ok(attributes) => String::from_utf8(attributes).map_err(|e| e.to_string())?,
         Err(_) => return Ok(Vec::new()),
     };
+    let mut svn_props = Vec::new();
     for line in attributes.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -377,21 +378,28 @@ fn svn_file_attributes_for_path(
         let Some(pattern) = parts.next() else {
             continue;
         };
-        let mut svn_props = Vec::new();
+        if !attribute_pattern_matches(pattern, path) {
+            continue;
+        }
         for attr in parts {
             if let Some(value) = attr.strip_prefix("svn:eol-style=") {
-                svn_props.push(("svn:eol-style".to_string(), value.to_string()));
+                set_svn_file_attribute(&mut svn_props, "svn:eol-style", value);
             } else if let Some(value) = attr.strip_prefix("svn:mime-type=") {
-                svn_props.push(("svn:mime-type".to_string(), value.to_string()));
+                set_svn_file_attribute(&mut svn_props, "svn:mime-type", value);
             } else if let Some(value) = attr.strip_prefix("svn:keywords=") {
-                svn_props.push(("svn:keywords".to_string(), value.to_string()));
+                set_svn_file_attribute(&mut svn_props, "svn:keywords", value);
             }
         }
-        if !svn_props.is_empty() && attribute_pattern_matches(pattern, path) {
-            return Ok(svn_props);
-        }
     }
-    Ok(Vec::new())
+    Ok(svn_props)
+}
+
+fn set_svn_file_attribute(props: &mut Vec<(String, String)>, name: &str, value: &str) {
+    if let Some((_, existing)) = props.iter_mut().find(|(property, _)| property == name) {
+        *existing = value.to_string();
+    } else {
+        props.push((name.to_string(), value.to_string()));
+    }
 }
 
 fn attribute_pattern_matches(pattern: &str, path: &str) -> bool {
