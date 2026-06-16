@@ -205,6 +205,69 @@ fn fetch_stdlayout_svn_url_imports_trunk_history_after_init() {
 }
 
 #[test]
+fn fetch_stdlayout_svn_url_imports_branch_tag_and_copy_contents_after_init() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    match require_svnserve() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["init", &server.repo_url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let refs = git
+        .run_for_test(["for-each-ref", "--format=%(refname)", "refs/remotes/origin"])
+        .unwrap();
+    assert!(refs.lines().any(|line| line == "refs/remotes/origin/trunk"));
+    assert!(refs.lines().any(|line| line == "refs/remotes/origin/main"));
+    assert!(
+        refs.lines()
+            .any(|line| line == "refs/remotes/origin/tags/v1")
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/main:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+    assert_eq!(
+        git.run_for_test(["rev-parse", "refs/remotes/origin/main^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+            .unwrap()
+            .trim()
+    );
+}
+
+#[test]
 fn clone_file_url_no_metadata_omits_git_svn_id_footer() {
     match require_svn_tools() {
         Ok(()) => {}
