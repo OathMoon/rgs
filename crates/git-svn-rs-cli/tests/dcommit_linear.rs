@@ -350,6 +350,64 @@ fn dcommit_writes_file_rename_to_new_directory_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_writes_file_copy_to_file_svn_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::copy(work.join("src/lib.rs"), work.join("src/lib-copy.rs")).unwrap();
+    run_git(&work, &["add", "src/lib-copy.rs"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "copy library file",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("copy library file"));
+
+    let listing = svn_stdout(&["list", "-R", &format!("{}/trunk", fixture.url())]);
+    assert!(listing.lines().any(|line| line == "src/lib.rs"));
+    assert!(listing.lines().any(|line| line == "src/lib-copy.rs"));
+
+    let log = svn_stdout(&["log", "--xml", "-v", "-l", "1", &fixture.url()]);
+    assert!(log.contains("copyfrom-path=\"/trunk/src/lib.rs\""));
+    assert!(log.contains(">/trunk/src/lib-copy.rs<"));
+}
+
+#[test]
 fn dcommit_writes_executable_property_to_file_svn_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}

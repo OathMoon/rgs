@@ -157,6 +157,7 @@ impl GitCli {
             "--name-status",
             "-M",
             "-C",
+            "--find-copies-harder",
             "-r",
             "-z",
             base,
