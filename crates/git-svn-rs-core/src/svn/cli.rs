@@ -16,8 +16,10 @@ pub struct SvnCliBackend {
 impl SvnCliBackend {
     pub fn new(url: impl Into<String>) -> Result<Self, String> {
         let url = url.into();
-        if !url.starts_with("file://") {
-            return Err("real SVN fetch currently supports file:// URLs via svn CLI".to_string());
+        if !is_svn_cli_supported_url(&url) {
+            return Err(format!(
+                "real SVN fetch via svn CLI does not support URL scheme in {url}"
+            ));
         }
         Ok(Self {
             url,
@@ -156,6 +158,12 @@ impl SvnCliBackend {
             revision
         )
     }
+}
+
+fn is_svn_cli_supported_url(url: &str) -> bool {
+    ["file://", "http://", "https://", "svn://", "svn+ssh://"]
+        .iter()
+        .any(|prefix| url.starts_with(prefix))
 }
 
 impl SvnBackend for SvnCliBackend {
@@ -374,5 +382,18 @@ mod tests {
                 "file:///repo",
             ]
         );
+    }
+
+    #[test]
+    fn backend_accepts_svn_cli_supported_remote_url_schemes() {
+        for url in [
+            "file:///repo",
+            "http://svn.example/repo",
+            "https://svn.example/repo",
+            "svn://svn.example/repo",
+            "svn+ssh://svn.example/repo",
+        ] {
+            SvnCliBackend::new(url).unwrap();
+        }
     }
 }
