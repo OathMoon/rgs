@@ -63,6 +63,7 @@ pub struct GoldenComparisonArtifacts {
     pub git_svn_id_footers: Vec<String>,
     pub rev_map: Vec<RevMapArtifactRecord>,
     pub file_modes: Vec<FileModeArtifact>,
+    pub tree_contents: Vec<String>,
     pub empty_dir_placeholders: Vec<String>,
     pub log_oneline: String,
     pub find_rev: String,
@@ -245,6 +246,7 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("perl/rev-map.txt", &format_rev_map(&perl.rev_map))?;
     capture.write_text("perl/file-modes.txt", &format_file_modes(&perl.file_modes))?;
+    capture.write_text("perl/tree-contents.txt", &perl.tree_contents.join("\n"))?;
     capture.write_text(
         "perl/empty-dir-placeholders.txt",
         &perl.empty_dir_placeholders.join("\n"),
@@ -280,6 +282,7 @@ pub fn run_standard_trunk_golden_comparison(
     )?;
     capture.write_text("rust/rev-map.txt", &format_rev_map(&rust.rev_map))?;
     capture.write_text("rust/file-modes.txt", &format_file_modes(&rust.file_modes))?;
+    capture.write_text("rust/tree-contents.txt", &rust.tree_contents.join("\n"))?;
     capture.write_text(
         "rust/empty-dir-placeholders.txt",
         &rust.empty_dir_placeholders.join("\n"),
@@ -329,6 +332,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "file modes differ\nperl: {:?}\nrust: {:?}",
             perl.file_modes, rust.file_modes
+        ));
+    }
+    if perl.tree_contents != rust.tree_contents {
+        mismatches.push(format!(
+            "tree contents differ\nperl: {:?}\nrust: {:?}",
+            perl.tree_contents, rust.tree_contents
         ));
     }
     if perl.empty_dir_placeholders != rust.empty_dir_placeholders {
@@ -544,6 +553,7 @@ fn collect_supported_artifacts(
         .collect::<Vec<_>>();
     let rev_map = supported_rev_map(work_tree)?;
     let file_modes = supported_file_modes(work_tree, rev)?;
+    let tree_contents = supported_tree_contents(work_tree, rev, &file_modes)?;
     let empty_dir_placeholders = supported_empty_dir_placeholders(work_tree, rev)?;
     let first_revision = rev_map
         .first()
@@ -563,6 +573,7 @@ fn collect_supported_artifacts(
         git_svn_id_footers,
         rev_map,
         file_modes,
+        tree_contents,
         empty_dir_placeholders,
         log_oneline,
         find_rev,
@@ -809,6 +820,34 @@ fn supported_file_modes(work_tree: &Path, refname: &str) -> Result<Vec<FileModeA
         })
     })
     .collect())
+}
+
+fn supported_tree_contents(
+    work_tree: &Path,
+    refname: &str,
+    file_modes: &[FileModeArtifact],
+) -> Result<Vec<String>, String> {
+    file_modes
+        .iter()
+        .filter(|record| record.mode != "040000")
+        .map(|record| {
+            let spec = format!("{refname}:{}", record.path);
+            let contents = run_text(work_tree, "git", &["show", &spec])?;
+            Ok(format!(
+                "{}\t{}",
+                record.path,
+                escape_artifact_value(&contents)
+            ))
+        })
+        .collect()
+}
+
+fn escape_artifact_value(value: &str) -> String {
+    value
+        .replace('\\', "\\\\")
+        .replace('\t', "\\t")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
 }
 
 fn supported_empty_dir_placeholders(
