@@ -111,6 +111,20 @@ fn log_prints_svn_revisions_from_git_history() {
 }
 
 #[test]
+fn log_oneline_show_commit_prints_git_commit_prefix() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--oneline", "--show-commit"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match("^[0-9a-f]{40} \\| r2 \\| add trunk file\n$").unwrap());
+}
+
+#[test]
 fn log_incremental_omits_svn_log_separator() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

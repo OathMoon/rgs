@@ -40,6 +40,22 @@ fn formats_oneline_log_entry() {
 }
 
 #[test]
+fn oneline_log_entry_can_show_commit() {
+    let entry = GitSvnLogEntry {
+        revision: 14,
+        author: "dana".to_string(),
+        date: "2026-01-04T00:00:00Z".to_string(),
+        message: "show commit".to_string(),
+        commit: "abc123def456".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    let rendered = GitSvnLogFormatter::new(true, true, false).format_entry(&entry);
+
+    assert_eq!(rendered, "abc123def456 | r14 | show commit\n");
+}
+
+#[test]
 fn incremental_log_entry_omits_separator() {
     let entry = GitSvnLogEntry {
         revision: 13,

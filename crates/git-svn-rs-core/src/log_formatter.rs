@@ -47,6 +47,14 @@ impl GitSvnLogFormatter {
 
     pub fn format_entry(&self, entry: &GitSvnLogEntry) -> String {
         if self.oneline {
+            if self.show_commit {
+                return format!(
+                    "{} | r{} | {}\n",
+                    entry.commit,
+                    entry.revision,
+                    first_line(&entry.message)
+                );
+            }
             return format!("r{} | {}\n", entry.revision, first_line(&entry.message));
         }
 
