@@ -131,6 +131,9 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
                     .map_err(|_| format!("invalid {prefix}.log-window-size: {value}"))
             })
             .transpose()?,
+        localtime: git
+            .config_get(&format!("{prefix}.localtime"))?
+            .is_some_and(|value| value == "true"),
         no_metadata: git
             .config_get(&format!("{prefix}.noMetadata"))?
             .is_some_and(|value| value == "true"),

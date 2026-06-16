@@ -17,6 +17,7 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             "^vendor/",
             "--log-window-size",
             "42",
+            "--localtime",
         ])
         .assert()
         .success();
@@ -51,6 +52,12 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             .unwrap()
             .as_deref(),
         Some("42")
+    );
+    assert_eq!(
+        git.config_get("svn-remote.svn.localtime")
+            .unwrap()
+            .as_deref(),
+        Some("true")
     );
 }
 

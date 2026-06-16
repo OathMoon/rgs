@@ -13,6 +13,7 @@ pub struct SvnRemoteConfig {
     pub authors_file: Option<String>,
     pub authors_prog: Option<String>,
     pub log_window_size: Option<u32>,
+    pub localtime: bool,
     pub no_metadata: bool,
     pub rewrite_root: Option<String>,
     pub rewrite_uuid: Option<String>,
@@ -34,6 +35,7 @@ impl SvnRemoteConfig {
             authors_file: None,
             authors_prog: None,
             log_window_size: None,
+            localtime: false,
             no_metadata: false,
             rewrite_root: None,
             rewrite_uuid: None,
@@ -69,6 +71,11 @@ impl SvnRemoteConfig {
 
     pub fn with_log_window_size(mut self, value: u32) -> Self {
         self.log_window_size = Some(value);
+        self
+    }
+
+    pub fn with_localtime(mut self) -> Self {
+        self.localtime = true;
         self
     }
 
@@ -133,6 +140,9 @@ impl SvnRemoteConfig {
         }
         if let Some(value) = self.log_window_size {
             entries.push((format!("{prefix}.log-window-size"), value.to_string()));
+        }
+        if self.localtime {
+            entries.push((format!("{prefix}.localtime"), "true".to_string()));
         }
         if self.no_metadata {
             entries.push((format!("{prefix}.noMetadata"), "true".to_string()));
