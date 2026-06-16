@@ -444,6 +444,63 @@ fn clone_stdlayout_file_url_preserves_empty_dirs_when_requested() {
 }
 
 #[test]
+fn clone_stdlayout_svn_url_preserves_empty_dirs_when_requested() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    match require_svnserve() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--preserve-empty-dirs",
+            "--placeholder-filename",
+            ".gitkeep",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/main:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/tags/v1:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
+}
+
+#[test]
 fn fetch_file_url_preserves_empty_dirs_from_persisted_config() {
     match require_svn_tools() {
         Ok(()) => {}
