@@ -31,6 +31,38 @@ fn find_rev_maps_git_commit_to_svn_revision() {
 }
 
 #[test]
+fn find_rev_maps_branch_git_commit_to_svn_revision() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
+    let trunk = commit_file(
+        work,
+        "trunk.txt",
+        "trunk\n",
+        "trunk\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/trunk", &trunk]);
+    write_rev_map_for_short_ref(work, "origin.trunk", &[(2, &trunk)]);
+
+    let branch = commit_file(
+        work,
+        "branch.txt",
+        "branch\n",
+        "branch\n\ngit-svn-id: mock://repo/branches/main@3 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/main", &branch]);
+    write_rev_map_for_short_ref(work, "origin.main", &[(3, &branch)]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", &branch])
+        .assert()
+        .success()
+        .stdout("3\n");
+}
+
+#[test]
 fn find_rev_before_and_after_use_nearest_tracked_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
@@ -350,14 +382,27 @@ fn commit_file(work: &std::path::Path, path: &str, content: &str, message: &str)
 }
 
 fn write_rev_map(work: &std::path::Path, commits: &[&str]) {
-    let rev_map_path = work.join(".git/svn/git-svn/.rev_map.mock-uuid");
+    let records = commits
+        .iter()
+        .enumerate()
+        .map(|(index, commit)| (index as u32 + 1, *commit))
+        .collect::<Vec<_>>();
+    write_rev_map_for_short_ref(work, "git-svn", &records);
+}
+
+fn write_rev_map_for_short_ref(work: &std::path::Path, short_ref: &str, records: &[(u32, &str)]) {
+    let rev_map_path = work
+        .join(".git")
+        .join("svn")
+        .join(short_ref)
+        .join(".rev_map.mock-uuid");
     let mut rev_map = git_svn_rs_core::rev_map::RevMap::open(
         rev_map_path,
         git_svn_rs_core::rev_map::ObjectFormat::Sha1,
     )
     .unwrap();
-    for (index, commit) in commits.iter().enumerate() {
-        rev_map.append(index as u32 + 1, commit).unwrap();
+    for (revision, commit) in records {
+        rev_map.append(*revision, commit).unwrap();
     }
 }
 
