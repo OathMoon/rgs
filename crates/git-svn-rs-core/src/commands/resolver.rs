@@ -77,6 +77,14 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
         ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
         authors_file: git.config_get(&format!("{prefix}.authors-file"))?,
         authors_prog: git.config_get(&format!("{prefix}.authors-prog"))?,
+        log_window_size: git
+            .config_get(&format!("{prefix}.log-window-size"))?
+            .map(|value| {
+                value
+                    .parse()
+                    .map_err(|_| format!("invalid {prefix}.log-window-size: {value}"))
+            })
+            .transpose()?,
         no_metadata: git
             .config_get(&format!("{prefix}.noMetadata"))?
             .is_some_and(|value| value == "true"),

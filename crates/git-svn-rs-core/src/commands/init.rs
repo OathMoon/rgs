@@ -42,6 +42,9 @@ fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfi
     if let Some(value) = args.shared.authors_prog {
         config = config.with_authors_prog(value);
     }
+    if let Some(value) = args.shared.log_window_size {
+        config = config.with_log_window_size(value);
+    }
     if args.shared.no_metadata {
         config = config.without_metadata();
     }
@@ -80,6 +83,9 @@ fn write_svn_remote_config(git: &GitCli, config: &SvnRemoteConfig) -> Result<(),
     }
     if let Some(value) = &config.authors_prog {
         git.config_set(&format!("{prefix}.authors-prog"), value)?;
+    }
+    if let Some(value) = config.log_window_size {
+        git.config_set(&format!("{prefix}.log-window-size"), &value.to_string())?;
     }
     if config.no_metadata {
         git.config_set(&format!("{prefix}.noMetadata"), "true")?;

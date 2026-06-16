@@ -12,6 +12,7 @@ pub struct SvnRemoteConfig {
     pub ignore_refs: Option<String>,
     pub authors_file: Option<String>,
     pub authors_prog: Option<String>,
+    pub log_window_size: Option<u32>,
     pub no_metadata: bool,
     pub rewrite_root: Option<String>,
     pub rewrite_uuid: Option<String>,
@@ -32,6 +33,7 @@ impl SvnRemoteConfig {
             ignore_refs: None,
             authors_file: None,
             authors_prog: None,
+            log_window_size: None,
             no_metadata: false,
             rewrite_root: None,
             rewrite_uuid: None,
@@ -62,6 +64,11 @@ impl SvnRemoteConfig {
 
     pub fn with_authors_prog(mut self, value: impl Into<String>) -> Self {
         self.authors_prog = Some(value.into());
+        self
+    }
+
+    pub fn with_log_window_size(mut self, value: u32) -> Self {
+        self.log_window_size = Some(value);
         self
     }
 
@@ -123,6 +130,9 @@ impl SvnRemoteConfig {
         }
         if let Some(value) = &self.authors_prog {
             entries.push((format!("{prefix}.authors-prog"), value.clone()));
+        }
+        if let Some(value) = self.log_window_size {
+            entries.push((format!("{prefix}.log-window-size"), value.to_string()));
         }
         if self.no_metadata {
             entries.push((format!("{prefix}.noMetadata"), "true".to_string()));

@@ -15,6 +15,8 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             "--stdlayout",
             "--ignore-paths",
             "^vendor/",
+            "--log-window-size",
+            "42",
         ])
         .assert()
         .success();
@@ -43,6 +45,12 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             .unwrap()
             .as_deref(),
         Some("^vendor/")
+    );
+    assert_eq!(
+        git.config_get("svn-remote.svn.log-window-size")
+            .unwrap()
+            .as_deref(),
+        Some("42")
     );
 }
 
