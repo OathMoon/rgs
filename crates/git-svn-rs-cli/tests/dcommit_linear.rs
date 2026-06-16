@@ -199,6 +199,71 @@ fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_writes_explicit_mergeinfo_to_file_svn_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 44 }\n").unwrap();
+    run_git(&work, &["add", "src/lib.rs"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "write explicit mergeinfo",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--mergeinfo",
+            "/branches/main:1-2",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("write explicit mergeinfo"));
+
+    assert_eq!(
+        svn_stdout(&[
+            "propget",
+            "--strict",
+            "svn:mergeinfo",
+            &format!("{}/trunk", fixture.url())
+        ]),
+        "/branches/main:1-2"
+    );
+}
+
+#[test]
 fn dcommit_rebases_after_file_svn_write_by_default() {
     match require_svn_tools() {
         Ok(()) => {}

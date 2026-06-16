@@ -17,13 +17,6 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: DcommitArgs,
 ) -> Result<String, String> {
-    if args.mergeinfo.is_some() && !args.dry_run {
-        return Err(
-            "--mergeinfo is parsed for compatibility, but mergeinfo write-back is not implemented in v1"
-                .to_string(),
-        );
-    }
-
     let tracked = resolve_tracked_svn(work_tree)?;
     let revision = tracked
         .max_record()?
@@ -40,6 +33,11 @@ pub fn run_in_work_tree(
 
     if !args.dry_run {
         if target_url.starts_with("mock://") && tracked.config.url.starts_with("mock://") {
+            if args.mergeinfo.is_some() {
+                return Err(
+                    "--mergeinfo write-back is only implemented for file:// URLs in v1".to_string(),
+                );
+            }
             return dcommit_mock(
                 &tracked.git,
                 &tracked.refname,
@@ -63,6 +61,7 @@ pub fn run_in_work_tree(
                 &tracked.refname,
                 commits,
                 args.no_rebase,
+                args.mergeinfo.as_deref(),
             );
         }
         {
@@ -105,6 +104,7 @@ fn dcommit_file_svn(
     refname: &str,
     commits: Vec<GitCommitSummary>,
     no_rebase: bool,
+    mergeinfo: Option<&str>,
 ) -> Result<String, String> {
     if commits.is_empty() {
         return Ok("No local commits to dcommit.\n".to_string());
@@ -136,6 +136,9 @@ fn dcommit_file_svn(
                 &change.path,
                 change.old_path.as_deref(),
             )?;
+        }
+        if let Some(mergeinfo) = mergeinfo {
+            apply_mergeinfo(&temp.wc, mergeinfo)?;
         }
         let revision = svn_commit(&temp.wc, &commit.subject)?;
         fetch::run_in_work_tree(git.work_tree().to_path_buf(), default_fetch_args())?;
@@ -274,6 +277,19 @@ fn svn_file_content(git: &GitCli, commit: &str, path: &str) -> Result<Vec<u8>, S
     } else {
         Ok(content)
     }
+}
+
+fn apply_mergeinfo(wc: &Path, mergeinfo: &str) -> Result<(), String> {
+    run_svn(
+        Some(wc),
+        &[
+            "propset".to_string(),
+            "--non-interactive".to_string(),
+            "svn:mergeinfo".to_string(),
+            mergeinfo.to_string(),
+            ".".to_string(),
+        ],
+    )
 }
 
 fn apply_file_props(
