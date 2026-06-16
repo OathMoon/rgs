@@ -213,6 +213,14 @@ fn clone_stdlayout_file_url_imports_branch_tag_and_copy_contents() {
         "pub fn answer() -> u8 { 42 }\n".to_string()
     );
     assert_eq!(
+        git.run_for_test(["rev-parse", "refs/remotes/origin/main^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+            .unwrap()
+            .trim()
+    );
+    assert_eq!(
         git.run_for_test(["ls-tree", "refs/remotes/origin/trunk", "run.sh"])
             .unwrap()
             .split_whitespace()

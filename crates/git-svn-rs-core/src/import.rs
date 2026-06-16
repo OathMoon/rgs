@@ -53,8 +53,9 @@ pub fn import_mock_revisions(
     }
     let mut all_imported_revisions = Vec::new();
 
-    for mapping in mappings {
-        let summary = import_revisions_for_mapping(git, config, &uuid, &mapping, &revisions)?;
+    for mapping in &mappings {
+        let summary =
+            import_revisions_for_mapping(git, config, &uuid, mapping, &mappings, &revisions)?;
         all_imported_revisions.extend(summary.imported_revisions);
     }
 
@@ -70,6 +71,7 @@ fn import_revisions_for_mapping(
     config: &SvnRemoteConfig,
     uuid: &str,
     mapping: &RefMapping,
+    all_mappings: &[RefMapping],
     revisions: &[RevisionEvent],
 ) -> Result<ImportSummary, String> {
     let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
@@ -92,6 +94,15 @@ fn import_revisions_for_mapping(
         }
 
         imported_revisions.push(revision.revision);
+        let first_parent_ref = if imported_revisions.len() == 1 {
+            if existing_parent_ref.is_some() {
+                existing_parent_ref.clone()
+            } else {
+                copy_from_parent_ref(git, uuid, mapping, all_mappings, revision)?
+            }
+        } else {
+            None
+        };
         stream = stream.commit(&FastImportCommit {
             mark: imported_revisions.len() as u32,
             refname: mapping.git_ref.clone(),
@@ -101,9 +112,7 @@ fn import_revisions_for_mapping(
             message: commit_message(config, revision, uuid, &strip_prefix),
             parent_mark: (imported_revisions.len() > 1)
                 .then_some(imported_revisions.len() as u32 - 1),
-            parent_ref: (imported_revisions.len() == 1)
-                .then(|| existing_parent_ref.clone())
-                .flatten(),
+            parent_ref: first_parent_ref,
             changes,
         });
     }
@@ -116,6 +125,59 @@ fn import_revisions_for_mapping(
     write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
+}
+
+fn copy_from_parent_ref(
+    git: &GitCli,
+    uuid: &str,
+    mapping: &RefMapping,
+    all_mappings: &[RefMapping],
+    revision: &RevisionEvent,
+) -> Result<Option<String>, String> {
+    let mapping_path = mapping.svn_path.trim_matches('/');
+    let mut copy_candidates = revision
+        .changed_paths
+        .iter()
+        .filter(|changed_path| {
+            let changed_path_text = changed_path.path.trim_matches('/');
+            matches!(
+                changed_path.action,
+                ChangeAction::Add | ChangeAction::Replace
+            ) && changed_path.kind == NodeKind::Directory
+                && (changed_path_text == mapping_path
+                    || changed_path_text.starts_with(&format!("{mapping_path}/")))
+                && changed_path.copy_from_path.is_some()
+                && changed_path.copy_from_rev.is_some()
+        })
+        .collect::<Vec<_>>();
+    copy_candidates.sort_by_key(|changed_path| std::cmp::Reverse(changed_path.copy_from_rev));
+
+    for copy_candidate in copy_candidates {
+        let source_path = copy_candidate
+            .copy_from_path
+            .as_deref()
+            .unwrap_or_default()
+            .trim_matches('/');
+        let Some(source_revision) = copy_candidate.copy_from_rev else {
+            continue;
+        };
+        let Some(source_mapping) = all_mappings.iter().find(|candidate| {
+            let candidate_path = candidate.svn_path.trim_matches('/');
+            source_path == candidate_path || source_path.starts_with(&format!("{candidate_path}/"))
+        }) else {
+            continue;
+        };
+
+        let path = rev_map_path(git, &source_mapping.git_ref, uuid)?;
+        if !path.exists() {
+            continue;
+        }
+        if let Some(commit) = RevMap::open(path, ObjectFormat::Sha1)?.get(source_revision)? {
+            return Ok(Some(commit));
+        }
+    }
+
+    Ok(None)
 }
 
 fn max_imported_revision(git: &GitCli, refname: &str, uuid: &str) -> Result<u32, String> {
