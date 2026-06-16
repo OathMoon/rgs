@@ -196,6 +196,7 @@ fn apply_file_svn_change(
         }
         status if status.starts_with('R') => {
             let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
+            ensure_svn_parent_dirs(wc, path)?;
             run_svn(
                 Some(wc),
                 &[
@@ -211,6 +212,7 @@ fn apply_file_svn_change(
         }
         status if status.starts_with('C') => {
             let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
+            ensure_svn_parent_dirs(wc, path)?;
             run_svn(
                 Some(wc),
                 &[
@@ -231,6 +233,30 @@ fn apply_file_svn_change(
         }
     }
     Ok(())
+}
+
+fn ensure_svn_parent_dirs(wc: &Path, path: &str) -> Result<(), String> {
+    let Some(parent) = Path::new(path).parent() else {
+        return Ok(());
+    };
+    if parent.as_os_str().is_empty() {
+        return Ok(());
+    }
+
+    let parent_path = wc.join(parent);
+    if parent_path.exists() {
+        return Ok(());
+    }
+
+    std::fs::create_dir_all(&parent_path).map_err(|e| e.to_string())?;
+    run_svn(
+        Some(wc),
+        &[
+            "add".to_string(),
+            "--parents".to_string(),
+            parent.to_string_lossy().replace('\\', "/"),
+        ],
+    )
 }
 
 fn svn_file_content(git: &GitCli, commit: &str, path: &str) -> Result<Vec<u8>, String> {
