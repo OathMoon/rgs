@@ -224,6 +224,39 @@ fn log_verbose_prints_changed_paths() {
 }
 
 #[test]
+fn log_verbose_detects_renamed_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "old.txt",
+        "old\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    git(work, ["mv", "old.txt", "new.txt"]);
+    git(
+        work,
+        [
+            "commit",
+            "-m",
+            "rename\n\ngit-svn-id: mock://repo@2 mock-uuid",
+        ],
+    );
+    let rev2 = git_output(work, ["rev-parse", "HEAD"]).trim().to_string();
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--verbose", "--revision", "2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("R100\tnew.txt"));
+}
+
+#[test]
 fn log_revision_filters_to_requested_svn_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
