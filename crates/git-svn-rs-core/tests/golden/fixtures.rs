@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use git_svn_rs_core::cli::{
-    CloneArgs, FindRevArgs, InfoArgs, LayoutArgs, LogArgs, SharedFetchArgs,
+    CloneArgs, FindRevArgs, InfoArgs, LayoutArgs, LogArgs, RebaseArgs, SharedFetchArgs,
 };
 use git_svn_rs_core::commands;
 
@@ -75,6 +75,7 @@ pub struct GoldenComparisonArtifacts {
     pub log_revision_oneline: String,
     pub find_rev_nearest: String,
     pub find_rev_commit: String,
+    pub rebase_dry_run: String,
     pub clone_output: String,
 }
 
@@ -273,6 +274,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/log-revision-oneline.txt", &perl.log_revision_oneline)?;
     capture.write_text("perl/find-rev-nearest.txt", &perl.find_rev_nearest)?;
     capture.write_text("perl/find-rev-commit.txt", &perl.find_rev_commit)?;
+    capture.write_text("perl/rebase-dry-run.txt", &perl.rebase_dry_run)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -317,6 +319,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/log-revision-oneline.txt", &rust.log_revision_oneline)?;
     capture.write_text("rust/find-rev-nearest.txt", &rust.find_rev_nearest)?;
     capture.write_text("rust/find-rev-commit.txt", &rust.find_rev_commit)?;
+    capture.write_text("rust/rebase-dry-run.txt", &rust.rebase_dry_run)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -427,6 +430,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "find-rev commit output differs\nperl: {:?}\nrust: {:?}",
             perl.find_rev_commit, rust.find_rev_commit
+        ));
+    }
+    if perl.rebase_dry_run != rust.rebase_dry_run {
+        mismatches.push(format!(
+            "rebase --dry-run output differs\nperl: {:?}\nrust: {:?}",
+            perl.rebase_dry_run, rust.rebase_dry_run
         ));
     }
     if perl.clone_output != rust.clone_output {
@@ -617,6 +626,7 @@ fn collect_supported_artifacts(
     let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
     let find_rev_nearest = supported_find_rev_nearest(work_tree, tool, first_revision + 1)?;
     let find_rev_commit = supported_find_rev_commit(work_tree, tool, rev, first_revision)?;
+    let rebase_dry_run = supported_rebase_dry_run(work_tree, tool)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -636,8 +646,25 @@ fn collect_supported_artifacts(
         log_revision_oneline,
         find_rev_nearest,
         find_rev_commit,
+        rebase_dry_run,
         clone_output,
     })
+}
+
+fn supported_rebase_dry_run(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "rebase", "--dry-run"])?,
+        GoldenTool::Rust => commands::rebase::run_in_work_tree(
+            work_tree,
+            RebaseArgs {
+                dry_run: true,
+                merge: false,
+                strategy: None,
+                shared: default_shared_fetch_args(),
+            },
+        )?,
+    };
+    Ok(normalize_rebase_dry_run(&output))
 }
 
 fn supported_log_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
@@ -919,6 +946,25 @@ fn normalize_oneline_show_commit_log(output: &str) -> String {
             let revision = parts.get(revision_index)?.trim();
             let subject = parts.get(revision_index + 1)?.trim();
             Some(format!("<commit> | {revision} | {subject}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_rebase_dry_run(output: &str) -> String {
+    output
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                None
+            } else if line.contains("fetch") {
+                Some("would fetch".to_string())
+            } else if line.contains("rebase") {
+                Some("would rebase <ref>".to_string())
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
