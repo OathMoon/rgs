@@ -122,6 +122,7 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
         include_paths: git.config_get(&format!("{prefix}.include-paths"))?,
         ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
         authors_file: git.config_get(&format!("{prefix}.authors-file"))?,
+        authors_prog: git.config_get(&format!("{prefix}.authors-prog"))?,
         no_metadata: git
             .config_get(&format!("{prefix}.noMetadata"))?
             .is_some_and(|value| value == "true"),

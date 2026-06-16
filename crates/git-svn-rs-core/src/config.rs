@@ -11,6 +11,7 @@ pub struct SvnRemoteConfig {
     pub include_paths: Option<String>,
     pub ignore_refs: Option<String>,
     pub authors_file: Option<String>,
+    pub authors_prog: Option<String>,
     pub no_metadata: bool,
     pub rewrite_root: Option<String>,
     pub rewrite_uuid: Option<String>,
@@ -30,6 +31,7 @@ impl SvnRemoteConfig {
             include_paths: None,
             ignore_refs: None,
             authors_file: None,
+            authors_prog: None,
             no_metadata: false,
             rewrite_root: None,
             rewrite_uuid: None,
@@ -55,6 +57,11 @@ impl SvnRemoteConfig {
 
     pub fn with_authors_file(mut self, value: impl Into<String>) -> Self {
         self.authors_file = Some(value.into());
+        self
+    }
+
+    pub fn with_authors_prog(mut self, value: impl Into<String>) -> Self {
+        self.authors_prog = Some(value.into());
         self
     }
 
@@ -113,6 +120,9 @@ impl SvnRemoteConfig {
         }
         if let Some(value) = &self.authors_file {
             entries.push((format!("{prefix}.authors-file"), value.clone()));
+        }
+        if let Some(value) = &self.authors_prog {
+            entries.push((format!("{prefix}.authors-prog"), value.clone()));
         }
         if self.no_metadata {
             entries.push((format!("{prefix}.noMetadata"), "true".to_string()));

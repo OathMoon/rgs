@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::process::Command;
 
 use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::config::SvnRemoteConfig;
@@ -79,7 +80,7 @@ fn import_revisions_for_mapping(
         .rev_parse(&mapping.git_ref)
         .ok()
         .map(|commit| commit.trim().to_string());
-    let authors = author_resolver(config)?;
+    let authors = author_mapper(config)?;
 
     for (index, revision) in revisions.iter().enumerate() {
         if revision.revision <= max_imported_revision {
@@ -94,8 +95,8 @@ fn import_revisions_for_mapping(
         stream = stream.commit(&FastImportCommit {
             mark: imported_revisions.len() as u32,
             refname: mapping.git_ref.clone(),
-            author: author_ident(&revision.author, authors.as_ref()),
-            committer: author_ident(&revision.author, authors.as_ref()),
+            author: author_ident(&revision.author, Some(&authors))?,
+            committer: author_ident(&revision.author, Some(&authors))?,
             timestamp: index as i64,
             message: commit_message(config, revision, uuid, &strip_prefix),
             parent_mark: (imported_revisions.len() > 1)
@@ -392,20 +393,62 @@ fn commit_message(
     format!("{}\n\n{}", revision.message, footer)
 }
 
-fn author_resolver(config: &SvnRemoteConfig) -> Result<Option<AuthorResolver>, String> {
-    let Some(path) = &config.authors_file else {
-        return Ok(None);
-    };
-    let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-    parse_authors_file(&contents).map(Some)
+struct AuthorMapper {
+    file: Option<AuthorResolver>,
+    prog: Option<String>,
 }
 
-fn author_ident(author: &str, resolver: Option<&AuthorResolver>) -> String {
-    if let Some(mapped) = resolver.and_then(|resolver| resolver.resolve(author)) {
-        format!("{} <{}>", mapped.name, mapped.email)
+fn author_mapper(config: &SvnRemoteConfig) -> Result<AuthorMapper, String> {
+    let file = if let Some(path) = &config.authors_file {
+        let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
+        Some(parse_authors_file(&contents)?)
     } else {
-        format!("{author} <{author}@example.invalid>")
+        None
+    };
+    Ok(AuthorMapper {
+        file,
+        prog: config.authors_prog.clone(),
+    })
+}
+
+fn author_ident(author: &str, mapper: Option<&AuthorMapper>) -> Result<String, String> {
+    if let Some(mapped) = mapper
+        .and_then(|mapper| mapper.file.as_ref())
+        .and_then(|resolver| resolver.resolve(author))
+    {
+        Ok(format!("{} <{}>", mapped.name, mapped.email))
+    } else if let Some(prog) = mapper.and_then(|mapper| mapper.prog.as_ref()) {
+        run_authors_prog(prog, author)
+    } else {
+        Ok(format!("{author} <{author}@example.invalid>"))
     }
+}
+
+fn run_authors_prog(program: &str, author: &str) -> Result<String, String> {
+    let output = Command::new(program)
+        .arg(author)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            format!("authors-prog exited with status {}", output.status)
+        } else {
+            stderr
+        });
+    }
+    let ident = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    if ident.is_empty() || !ident.contains('<') || !ident.contains('>') {
+        return Err(format!(
+            "authors-prog returned invalid identity for {author}"
+        ));
+    }
+    Ok(ident)
 }
 
 fn strip_prefix_for(config: &SvnRemoteConfig, svn_path: &str) -> String {

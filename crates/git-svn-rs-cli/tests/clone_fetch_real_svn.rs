@@ -494,6 +494,50 @@ fn clone_file_url_applies_authors_file_mapping() {
 }
 
 #[test]
+fn clone_file_url_applies_authors_prog_mapping() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let authors_prog = write_authors_prog(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--authors-prog",
+            authors_prog.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test([
+            "show",
+            "-s",
+            "--format=%an <%ae>",
+            "refs/remotes/origin/trunk"
+        ])
+        .unwrap()
+        .trim(),
+        "Program Author <program@example.com>"
+    );
+}
+
+#[test]
 fn clone_file_url_honors_revision_range_end() {
     match require_svn_tools() {
         Ok(()) => {}
@@ -597,6 +641,57 @@ fn fetch_file_url_applies_persisted_authors_file_mapping() {
     );
 }
 
+#[test]
+fn fetch_file_url_applies_persisted_authors_prog_mapping() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let authors_prog = write_authors_prog(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--authors-prog",
+            authors_prog.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test([
+            "show",
+            "-s",
+            "--format=%an <%ae>",
+            "refs/remotes/origin/trunk"
+        ])
+        .unwrap()
+        .trim(),
+        "Program Author <program@example.com>"
+    );
+}
+
 fn fixture_author(fixture: &StandardSvnFixture) -> String {
     svn_stdout(&["log", "-r", "2", "--quiet", &fixture.url()])
         .lines()
@@ -605,6 +700,34 @@ fn fixture_author(fixture: &StandardSvnFixture) -> String {
             (parts.len() >= 2 && parts[0].starts_with('r')).then(|| parts[1].to_string())
         })
         .expect("svn log should include an author")
+}
+
+fn write_authors_prog(dir: &std::path::Path) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let path = dir.join("authors-prog.cmd");
+        std::fs::write(
+            &path,
+            "@echo off\r\necho Program Author ^<program@example.com^>\r\n",
+        )
+        .unwrap();
+        path
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("authors-prog.sh");
+        std::fs::write(
+            &path,
+            "#!/bin/sh\necho 'Program Author <program@example.com>'\n",
+        )
+        .unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
 }
 
 fn svn_stdout(args: &[&str]) -> String {
