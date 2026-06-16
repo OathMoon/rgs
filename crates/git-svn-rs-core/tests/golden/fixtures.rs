@@ -66,6 +66,7 @@ pub struct GoldenComparisonArtifacts {
     pub tree_contents: Vec<String>,
     pub empty_dir_placeholders: Vec<String>,
     pub log_oneline: String,
+    pub log_incremental: String,
     pub find_rev: String,
     pub info_url: String,
     pub info_summary: String,
@@ -258,6 +259,7 @@ pub fn run_standard_trunk_golden_comparison(
         &perl.empty_dir_placeholders.join("\n"),
     )?;
     capture.write_text("perl/log-oneline.txt", &perl.log_oneline)?;
+    capture.write_text("perl/log-incremental.txt", &perl.log_incremental)?;
     capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
     capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
@@ -296,6 +298,7 @@ pub fn run_standard_trunk_golden_comparison(
         &rust.empty_dir_placeholders.join("\n"),
     )?;
     capture.write_text("rust/log-oneline.txt", &rust.log_oneline)?;
+    capture.write_text("rust/log-incremental.txt", &rust.log_incremental)?;
     capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
     capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
@@ -358,6 +361,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "log --oneline differs\nperl: {:?}\nrust: {:?}",
             perl.log_oneline, rust.log_oneline
+        ));
+    }
+    if perl.log_incremental != rust.log_incremental {
+        mismatches.push(format!(
+            "log --incremental differs\nperl: {:?}\nrust: {:?}",
+            perl.log_incremental, rust.log_incremental
         ));
     }
     if perl.find_rev != rust.find_rev {
@@ -575,6 +584,7 @@ fn collect_supported_artifacts(
         .ok_or_else(|| "golden clone did not write a rev_map record".to_string())?
         .revision;
     let log_oneline = supported_log_oneline(work_tree, tool)?;
+    let log_incremental = supported_log_incremental(work_tree, tool)?;
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
     let info_url = supported_info_url(work_tree, tool)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
@@ -591,6 +601,7 @@ fn collect_supported_artifacts(
         tree_contents,
         empty_dir_placeholders,
         log_oneline,
+        log_incremental,
         find_rev,
         info_url,
         info_summary,
@@ -617,6 +628,24 @@ fn supported_log_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, S
         )?,
     };
     Ok(normalize_log_oneline(&output))
+}
+
+fn supported_log_incremental(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    let output = match tool {
+        GoldenTool::Perl => run_text(work_tree, "git", &["svn", "log", "--incremental"])?,
+        GoldenTool::Rust => commands::log::run_in_work_tree(
+            work_tree,
+            LogArgs {
+                revision: None,
+                limit: None,
+                verbose: false,
+                incremental: true,
+                oneline: false,
+                show_commit: false,
+            },
+        )?,
+    };
+    Ok(normalize_incremental_log(&output))
 }
 
 fn supported_log_revision_oneline(
@@ -805,6 +834,30 @@ fn normalize_log_oneline(output: &str) -> String {
                 parts.get(1)?.trim()
             };
             Some(format!("{revision} | {subject}"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn normalize_incremental_log(output: &str) -> String {
+    output
+        .lines()
+        .filter_map(|line| {
+            if line.starts_with("r") && line.contains(" | ") {
+                let parts = line.split(" | ").collect::<Vec<_>>();
+                parts
+                    .first()
+                    .map(|revision| format!("revision {}", revision.trim()))
+            } else if let Some(subject) = line.strip_prefix("  ") {
+                let subject = subject.trim();
+                if subject.is_empty() {
+                    None
+                } else {
+                    Some(format!("subject {subject}"))
+                }
+            } else {
+                None
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
