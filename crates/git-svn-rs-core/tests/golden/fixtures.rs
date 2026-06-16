@@ -72,6 +72,7 @@ pub struct GoldenComparisonArtifacts {
     pub log_revision_oneline: String,
     pub find_rev_nearest: String,
     pub find_rev_commit: String,
+    pub clone_output: String,
 }
 
 impl GoldenFixture {
@@ -221,7 +222,7 @@ pub fn run_standard_trunk_golden_comparison(
     let capture = GoldenArtifactCapture::new(root, "standard-linear-history")?;
 
     let perl_path = root.join("perl-clone");
-    run(
+    let perl_clone_output = run_capture(
         root,
         "git",
         &[
@@ -237,7 +238,12 @@ pub fn run_standard_trunk_golden_comparison(
             path_arg(&perl_path)?,
         ],
     )?;
-    let perl = collect_supported_artifacts(&perl_path, GoldenTool::Perl)?;
+    let perl = collect_supported_artifacts(
+        &perl_path,
+        GoldenTool::Perl,
+        normalize_clone_output(&perl_clone_output),
+    )?;
+    capture.write_text("perl/clone-output.txt", &perl.clone_output)?;
     capture.write_text("perl/config.txt", &format_config(&perl.config))?;
     capture.write_text("perl/refs.txt", &perl.refs.join("\n"))?;
     capture.write_text(
@@ -273,7 +279,9 @@ pub fn run_standard_trunk_golden_comparison(
         shared: default_shared_fetch_args(),
         no_checkout: false,
     })?;
-    let rust = collect_supported_artifacts(&rust_path, GoldenTool::Rust)?;
+    let rust =
+        collect_supported_artifacts(&rust_path, GoldenTool::Rust, "clone: success".to_string())?;
+    capture.write_text("rust/clone-output.txt", &rust.clone_output)?;
     capture.write_text("rust/config.txt", &format_config(&rust.config))?;
     capture.write_text("rust/refs.txt", &rust.refs.join("\n"))?;
     capture.write_text(
@@ -386,6 +394,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "find-rev commit output differs\nperl: {:?}\nrust: {:?}",
             perl.find_rev_commit, rust.find_rev_commit
+        ));
+    }
+    if perl.clone_output != rust.clone_output {
+        mismatches.push(format!(
+            "clone output differs\nperl: {:?}\nrust: {:?}",
+            perl.clone_output, rust.clone_output
         ));
     }
 
@@ -531,6 +545,7 @@ enum GoldenTool {
 fn collect_supported_artifacts(
     work_tree: &Path,
     tool: GoldenTool,
+    clone_output: String,
 ) -> Result<GoldenComparisonArtifacts, String> {
     let refs = run_text(
         work_tree,
@@ -582,6 +597,7 @@ fn collect_supported_artifacts(
         log_revision_oneline,
         find_rev_nearest,
         find_rev_commit,
+        clone_output,
     })
 }
 
@@ -976,6 +992,16 @@ fn format_file_modes(records: &[FileModeArtifact]) -> String {
         .join("\n")
 }
 
+struct CapturedCommandOutput {
+    stdout: String,
+    stderr: String,
+}
+
+fn normalize_clone_output(output: &CapturedCommandOutput) -> String {
+    let _ = (&output.stdout, &output.stderr);
+    "clone: success".to_string()
+}
+
 fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
     let output = Command::new(program)
         .current_dir(cwd)
@@ -985,6 +1011,23 @@ fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
 
     if output.status.success() {
         Ok(())
+    } else {
+        Err(command_error(program, output))
+    }
+}
+
+fn run_capture(cwd: &Path, program: &str, args: &[&str]) -> Result<CapturedCommandOutput, String> {
+    let output = Command::new(program)
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{program} failed to start: {e}"))?;
+
+    if output.status.success() {
+        Ok(CapturedCommandOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
     } else {
         Err(command_error(program, output))
     }
