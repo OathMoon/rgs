@@ -69,6 +69,7 @@ pub struct GoldenComparisonArtifacts {
     pub log_incremental: String,
     pub log_verbose: String,
     pub log_oneline_show_commit: String,
+    pub log_limit_oneline: String,
     pub find_rev: String,
     pub info_url: String,
     pub info_summary: String,
@@ -270,6 +271,7 @@ pub fn run_standard_trunk_golden_comparison(
         "perl/log-oneline-show-commit.txt",
         &perl.log_oneline_show_commit,
     )?;
+    capture.write_text("perl/log-limit-oneline.txt", &perl.log_limit_oneline)?;
     capture.write_text("perl/find-rev.txt", &perl.find_rev)?;
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
     capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
@@ -317,6 +319,7 @@ pub fn run_standard_trunk_golden_comparison(
         "rust/log-oneline-show-commit.txt",
         &rust.log_oneline_show_commit,
     )?;
+    capture.write_text("rust/log-limit-oneline.txt", &rust.log_limit_oneline)?;
     capture.write_text("rust/find-rev.txt", &rust.find_rev)?;
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
     capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
@@ -400,6 +403,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "log --oneline --show-commit differs\nperl: {:?}\nrust: {:?}",
             perl.log_oneline_show_commit, rust.log_oneline_show_commit
+        ));
+    }
+    if perl.log_limit_oneline != rust.log_limit_oneline {
+        mismatches.push(format!(
+            "log --limit output differs\nperl: {:?}\nrust: {:?}",
+            perl.log_limit_oneline, rust.log_limit_oneline
         ));
     }
     if perl.find_rev != rust.find_rev {
@@ -638,6 +647,7 @@ fn collect_supported_artifacts(
     let log_incremental = supported_log_incremental(work_tree, tool)?;
     let log_verbose = supported_log_verbose(work_tree, tool)?;
     let log_oneline_show_commit = supported_log_oneline_show_commit(work_tree, tool)?;
+    let log_limit_oneline = supported_log_limit_oneline(work_tree, tool)?;
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
     let info_url = supported_info_url(work_tree, tool)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
@@ -660,6 +670,7 @@ fn collect_supported_artifacts(
         log_incremental,
         log_verbose,
         log_oneline_show_commit,
+        log_limit_oneline,
         find_rev,
         info_url,
         info_summary,
@@ -772,6 +783,28 @@ fn supported_log_oneline_show_commit(work_tree: &Path, tool: GoldenTool) -> Resu
         )?,
     };
     Ok(normalize_oneline_show_commit_log(&output))
+}
+
+fn supported_log_limit_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
+    let output = match tool {
+        GoldenTool::Perl => run_text(
+            work_tree,
+            "git",
+            &["svn", "log", "--limit", "1", "--oneline"],
+        )?,
+        GoldenTool::Rust => commands::log::run_in_work_tree(
+            work_tree,
+            LogArgs {
+                revision: None,
+                limit: Some(1),
+                verbose: false,
+                incremental: false,
+                oneline: true,
+                show_commit: false,
+            },
+        )?,
+    };
+    Ok(normalize_log_oneline(&output))
 }
 
 fn supported_log_verbose(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
