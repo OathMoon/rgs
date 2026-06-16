@@ -409,6 +409,12 @@ fn attribute_pattern_matches(pattern: &str, path: &str) -> bool {
     if let Some(suffix) = pattern.strip_prefix('*') {
         return path.ends_with(suffix);
     }
+    if let Some((prefix, suffix)) = pattern.split_once('*') {
+        let Some(rest) = path.strip_prefix(prefix) else {
+            return false;
+        };
+        return rest.ends_with(suffix) && !rest.trim_end_matches(suffix).contains('/');
+    }
     false
 }
 
