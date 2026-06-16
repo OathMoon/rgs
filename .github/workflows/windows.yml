@@ -3,6 +3,13 @@ name: Windows
 on:
   push:
   pull_request:
+  workflow_dispatch:
+    inputs:
+      strict_compat:
+        description: "Run compatibility tests in strict mode"
+        required: false
+        default: false
+        type: boolean
 
 jobs:
   verify:
@@ -19,3 +26,8 @@ jobs:
       - name: Verify
         shell: pwsh
         run: ./scripts/verify.ps1
+
+      - name: Verify strict compatibility
+        if: ${{ inputs.strict_compat }}
+        shell: pwsh
+        run: ./scripts/verify.ps1 -StrictCompat
