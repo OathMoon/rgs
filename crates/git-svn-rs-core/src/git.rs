@@ -28,6 +28,7 @@ pub struct GitCommitSummary {
 pub struct GitNameStatus {
     pub status: String,
     pub path: String,
+    pub old_path: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -154,6 +155,8 @@ impl GitCli {
             "diff-tree",
             "--no-commit-id",
             "--name-status",
+            "-M",
+            "-C",
             "-r",
             "-z",
             base,
@@ -345,13 +348,23 @@ fn parse_name_status(raw: &[u8]) -> Result<Vec<GitNameStatus>, String> {
         let path = parts
             .next()
             .ok_or_else(|| format!("missing path for git diff status {status}"))?;
+        let path = String::from_utf8(path.to_vec()).map_err(|e| e.to_string())?;
         if status.starts_with('R') || status.starts_with('C') {
-            return Err(format!("dcommit does not support {status} changes yet"));
+            let new_path = parts
+                .next()
+                .ok_or_else(|| format!("missing destination path for git diff status {status}"))?;
+            changes.push(GitNameStatus {
+                status,
+                path: String::from_utf8(new_path.to_vec()).map_err(|e| e.to_string())?,
+                old_path: Some(path),
+            });
+        } else {
+            changes.push(GitNameStatus {
+                status,
+                path,
+                old_path: None,
+            });
         }
-        changes.push(GitNameStatus {
-            status,
-            path: String::from_utf8(path.to_vec()).map_err(|e| e.to_string())?,
-        });
     }
 
     Ok(changes)

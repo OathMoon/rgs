@@ -129,6 +129,7 @@ fn dcommit_file_svn(
                 &commit.id,
                 &change.status,
                 &change.path,
+                change.old_path.as_deref(),
             )?;
         }
         let revision = svn_commit(&temp.wc, &commit.subject)?;
@@ -164,6 +165,7 @@ fn apply_file_svn_change(
     commit: &str,
     status: &str,
     path: &str,
+    old_path: Option<&str>,
 ) -> Result<(), String> {
     let target = wc.join(path);
     match status {
@@ -191,6 +193,36 @@ fn apply_file_svn_change(
         }
         "D" => {
             run_svn(Some(wc), &["delete".to_string(), path.replace('\\', "/")])?;
+        }
+        status if status.starts_with('R') => {
+            let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
+            run_svn(
+                Some(wc),
+                &[
+                    "move".to_string(),
+                    old_path.replace('\\', "/"),
+                    path.replace('\\', "/"),
+                ],
+            )?;
+            std::fs::write(&target, svn_file_content(git, commit, path)?)
+                .map_err(|e| e.to_string())?;
+            let old_mode = git.ls_tree_file(base, old_path)?.mode;
+            apply_file_props(git, wc, commit, path, &old_mode)?;
+        }
+        status if status.starts_with('C') => {
+            let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
+            run_svn(
+                Some(wc),
+                &[
+                    "copy".to_string(),
+                    old_path.replace('\\', "/"),
+                    path.replace('\\', "/"),
+                ],
+            )?;
+            std::fs::write(&target, svn_file_content(git, commit, path)?)
+                .map_err(|e| e.to_string())?;
+            let old_mode = git.ls_tree_file(base, old_path)?.mode;
+            apply_file_props(git, wc, commit, path, &old_mode)?;
         }
         other => {
             return Err(format!(
@@ -449,27 +481,56 @@ fn git_changes_for_commit(
     base: &str,
     commit: &GitCommitSummary,
 ) -> Result<Vec<GitDiffChange>, String> {
-    git.diff_name_status(base, &commit.id)?
-        .into_iter()
-        .map(|change| match change.status.as_str() {
+    let mut changes = Vec::new();
+    for change in git.diff_name_status(base, &commit.id)? {
+        match change.status.as_str() {
             "A" => {
                 let content = git.show_file(&commit.id, &change.path)?;
                 let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
-                Ok(GitDiffChange::add_file(change.path, content)
-                    .with_executable(mode == "100755")
-                    .with_symlink(mode == "120000"))
+                changes.push(
+                    GitDiffChange::add_file(change.path, content)
+                        .with_executable(mode == "100755")
+                        .with_symlink(mode == "120000"),
+                );
             }
             "M" | "T" => {
                 let content = git.show_file(&commit.id, &change.path)?;
                 let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
-                Ok(GitDiffChange::modify_file(change.path, content)
-                    .with_executable(mode == "100755")
-                    .with_symlink(mode == "120000"))
+                changes.push(
+                    GitDiffChange::modify_file(change.path, content)
+                        .with_executable(mode == "100755")
+                        .with_symlink(mode == "120000"),
+                );
             }
-            "D" => Ok(GitDiffChange::delete(change.path)),
-            status => Err(format!(
-                "dcommit does not support git diff status {status} yet"
-            )),
-        })
-        .collect()
+            "D" => changes.push(GitDiffChange::delete(change.path)),
+            status if status.starts_with('R') => {
+                let old_path = change
+                    .old_path
+                    .ok_or_else(|| format!("missing source path for {status}"))?;
+                let content = git.show_file(&commit.id, &change.path)?;
+                let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
+                changes.push(GitDiffChange::delete(old_path));
+                changes.push(
+                    GitDiffChange::add_file(change.path, content)
+                        .with_executable(mode == "100755")
+                        .with_symlink(mode == "120000"),
+                );
+            }
+            status if status.starts_with('C') => {
+                let content = git.show_file(&commit.id, &change.path)?;
+                let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
+                changes.push(
+                    GitDiffChange::add_file(change.path, content)
+                        .with_executable(mode == "100755")
+                        .with_symlink(mode == "120000"),
+                );
+            }
+            status => {
+                return Err(format!(
+                    "dcommit does not support git diff status {status} yet"
+                ));
+            }
+        }
+    }
+    Ok(changes)
 }
