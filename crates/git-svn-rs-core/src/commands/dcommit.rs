@@ -344,14 +344,14 @@ fn apply_file_props(
             ],
         )?;
     }
-    if let Some(eol_style) = svn_eol_style_for_path(git, commit, path)? {
+    for (property, value) in svn_file_attributes_for_path(git, commit, path)? {
         run_svn(
             Some(wc),
             &[
                 "propset".to_string(),
                 "--non-interactive".to_string(),
-                "svn:eol-style".to_string(),
-                eol_style,
+                property,
+                value,
                 path.replace('\\', "/"),
             ],
         )?;
@@ -359,14 +359,14 @@ fn apply_file_props(
     Ok(())
 }
 
-fn svn_eol_style_for_path(
+fn svn_file_attributes_for_path(
     git: &GitCli,
     commit: &str,
     path: &str,
-) -> Result<Option<String>, String> {
+) -> Result<Vec<(String, String)>, String> {
     let attributes = match git.show_file(commit, ".gitattributes") {
         Ok(attributes) => String::from_utf8(attributes).map_err(|e| e.to_string())?,
-        Err(_) => return Ok(None),
+        Err(_) => return Ok(Vec::new()),
     };
     for line in attributes.lines() {
         let line = line.trim();
@@ -377,17 +377,19 @@ fn svn_eol_style_for_path(
         let Some(pattern) = parts.next() else {
             continue;
         };
-        let mut eol_style = None;
+        let mut svn_props = Vec::new();
         for attr in parts {
             if let Some(value) = attr.strip_prefix("svn:eol-style=") {
-                eol_style = Some(value.to_string());
+                svn_props.push(("svn:eol-style".to_string(), value.to_string()));
+            } else if let Some(value) = attr.strip_prefix("svn:mime-type=") {
+                svn_props.push(("svn:mime-type".to_string(), value.to_string()));
             }
         }
-        if eol_style.is_some() && attribute_pattern_matches(pattern, path) {
-            return Ok(eol_style);
+        if !svn_props.is_empty() && attribute_pattern_matches(pattern, path) {
+            return Ok(svn_props);
         }
     }
-    Ok(None)
+    Ok(Vec::new())
 }
 
 fn attribute_pattern_matches(pattern: &str, path: &str) -> bool {
