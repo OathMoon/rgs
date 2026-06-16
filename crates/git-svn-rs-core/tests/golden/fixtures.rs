@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use git_svn_rs_core::cli::{
-    CloneArgs, FindRevArgs, InfoArgs, LayoutArgs, LogArgs, RebaseArgs, SharedFetchArgs,
+    CloneArgs, FindRevArgs, InfoArgs, LayoutArgs, LogArgs, RebaseArgs, ResetArgs, SharedFetchArgs,
 };
 use git_svn_rs_core::commands;
 
@@ -76,6 +76,7 @@ pub struct GoldenComparisonArtifacts {
     pub find_rev_nearest: String,
     pub find_rev_commit: String,
     pub rebase_dry_run: String,
+    pub reset: String,
     pub clone_output: String,
 }
 
@@ -275,6 +276,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/find-rev-nearest.txt", &perl.find_rev_nearest)?;
     capture.write_text("perl/find-rev-commit.txt", &perl.find_rev_commit)?;
     capture.write_text("perl/rebase-dry-run.txt", &perl.rebase_dry_run)?;
+    capture.write_text("perl/reset.txt", &perl.reset)?;
 
     let rust_path = root.join("rust-clone");
     commands::clone::run(CloneArgs {
@@ -320,6 +322,7 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/find-rev-nearest.txt", &rust.find_rev_nearest)?;
     capture.write_text("rust/find-rev-commit.txt", &rust.find_rev_commit)?;
     capture.write_text("rust/rebase-dry-run.txt", &rust.rebase_dry_run)?;
+    capture.write_text("rust/reset.txt", &rust.reset)?;
 
     Ok(GoldenComparison { perl, rust })
 }
@@ -436,6 +439,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "rebase --dry-run output differs\nperl: {:?}\nrust: {:?}",
             perl.rebase_dry_run, rust.rebase_dry_run
+        ));
+    }
+    if perl.reset != rust.reset {
+        mismatches.push(format!(
+            "reset output differs\nperl: {:?}\nrust: {:?}",
+            perl.reset, rust.reset
         ));
     }
     if perl.clone_output != rust.clone_output {
@@ -627,6 +636,7 @@ fn collect_supported_artifacts(
     let find_rev_nearest = supported_find_rev_nearest(work_tree, tool, first_revision + 1)?;
     let find_rev_commit = supported_find_rev_commit(work_tree, tool, rev, first_revision)?;
     let rebase_dry_run = supported_rebase_dry_run(work_tree, tool)?;
+    let reset = supported_reset(work_tree, tool, first_revision + 1)?;
 
     Ok(GoldenComparisonArtifacts {
         config,
@@ -647,8 +657,46 @@ fn collect_supported_artifacts(
         find_rev_nearest,
         find_rev_commit,
         rebase_dry_run,
+        reset,
         clone_output,
     })
+}
+
+fn supported_reset(work_tree: &Path, tool: GoldenTool, revision: u32) -> Result<String, String> {
+    let parent = work_tree
+        .parent()
+        .ok_or_else(|| format!("{} has no parent directory", work_tree.display()))?;
+    let reset_tree = parent.join(format!(
+        "{}-reset",
+        work_tree.file_name().unwrap().to_string_lossy()
+    ));
+    if reset_tree.exists() {
+        fs::remove_dir_all(&reset_tree).map_err(|e| e.to_string())?;
+    }
+    copy_dir_all(work_tree, &reset_tree)?;
+
+    match tool {
+        GoldenTool::Perl => {
+            run(
+                &reset_tree,
+                "git",
+                &["svn", "reset", "-r", &revision.to_string()],
+            )?;
+        }
+        GoldenTool::Rust => {
+            commands::reset::run_in_work_tree(
+                &reset_tree,
+                ResetArgs {
+                    revision: revision.to_string(),
+                    parent: false,
+                },
+            )?;
+        }
+    }
+
+    let next_revision = revision + 1;
+    let after = supported_find_rev(&reset_tree, tool, next_revision)?;
+    Ok(format!("reset r{revision}\n{after}"))
 }
 
 fn supported_rebase_dry_run(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
@@ -1174,6 +1222,21 @@ fn collect_rev_map_paths(path: &Path, paths: &mut Vec<PathBuf>) -> Result<(), St
             .is_some_and(|name| name.starts_with(".rev_map.") && !name.ends_with(".lock"))
         {
             paths.push(path);
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_all(source: &Path, destination: &Path) -> Result<(), String> {
+    fs::create_dir_all(destination).map_err(|e| e.to_string())?;
+    for entry in fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        if source_path.is_dir() {
+            copy_dir_all(&source_path, &destination_path)?;
+        } else {
+            fs::copy(&source_path, &destination_path).map_err(|e| e.to_string())?;
         }
     }
     Ok(())
