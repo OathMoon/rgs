@@ -141,6 +141,13 @@ impl StandardSvnFixture {
         file_url(&self.repo).expect("fixture repository path should convert to file URL")
     }
 
+    #[allow(dead_code)]
+    pub fn root(&self) -> &Path {
+        self.repo
+            .parent()
+            .expect("fixture repository should have a parent")
+    }
+
     pub fn latest_revision(&self) -> u32 {
         let output = Command::new("svn")
             .args(["info", "--show-item", "revision", self.url().as_str()])
