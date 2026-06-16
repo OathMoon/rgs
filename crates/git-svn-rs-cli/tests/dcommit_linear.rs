@@ -136,6 +136,69 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 99 }\n").unwrap();
+    run_git(&work, &["add", "src/lib.rs"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "commit to branch url",
+        ],
+    );
+
+    let branch_url = format!("{}/branches/main", fixture.url());
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase", "--commit-url", &branch_url])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("commit to branch url"));
+
+    assert_eq!(
+        svn_stdout(&[
+            "cat",
+            &format!("{}/branches/main/src/lib.rs", fixture.url())
+        ]),
+        "pub fn answer() -> u8 { 99 }\n"
+    );
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/src/lib.rs", fixture.url())]),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+}
+
+#[test]
 fn dcommit_rebases_after_file_svn_write_by_default() {
     match require_svn_tools() {
         Ok(()) => {}

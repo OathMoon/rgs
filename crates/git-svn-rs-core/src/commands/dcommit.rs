@@ -51,10 +51,15 @@ pub fn run_in_work_tree(
             );
         }
         if target_url.starts_with("file://") && tracked.config.url.starts_with("file://") {
+            let commit_svn_path = if args.commit_url.is_some() {
+                ""
+            } else {
+                &tracked.svn_path
+            };
             return dcommit_file_svn(
                 &tracked.git,
-                &tracked.config.url,
-                &tracked.svn_path,
+                target_url,
+                commit_svn_path,
                 &tracked.refname,
                 commits,
                 args.no_rebase,
