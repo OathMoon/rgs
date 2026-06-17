@@ -83,3 +83,11 @@ fn parses_log_git_log_passthrough_args() {
         other => panic!("expected log, got {other:?}"),
     }
 }
+
+#[test]
+fn find_rev_before_and_after_conflict() {
+    let err =
+        Cli::try_parse_from(["git-svn-rs", "find-rev", "--before", "--after", "r3"]).unwrap_err();
+
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}

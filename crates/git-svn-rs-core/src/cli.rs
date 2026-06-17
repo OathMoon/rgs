@@ -182,9 +182,9 @@ pub struct InfoArgs {
 #[derive(Debug, Args)]
 pub struct FindRevArgs {
     pub rev_or_commit: String,
-    #[arg(short = 'B', long = "before")]
+    #[arg(short = 'B', long = "before", conflicts_with = "after")]
     pub before: bool,
-    #[arg(short = 'A', long = "after")]
+    #[arg(short = 'A', long = "after", conflicts_with = "before")]
     pub after: bool,
 }
 
