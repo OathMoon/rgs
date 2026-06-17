@@ -32,6 +32,7 @@ Additional completed work since that batch includes:
 - Phase 6 follow-up `4eaa751`: `git-svn-rs log` accepts trailing `git log` pass-through arguments such as pathspec filters (`git-svn-rs log --oneline -- path`), preserving existing git-svn formatting after Git history selection.
 - Phase 6 follow-up `3f44d65`: `git-svn-rs log --revision` now rejects invalid revision filters instead of silently treating them as no filter and printing unrelated history.
 - Phase 6 follow-up `a363864`: `git-svn-rs find-rev --before` and `--after` are now mutually exclusive at CLI parse time.
+- Phase 6 follow-up: default non-incremental `git-svn-rs log` output now emits the trailing SVN-style separator after the last entry.
 - `find-rev` scans all SVN rev_maps, allowing branch/tag-only revisions and commits to resolve in multi-ref layouts.
 - `info --url` resolves tracked SVN URLs through fetch mappings and can use the current `HEAD` or closest tracked ancestor in multi-ref layouts.
 - Local `file://` `dcommit` now writes adds, deletes, type changes, executable property changes, symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected `.gitattributes`-driven SVN properties.
@@ -119,7 +120,7 @@ Key outcomes:
 
 - Added tracked SVN resolution from `svn-remote.svn.*` config and `.git/svn/<ref>/.rev_map.<uuid>`.
 - Implemented `find-rev`, `info`, `info --url`, `log`, `gc`, `reset`, and `rebase` paths used by the current CLI/tests.
-- Added log formatting for oneline output, Git commit prefixes, incremental output, verbose changed paths, rename/copy detection, revision filtering, and limit handling with SVN-style newest-first ordering.
+- Added log formatting for oneline output, Git commit prefixes, incremental output, verbose changed paths, rename/copy detection, revision filtering, trailing non-incremental separators, and limit handling with SVN-style newest-first ordering.
 - Expanded resolver behavior so multi-ref layouts can resolve commits/revisions across branch/tag rev_maps.
 
 ### Phase 7: Dcommit, Shim, Windows Verification
@@ -200,6 +201,10 @@ Latest recorded verification:
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_config_includes_svn_remote_uuid`
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
+- `cargo test -p git-svn-rs --test readonly_commands log_default_ends_with_svn_log_separator`
+- `cargo test -p git-svn-rs --test readonly_commands log_incremental_omits_svn_log_separator`
+- `cargo test -p git-svn-rs-core --test log_formatter`
+- `cargo test -p git-svn-rs --test readonly_commands`
 - `cargo test -p git-svn-rs-core --test svn_fixture -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 

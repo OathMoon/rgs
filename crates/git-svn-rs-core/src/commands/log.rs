@@ -78,6 +78,9 @@ pub fn run_in_work_tree(
         }));
         included += 1;
     }
+    if included > 0 && !args.oneline && !args.incremental {
+        out.push_str("------------------------------------------------------------------------\n");
+    }
     Ok(out)
 }
 

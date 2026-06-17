@@ -260,6 +260,22 @@ fn log_prints_svn_revisions_from_git_history() {
 }
 
 #[test]
+fn log_default_ends_with_svn_log_separator() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("log")
+        .assert()
+        .success()
+        .stdout(predicate::str::ends_with(
+            "------------------------------------------------------------------------\n",
+        ));
+}
+
+#[test]
 fn log_oneline_show_commit_prints_git_commit_prefix() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
