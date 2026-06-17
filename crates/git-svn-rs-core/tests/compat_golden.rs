@@ -53,6 +53,9 @@ fn standard_fixture_manifest_is_deterministic() {
                 path: "trunk/deleted.txt",
                 contents: "temporary\n",
             },
+            GoldenFixtureStep::AddEmptyDir {
+                path: "trunk/empty-dir",
+            },
             GoldenFixtureStep::Copy {
                 from: "trunk",
                 to: "branches/main",

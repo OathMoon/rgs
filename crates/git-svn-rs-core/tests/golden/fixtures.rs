@@ -29,6 +29,9 @@ pub enum GoldenFixtureStep {
         path: &'static str,
         contents: &'static str,
     },
+    AddEmptyDir {
+        path: &'static str,
+    },
     Delete {
         path: &'static str,
     },
@@ -104,6 +107,9 @@ impl GoldenFixture {
                 GoldenFixtureStep::AddFile {
                     path: "trunk/deleted.txt",
                     contents: "temporary\n",
+                },
+                GoldenFixtureStep::AddEmptyDir {
+                    path: "trunk/empty-dir",
                 },
                 GoldenFixtureStep::Copy {
                     from: "trunk",
@@ -575,6 +581,17 @@ impl MaterializedSvnFixture {
             &wc,
             "svn",
             &["commit", "--non-interactive", "-m", "add trunk file"],
+        )?;
+
+        run(
+            &wc,
+            "svn",
+            &["mkdir", "--non-interactive", "trunk/empty-dir"],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &["commit", "--non-interactive", "-m", "add empty directory"],
         )?;
 
         run(

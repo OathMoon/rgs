@@ -38,6 +38,7 @@ Additional completed work since that batch includes:
 - `dcommit` default rebase behavior and `--no-rebase` behavior are covered for local `file://` write-back.
 - Golden compatibility artifacts now compare normalized tree modes, tree contents, symlink targets, empty-directory placeholders, clone output success, readonly command output, `log --oneline -- path`, `reset`, `rebase --dry-run`, and `gc`.
 - Phase 8 follow-up `1461caf`: golden compatibility capture now records and compares `log --oneline -- src/lib.rs` pathspec output for Perl-vs-Rust supported subsets.
+- Phase 8 follow-up: the standard golden fixture manifest and materialized SVN history now include an explicit empty directory before branch/tag copies, exercising the existing preserve-empty-dirs placeholder artifact comparison.
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including a manual strict compatibility mode.
 
 ## Committed Completed Work
@@ -138,6 +139,7 @@ Key outcomes:
 
 - Added golden compatibility harness skeleton and normalized artifact comparisons.
 - Current artifacts cover tree modes/content, symlink targets, empty-directory placeholders, clone command success, `find-rev`, `info`, `info --url`, `log` variants, `rebase --dry-run`, `reset -rN`, and `gc`.
+- The standard golden fixture now creates `trunk/empty-dir` so empty-directory placeholder comparisons are backed by a concrete SVN history edge case.
 - Perl git-svn detection was tightened so the `git-svn-rs` shim is not mistaken for a valid Perl comparison backend.
 - Manual Windows strict compatibility mode is available through the GitHub Actions `strict_compat` input.
 
@@ -188,6 +190,8 @@ Latest recorded verification:
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`
 - `cargo test -p git-svn-rs-core --test import_mock`
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture`
+- `cargo test -p git-svn-rs-core --test compat_golden standard_fixture_manifest_is_deterministic`
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test svn_fixture -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 
