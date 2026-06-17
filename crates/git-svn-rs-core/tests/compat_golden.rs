@@ -111,6 +111,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         log_verbose: "revision r2\npath A src/lib.rs\nsubject add files".to_string(),
         log_oneline_show_commit: "<commit> | r2 | add files".to_string(),
         log_limit_oneline: "r2 | add files".to_string(),
+        log_path_oneline: "r2 | add files".to_string(),
         find_rev: "abc123\n".to_string(),
         info_url: "file:///repo/trunk\n".to_string(),
         info_summary: "URL: file:///repo/trunk\nRevision: 2".to_string(),
@@ -144,6 +145,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         log_verbose: "revision r2\npath M src/lib.rs\nsubject add trunk file".to_string(),
         log_oneline_show_commit: "<commit> | r2 | add trunk file".to_string(),
         log_limit_oneline: "r3 | branch main".to_string(),
+        log_path_oneline: "r3 | branch main".to_string(),
         find_rev: "def456\n".to_string(),
         info_url: "file:///repo\n".to_string(),
         info_summary: "URL: file:///repo\nRevision: 1".to_string(),
@@ -170,6 +172,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("log --verbose differs"));
     assert!(err.contains("log --oneline --show-commit differs"));
     assert!(err.contains("log --limit output differs"));
+    assert!(err.contains("log pathspec output differs"));
     assert!(err.contains("find-rev output differs"));
     assert!(err.contains("info --url output differs"));
     assert!(err.contains("info output differs"));
