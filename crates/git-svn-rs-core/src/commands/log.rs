@@ -12,15 +12,21 @@ pub fn run_in_work_tree(
     args: LogArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
-    let raw = tracked.git.log_records(&tracked.refname, args.limit)?;
+    let revision_filter = args.revision.as_deref().and_then(parse_revision_filter);
+    let git_limit = if revision_filter.is_some() {
+        None
+    } else {
+        args.limit
+    };
+    let raw = tracked.git.log_records(&tracked.refname, git_limit)?;
     let formatter = GitSvnLogFormatter::with_incremental(
         args.oneline,
         args.show_commit,
         args.verbose,
         args.incremental,
     );
-    let revision_filter = args.revision.as_deref().and_then(parse_revision_filter);
     let mut out = String::new();
+    let mut included = 0_u32;
     for record in raw.split('\x1e') {
         let record = record.trim_matches('\n');
         if record.is_empty() {
@@ -42,6 +48,9 @@ pub fn run_in_work_tree(
         {
             continue;
         }
+        if args.limit.is_some_and(|limit| included >= limit) {
+            break;
+        }
         let message = strip_git_svn_footer(fields[3]);
         let changed_paths = if args.verbose {
             tracked
@@ -61,6 +70,7 @@ pub fn run_in_work_tree(
             commit: fields[0].to_string(),
             changed_paths,
         }));
+        included += 1;
     }
     Ok(out)
 }
