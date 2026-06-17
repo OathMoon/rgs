@@ -169,6 +169,8 @@ pub struct LogArgs {
     pub oneline: bool,
     #[arg(long = "show-commit")]
     pub show_commit: bool,
+    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+    pub git_log_args: Vec<String>,
 }
 
 #[derive(Debug, Args)]

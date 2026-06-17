@@ -70,3 +70,16 @@ fn parses_known_unsupported_command() {
     let cli = Cli::parse_from(["git-svn-rs", "branch", "feature"]);
     assert!(matches!(cli.command, Command::Branch(_)));
 }
+
+#[test]
+fn parses_log_git_log_passthrough_args() {
+    let cli = Cli::parse_from(["git-svn-rs", "log", "--oneline", "--", "src/lib.rs"]);
+
+    match cli.command {
+        Command::Log(args) => {
+            assert!(args.oneline);
+            assert_eq!(args.git_log_args, ["src/lib.rs"]);
+        }
+        other => panic!("expected log, got {other:?}"),
+    }
+}

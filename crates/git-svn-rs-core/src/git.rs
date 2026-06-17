@@ -110,7 +110,12 @@ impl GitCli {
         }
     }
 
-    pub fn log_records(&self, rev: &str, limit: Option<u32>) -> Result<String, String> {
+    pub fn log_records(
+        &self,
+        rev: &str,
+        limit: Option<u32>,
+        passthrough_args: &[String],
+    ) -> Result<String, String> {
         let mut args = vec![
             "log".to_string(),
             "--format=%H%x1f%an%x1f%aI%x1f%B%x1e".to_string(),
@@ -119,6 +124,7 @@ impl GitCli {
             args.push(format!("-n{limit}"));
         }
         args.push(rev.to_string());
+        args.extend(passthrough_args.iter().cloned());
         self.run_args(args)
     }
 

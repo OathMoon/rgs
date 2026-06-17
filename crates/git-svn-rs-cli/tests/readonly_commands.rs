@@ -540,6 +540,36 @@ fn log_limit_orders_latest_svn_revisions_newest_first() {
 }
 
 #[test]
+fn log_passes_pathspec_args_to_git_log() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    std::fs::create_dir_all(work.join("src")).unwrap();
+    let rev1 = commit_file(
+        work,
+        "src/lib.rs",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "README.md",
+        "two\n",
+        "second\n\ngit-svn-id: mock://repo@2 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--oneline", "--", "src/lib.rs"])
+        .assert()
+        .success()
+        .stdout("r1 | first\n");
+}
+
+#[test]
 fn gc_removes_stale_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

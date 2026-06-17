@@ -757,6 +757,7 @@ fn supported_log_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, S
                 incremental: false,
                 oneline: true,
                 show_commit: false,
+                git_log_args: Vec::new(),
             },
         )?,
     };
@@ -779,6 +780,7 @@ fn supported_log_oneline_show_commit(work_tree: &Path, tool: GoldenTool) -> Resu
                 incremental: false,
                 oneline: true,
                 show_commit: true,
+                git_log_args: Vec::new(),
             },
         )?,
     };
@@ -801,6 +803,7 @@ fn supported_log_limit_oneline(work_tree: &Path, tool: GoldenTool) -> Result<Str
                 incremental: false,
                 oneline: true,
                 show_commit: false,
+                git_log_args: Vec::new(),
             },
         )?,
     };
@@ -819,6 +822,7 @@ fn supported_log_verbose(work_tree: &Path, tool: GoldenTool) -> Result<String, S
                 incremental: false,
                 oneline: false,
                 show_commit: false,
+                git_log_args: Vec::new(),
             },
         )?,
     };
@@ -837,6 +841,7 @@ fn supported_log_incremental(work_tree: &Path, tool: GoldenTool) -> Result<Strin
                 incremental: true,
                 oneline: false,
                 show_commit: false,
+                git_log_args: Vec::new(),
             },
         )?,
     };
@@ -864,6 +869,7 @@ fn supported_log_revision_oneline(
                 incremental: false,
                 oneline: true,
                 show_commit: false,
+                git_log_args: Vec::new(),
             },
         )?,
     };

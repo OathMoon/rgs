@@ -18,7 +18,9 @@ pub fn run_in_work_tree(
     } else {
         args.limit
     };
-    let raw = tracked.git.log_records(&tracked.refname, git_limit)?;
+    let raw = tracked
+        .git
+        .log_records(&tracked.refname, git_limit, &args.git_log_args)?;
     let formatter = GitSvnLogFormatter::with_incremental(
         args.oneline,
         args.show_commit,
