@@ -1297,22 +1297,33 @@ fn supported_rev_map(work_tree: &Path) -> Result<Vec<RevMapArtifactRecord>, Stri
     let mut paths = Vec::new();
     collect_rev_map_paths(&svn_dir, &mut paths)?;
     paths.sort();
-    let path = paths
-        .first()
-        .ok_or_else(|| format!("missing .rev_map under {}", svn_dir.display()))?;
-    let bytes = fs::read(path).map_err(|e| e.to_string())?;
-    if bytes.len() % 24 != 0 {
-        return Err(format!("unsupported SHA-1 .rev_map size: {}", bytes.len()));
+    if paths.is_empty() {
+        return Err(format!("missing .rev_map under {}", svn_dir.display()));
     }
 
-    Ok(bytes
-        .chunks_exact(24)
-        .map(|record| RevMapArtifactRecord {
-            revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
-            has_commit: record[4..].iter().any(|byte| *byte != 0),
-        })
-        .filter(|record| record.has_commit)
-        .collect())
+    let mut records = Vec::new();
+    for path in paths {
+        let bytes = fs::read(&path).map_err(|e| e.to_string())?;
+        if bytes.len() % 24 != 0 {
+            return Err(format!(
+                "unsupported SHA-1 .rev_map size for {}: {}",
+                path.display(),
+                bytes.len()
+            ));
+        }
+
+        records.extend(
+            bytes
+                .chunks_exact(24)
+                .map(|record| RevMapArtifactRecord {
+                    revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
+                    has_commit: record[4..].iter().any(|byte| *byte != 0),
+                })
+                .filter(|record| record.has_commit),
+        );
+    }
+    records.sort_by_key(|record| record.revision);
+    Ok(records)
 }
 
 fn collect_rev_map_paths(path: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -1494,5 +1505,39 @@ mod tests {
                     .to_string()
             }
         );
+    }
+
+    #[test]
+    fn supported_rev_map_collects_records_from_all_rev_maps() {
+        let tmp = tempfile::tempdir().unwrap();
+        let svn_dir = tmp.path().join(".git/svn");
+        write_rev_map_fixture(&svn_dir.join("refs/remotes/origin/trunk/.rev_map.uuid"), 1);
+        write_rev_map_fixture(
+            &svn_dir.join("refs/remotes/origin/branches/main/.rev_map.uuid"),
+            2,
+        );
+
+        let records = supported_rev_map(tmp.path()).unwrap();
+
+        assert_eq!(
+            records,
+            vec![
+                RevMapArtifactRecord {
+                    revision: 1,
+                    has_commit: true,
+                },
+                RevMapArtifactRecord {
+                    revision: 2,
+                    has_commit: true,
+                },
+            ]
+        );
+    }
+
+    fn write_rev_map_fixture(path: &Path, revision: u32) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut bytes = revision.to_be_bytes().to_vec();
+        bytes.extend([revision as u8; 20]);
+        fs::write(path, bytes).unwrap();
     }
 }
