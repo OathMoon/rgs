@@ -8,7 +8,7 @@ remaining scope, verification evidence, and useful commit anchors.
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `3f44d65 fix: reject invalid log revision filters`
+- Latest implementation commit: `a363864 fix: reject conflicting find-rev directions`
 - Worktree before this progress-record refresh: clean except untracked local instruction files `.ai/` and `AGENTS.md`
 - Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
 
@@ -31,6 +31,7 @@ Additional completed work since that batch includes:
 - Readonly command coverage expanded for `find-rev`, `info`, `info --url`, `log`, `log -v`, `log --incremental`, `log --oneline --show-commit`, `log --limit`, `log --revision`, `reset`, `rebase --dry-run`, and `gc`.
 - Phase 6 follow-up `4eaa751`: `git-svn-rs log` accepts trailing `git log` pass-through arguments such as pathspec filters (`git-svn-rs log --oneline -- path`), preserving existing git-svn formatting after Git history selection.
 - Phase 6 follow-up `3f44d65`: `git-svn-rs log --revision` now rejects invalid revision filters instead of silently treating them as no filter and printing unrelated history.
+- Phase 6 follow-up `a363864`: `git-svn-rs find-rev --before` and `--after` are now mutually exclusive at CLI parse time.
 - `find-rev` scans all SVN rev_maps, allowing branch/tag-only revisions and commits to resolve in multi-ref layouts.
 - `info --url` resolves tracked SVN URLs through fetch mappings and can use the current `HEAD` or closest tracked ancestor in multi-ref layouts.
 - Local `file://` `dcommit` now writes adds, deletes, type changes, executable property changes, symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected `.gitattributes`-driven SVN properties.
@@ -175,6 +176,8 @@ Key outcomes:
 Latest recorded verification:
 
 - `cargo test -p git-svn-rs-core --test cli_parse parses_log_git_log_passthrough_args`
+- `cargo test -p git-svn-rs-core --test cli_parse find_rev_before_and_after_conflict`
+- `cargo test -p git-svn-rs-core --test cli_parse`
 - `cargo test -p git-svn-rs --test readonly_commands log_passes_pathspec_args_to_git_log`
 - `cargo test -p git-svn-rs --test readonly_commands log_invalid_revision_filter_fails`
 - `cargo test -p git-svn-rs-core --test compat_golden artifact_comparison_reports_supported_subset_mismatches`
