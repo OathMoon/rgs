@@ -1269,7 +1269,11 @@ fn supported_empty_dir_placeholders(
 }
 
 fn supported_config(work_tree: &Path) -> Result<Vec<(String, String)>, String> {
-    let keys = ["svn-remote.svn.url", "svn-remote.svn.fetch"];
+    let keys = [
+        "svn-remote.svn.url",
+        "svn-remote.svn.fetch",
+        "svn-remote.svn.uuid",
+    ];
     let mut config = Vec::new();
     for key in keys {
         let values = run_text(work_tree, "git", &["config", "--get-all", key])?;
@@ -1539,5 +1543,40 @@ mod tests {
         let mut bytes = revision.to_be_bytes().to_vec();
         bytes.extend([revision as u8; 20]);
         fs::write(path, bytes).unwrap();
+    }
+
+    #[test]
+    fn supported_config_includes_svn_remote_uuid() {
+        let tmp = tempfile::tempdir().unwrap();
+        run(tmp.path(), "git", &["init"]).unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &["config", "svn-remote.svn.url", "file:///repo"],
+        )
+        .unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &[
+                "config",
+                "svn-remote.svn.fetch",
+                "+trunk:refs/remotes/origin/trunk",
+            ],
+        )
+        .unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &["config", "svn-remote.svn.uuid", "fixture-uuid"],
+        )
+        .unwrap();
+
+        let config = supported_config(tmp.path()).unwrap();
+
+        assert!(config.contains(&(
+            "svn-remote.svn.uuid".to_string(),
+            "fixture-uuid".to_string()
+        )));
     }
 }
