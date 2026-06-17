@@ -9,7 +9,7 @@ remaining scope, verification evidence, and useful commit anchors.
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
 - Latest implementation commit: `a363864 fix: reject conflicting find-rev directions`
-- Worktree before this progress-record refresh: clean except untracked local instruction files `.ai/` and `AGENTS.md`
+- Worktree before this progress-record refresh: clean
 - Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
 
 ## Recent Progress
