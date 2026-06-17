@@ -363,6 +363,20 @@ fn log_revision_filters_to_requested_svn_revision() {
 }
 
 #[test]
+fn log_invalid_revision_filter_fails() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--revision", "abc", "--oneline"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("invalid SVN revision: abc"));
+}
+
+#[test]
 fn log_revision_filter_applies_before_limit() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();

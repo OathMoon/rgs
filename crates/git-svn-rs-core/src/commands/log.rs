@@ -12,7 +12,11 @@ pub fn run_in_work_tree(
     args: LogArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
-    let revision_filter = args.revision.as_deref().and_then(parse_revision_filter);
+    let revision_filter = args
+        .revision
+        .as_deref()
+        .map(parse_revision_filter)
+        .transpose()?;
     let git_limit = if revision_filter.is_some() {
         None
     } else {
@@ -99,33 +103,32 @@ impl RevisionFilter {
     }
 }
 
-fn parse_revision_filter(value: &str) -> Option<RevisionFilter> {
+fn parse_revision_filter(value: &str) -> Result<RevisionFilter, String> {
     if let Some((start, end)) = value.split_once(':') {
-        return Some(RevisionFilter {
+        return Ok(RevisionFilter {
             start: parse_optional_revision(start)?,
             end: parse_optional_revision(end)?,
         });
     }
 
     let revision = parse_revision(value)?;
-    Some(RevisionFilter {
+    Ok(RevisionFilter {
         start: Some(revision),
         end: Some(revision),
     })
 }
 
-fn parse_optional_revision(value: &str) -> Option<Option<u32>> {
+fn parse_optional_revision(value: &str) -> Result<Option<u32>, String> {
     if value.trim().is_empty() {
-        return Some(None);
+        return Ok(None);
     }
     parse_revision(value).map(Some)
 }
 
-fn parse_revision(value: &str) -> Option<u32> {
-    value
-        .trim()
-        .strip_prefix('r')
-        .unwrap_or(value.trim())
+fn parse_revision(value: &str) -> Result<u32, String> {
+    let trimmed = value.trim();
+    let revision = trimmed.strip_prefix('r').unwrap_or(trimmed);
+    revision
         .parse::<u32>()
-        .ok()
+        .map_err(|_| format!("invalid SVN revision: {value}"))
 }
