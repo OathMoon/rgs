@@ -53,6 +53,16 @@ fn standard_fixture_manifest_is_deterministic() {
                 path: "trunk/deleted.txt",
                 contents: "temporary\n",
             },
+            GoldenFixtureStep::SetProperty {
+                path: "trunk/run.sh",
+                name: "svn:executable",
+                value: "x",
+            },
+            GoldenFixtureStep::SetProperty {
+                path: "trunk/link-to-lib",
+                name: "svn:special",
+                value: "x",
+            },
             GoldenFixtureStep::AddEmptyDir {
                 path: "trunk/empty-dir",
             },
@@ -69,6 +79,22 @@ fn standard_fixture_manifest_is_deterministic() {
             },
         ]
     );
+}
+
+#[test]
+fn standard_fixture_manifest_records_svn_properties() {
+    let fixture = GoldenFixture::standard_linear_history();
+
+    assert!(fixture.steps().contains(&GoldenFixtureStep::SetProperty {
+        path: "trunk/run.sh",
+        name: "svn:executable",
+        value: "x",
+    }));
+    assert!(fixture.steps().contains(&GoldenFixtureStep::SetProperty {
+        path: "trunk/link-to-lib",
+        name: "svn:special",
+        value: "x",
+    }));
 }
 
 #[test]

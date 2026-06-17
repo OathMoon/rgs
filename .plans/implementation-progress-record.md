@@ -43,6 +43,7 @@ Additional completed work since that batch includes:
 - Phase 8 follow-up: golden rev_map artifact capture now reads every `.rev_map.*` under `.git/svn` instead of only the first sorted path, so multi-ref layouts can expose branch/tag rev_map differences.
 - Phase 8 follow-up: golden config artifacts now include `svn-remote.svn.uuid` alongside URL and fetch mappings.
 - Phase 8 follow-up: golden rev_map artifacts now preserve zero-commit records instead of dropping them, allowing placeholder/trailing rev_map slots to be compared.
+- Phase 8 follow-up: the declarative golden fixture manifest now records the `svn:executable` and `svn:special` property intent used by the materialized fixture.
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including a manual strict compatibility mode.
 
 ## Committed Completed Work
@@ -147,6 +148,7 @@ Key outcomes:
 - Rev_map artifact capture now includes records from all discovered rev_map files under `.git/svn`, improving coverage for future multi-ref Perl-vs-Rust comparisons.
 - Rev_map artifact capture preserves both populated and all-zero commit records.
 - Config artifact capture now includes the SVN remote UUID for stricter metadata comparison.
+- The standard fixture manifest records the executable and special-link SVN properties explicitly, not just the affected file contents.
 - Perl git-svn detection was tightened so the `git-svn-rs` shim is not mistaken for a valid Perl comparison backend.
 - Manual Windows strict compatibility mode is available through the GitHub Actions `strict_compat` input.
 
@@ -209,6 +211,9 @@ Latest recorded verification:
 - `cargo test -p git-svn-rs --test readonly_commands`
 - `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_rev_map_preserves_zero_records`
 - `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_rev_map_collects_records_from_all_rev_maps`
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
+- `cargo test -p git-svn-rs-core --test compat_golden standard_fixture_manifest_records_svn_properties`
+- `cargo test -p git-svn-rs-core --test compat_golden standard_fixture_manifest_is_deterministic`
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test svn_fixture -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`

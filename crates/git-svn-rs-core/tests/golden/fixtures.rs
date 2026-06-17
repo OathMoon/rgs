@@ -29,6 +29,11 @@ pub enum GoldenFixtureStep {
         path: &'static str,
         contents: &'static str,
     },
+    SetProperty {
+        path: &'static str,
+        name: &'static str,
+        value: &'static str,
+    },
     AddEmptyDir {
         path: &'static str,
     },
@@ -107,6 +112,16 @@ impl GoldenFixture {
                 GoldenFixtureStep::AddFile {
                     path: "trunk/deleted.txt",
                     contents: "temporary\n",
+                },
+                GoldenFixtureStep::SetProperty {
+                    path: "trunk/run.sh",
+                    name: "svn:executable",
+                    value: "x",
+                },
+                GoldenFixtureStep::SetProperty {
+                    path: "trunk/link-to-lib",
+                    name: "svn:special",
+                    value: "x",
                 },
                 GoldenFixtureStep::AddEmptyDir {
                     path: "trunk/empty-dir",
