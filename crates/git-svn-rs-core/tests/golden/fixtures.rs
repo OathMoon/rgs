@@ -1316,15 +1316,10 @@ fn supported_rev_map(work_tree: &Path) -> Result<Vec<RevMapArtifactRecord>, Stri
             ));
         }
 
-        records.extend(
-            bytes
-                .chunks_exact(24)
-                .map(|record| RevMapArtifactRecord {
-                    revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
-                    has_commit: record[4..].iter().any(|byte| *byte != 0),
-                })
-                .filter(|record| record.has_commit),
-        );
+        records.extend(bytes.chunks_exact(24).map(|record| RevMapArtifactRecord {
+            revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
+            has_commit: record[4..].iter().any(|byte| *byte != 0),
+        }));
     }
     records.sort_by_key(|record| record.revision);
     Ok(records)
@@ -1538,10 +1533,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn supported_rev_map_preserves_zero_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rev_map = tmp
+            .path()
+            .join(".git/svn/refs/remotes/origin/trunk/.rev_map.uuid");
+        write_zero_rev_map_fixture(&rev_map, 3);
+
+        let records = supported_rev_map(tmp.path()).unwrap();
+
+        assert_eq!(
+            records,
+            vec![RevMapArtifactRecord {
+                revision: 3,
+                has_commit: false,
+            }]
+        );
+    }
+
     fn write_rev_map_fixture(path: &Path, revision: u32) {
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         let mut bytes = revision.to_be_bytes().to_vec();
         bytes.extend([revision as u8; 20]);
+        fs::write(path, bytes).unwrap();
+    }
+
+    fn write_zero_rev_map_fixture(path: &Path, revision: u32) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut bytes = revision.to_be_bytes().to_vec();
+        bytes.extend([0; 20]);
         fs::write(path, bytes).unwrap();
     }
 

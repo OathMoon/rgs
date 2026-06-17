@@ -42,6 +42,7 @@ Additional completed work since that batch includes:
 - Phase 8 follow-up: the standard golden fixture manifest and materialized SVN history now include an explicit empty directory before branch/tag copies, exercising the existing preserve-empty-dirs placeholder artifact comparison.
 - Phase 8 follow-up: golden rev_map artifact capture now reads every `.rev_map.*` under `.git/svn` instead of only the first sorted path, so multi-ref layouts can expose branch/tag rev_map differences.
 - Phase 8 follow-up: golden config artifacts now include `svn-remote.svn.uuid` alongside URL and fetch mappings.
+- Phase 8 follow-up: golden rev_map artifacts now preserve zero-commit records instead of dropping them, allowing placeholder/trailing rev_map slots to be compared.
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including a manual strict compatibility mode.
 
 ## Committed Completed Work
@@ -144,6 +145,7 @@ Key outcomes:
 - Current artifacts cover tree modes/content, symlink targets, empty-directory placeholders, clone command success, `find-rev`, `info`, `info --url`, `log` variants, `rebase --dry-run`, `reset -rN`, and `gc`.
 - The standard golden fixture now creates `trunk/empty-dir` so empty-directory placeholder comparisons are backed by a concrete SVN history edge case.
 - Rev_map artifact capture now includes records from all discovered rev_map files under `.git/svn`, improving coverage for future multi-ref Perl-vs-Rust comparisons.
+- Rev_map artifact capture preserves both populated and all-zero commit records.
 - Config artifact capture now includes the SVN remote UUID for stricter metadata comparison.
 - Perl git-svn detection was tightened so the `git-svn-rs` shim is not mistaken for a valid Perl comparison backend.
 - Manual Windows strict compatibility mode is available through the GitHub Actions `strict_compat` input.
@@ -205,6 +207,9 @@ Latest recorded verification:
 - `cargo test -p git-svn-rs --test readonly_commands log_incremental_omits_svn_log_separator`
 - `cargo test -p git-svn-rs-core --test log_formatter`
 - `cargo test -p git-svn-rs --test readonly_commands`
+- `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_rev_map_preserves_zero_records`
+- `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_rev_map_collects_records_from_all_rev_maps`
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test svn_fixture -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 
