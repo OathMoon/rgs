@@ -17,7 +17,7 @@ fn formats_svn_style_log_entry() {
         rendered
             .contains("------------------------------------------------------------------------\n")
     );
-    assert!(rendered.contains("r7 | alice | 2026-01-01T00:00:00Z | 2 lines\n"));
+    assert!(rendered.contains("r7 | alice | 2026-01-01T00:00:00Z | 3 lines\n"));
     assert!(rendered.contains("Changed paths:\n   M\ttrunk/src/lib.rs\n"));
     assert!(rendered.contains("commit abcdef1234567890\n"));
     assert!(rendered.contains("add file\n\nbody\n"));
@@ -72,6 +72,39 @@ fn incremental_log_entry_omits_separator() {
         !rendered
             .contains("------------------------------------------------------------------------")
     );
-    assert!(rendered.contains("r13 | carol | 2026-01-03T00:00:00Z | 1 lines\n"));
+    assert!(rendered.contains("r13 | carol | 2026-01-03T00:00:00Z | 1 line\n"));
     assert!(rendered.contains("incremental entry\n"));
+}
+
+#[test]
+fn counts_internal_blank_lines_and_empty_messages() {
+    let entry_with_blank_line = GitSvnLogEntry {
+        revision: 15,
+        author: "erin".to_string(),
+        date: "2026-01-05T00:00:00Z".to_string(),
+        message: "subject\n\nbody".to_string(),
+        commit: "0123456789abcdef".to_string(),
+        changed_paths: Vec::new(),
+    };
+    let empty_entry = GitSvnLogEntry {
+        revision: 16,
+        author: "frank".to_string(),
+        date: "2026-01-06T00:00:00Z".to_string(),
+        message: String::new(),
+        commit: "0123456789abcdef".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    let formatter = GitSvnLogFormatter::new(false, false, false);
+
+    assert!(
+        formatter
+            .format_entry(&entry_with_blank_line)
+            .contains("r15 | erin | 2026-01-05T00:00:00Z | 3 lines\n")
+    );
+    assert!(
+        formatter
+            .format_entry(&empty_entry)
+            .contains("r16 | frank | 2026-01-06T00:00:00Z | 1 line\n")
+    );
 }
