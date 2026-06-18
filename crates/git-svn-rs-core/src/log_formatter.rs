@@ -65,9 +65,13 @@ impl GitSvnLogFormatter {
         }
         let line_count = line_count(&entry.message);
         let line_label = if line_count == 1 { "line" } else { "lines" };
+        out.push_str(&format!("r{} | ", entry.revision));
+        if self.show_commit {
+            out.push_str(&format!("{} | ", entry.commit));
+        }
         out.push_str(&format!(
-            "r{} | {} | {} | {line_count} {line_label}\n",
-            entry.revision, entry.author, entry.date
+            "{} | {} | {line_count} {line_label}\n",
+            entry.author, entry.date
         ));
         if self.verbose && !entry.changed_paths.is_empty() {
             out.push_str("Changed paths:\n");
@@ -76,9 +80,6 @@ impl GitSvnLogFormatter {
                 out.push_str(path);
                 out.push('\n');
             }
-        }
-        if self.show_commit {
-            out.push_str(&format!("commit {}\n", entry.commit));
         }
         out.push('\n');
         out.push_str(entry.message.trim_end());

@@ -17,10 +17,27 @@ fn formats_svn_style_log_entry() {
         rendered
             .contains("------------------------------------------------------------------------\n")
     );
-    assert!(rendered.contains("r7 | alice | 2026-01-01T00:00:00Z | 3 lines\n"));
+    assert!(rendered.contains("r7 | abcdef1234567890 | alice | 2026-01-01T00:00:00Z | 3 lines\n"));
     assert!(rendered.contains("Changed paths:\n   M\ttrunk/src/lib.rs\n"));
-    assert!(rendered.contains("commit abcdef1234567890\n"));
+    assert!(!rendered.contains("\ncommit abcdef1234567890\n"));
     assert!(rendered.contains("add file\n\nbody\n"));
+}
+
+#[test]
+fn normal_log_entry_without_show_commit_keeps_svn_header() {
+    let entry = GitSvnLogEntry {
+        revision: 8,
+        author: "alice".to_string(),
+        date: "2026-01-01T00:00:00Z".to_string(),
+        message: "add file".to_string(),
+        commit: "abcdef1234567890".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    let rendered = GitSvnLogFormatter::new(false, false, false).format_entry(&entry);
+
+    assert!(rendered.contains("r8 | alice | 2026-01-01T00:00:00Z | 1 line\n"));
+    assert!(!rendered.contains("abcdef1234567890"));
 }
 
 #[test]
