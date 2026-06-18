@@ -382,7 +382,13 @@ fn svn_file_attributes_for_path(
             continue;
         }
         for attr in parts {
-            if let Some(value) = attr.strip_prefix("svn:eol-style=") {
+            if let Some(value) = attr.strip_prefix("svn-properties=") {
+                for property in value.split(';').filter(|property| !property.is_empty()) {
+                    if let Some((name, value)) = property.split_once('=') {
+                        set_svn_file_attribute(&mut svn_props, name, value);
+                    }
+                }
+            } else if let Some(value) = attr.strip_prefix("svn:eol-style=") {
                 set_svn_file_attribute(&mut svn_props, "svn:eol-style", value);
             } else if let Some(value) = attr.strip_prefix("svn:mime-type=") {
                 set_svn_file_attribute(&mut svn_props, "svn:mime-type", value);
