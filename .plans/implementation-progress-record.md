@@ -8,7 +8,7 @@ remaining scope, verification evidence, and useful commit anchors.
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `27b0893 fix: match svn log line counts`
+- Latest implementation commit: `1ad8bf2 fix: ignore invalid svn-properties entries`
 - Worktree before this progress-record refresh: clean
 - Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
 
@@ -34,10 +34,12 @@ Additional completed work since that batch includes:
 - Phase 6 follow-up `a363864`: `git-svn-rs find-rev --before` and `--after` are now mutually exclusive at CLI parse time.
 - Phase 6 follow-up: default non-incremental `git-svn-rs log` output now emits the trailing SVN-style separator after the last entry.
 - Phase 6 follow-up `27b0893`: SVN-style log headers now use `1 line` for singular messages, count internal blank lines, and retain the one-line minimum for empty messages.
+- Phase 6 follow-ups `3b42f98` and `22ef18a`: normal and incremental `log --show-commit` output now places the Git commit in the SVN-style header, with formatter and SHA-1/SHA-256-aware CLI coverage.
 - `find-rev` scans all SVN rev_maps, allowing branch/tag-only revisions and commits to resolve in multi-ref layouts.
 - `info --url` resolves tracked SVN URLs through fetch mappings and can use the current `HEAD` or closest tracked ancestor in multi-ref layouts.
 - Local `file://` `dcommit` now writes adds, deletes, type changes, executable property changes, symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected `.gitattributes`-driven SVN properties.
 - `dcommit` default rebase behavior and `--no-rebase` behavior are covered for local `file://` write-back.
+- Phase 7 follow-ups `298dc66` and `1ad8bf2`: local `file://` dcommit now accepts upstream-style `svn-properties=name=value[;name=value...]` attributes, preserves later-rule overrides, and ignores malformed or empty property entries.
 - Golden compatibility artifacts now compare normalized tree modes, tree contents, symlink targets, empty-directory placeholders, clone output success, readonly command output, `log --oneline -- path`, `reset`, `rebase --dry-run`, and `gc`.
 - Phase 8 follow-up `1461caf`: golden compatibility capture now records and compares `log --oneline -- src/lib.rs` pathspec output for Perl-vs-Rust supported subsets.
 - Phase 8 follow-up: the standard golden fixture manifest and materialized SVN history now include an explicit empty directory before branch/tag copies, exercising the existing preserve-empty-dirs placeholder artifact comparison.
@@ -135,6 +137,7 @@ Key outcomes:
 
 - Added `dcommit` foundations: diff planner, commit editor, path ensurer, property mapper, mock commit backend extensions, and associated tests.
 - Implemented local `file://` SVN write-back for linear commits, add/modify/delete, type changes, executable/symlink property writes and removals, renames/copies with copy-from metadata, missing destination parent creation, explicit commit URLs, explicit mergeinfo, and selected `.gitattributes` SVN property mappings.
+- Added upstream-style `.gitattributes` `svn-properties=` parsing for multiple semicolon-separated SVN properties while retaining the existing direct property forms.
 - Added default post-dcommit rebase coverage and `--no-rebase` local write-back coverage.
 - Added the `git-svn` shim crate, forwarding behavior, shim smoke tests, `scripts/verify.ps1`, Windows workflow, and README verification/dependency notes.
 
@@ -220,6 +223,9 @@ Latest recorded verification:
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (14 passed; Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test log_formatter` (5 passed)
+- `cargo test -p git-svn-rs-core --test log_formatter` (7 passed)
+- `cargo test -p git-svn-rs --test readonly_commands` (30 passed)
+- `cargo test -p git-svn-rs --test dcommit_linear` (23 passed)
 - `cargo test -p git-svn-rs-core --test svn_fixture -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 
