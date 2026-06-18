@@ -126,6 +126,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         refs: vec!["refs/remotes/origin/trunk".to_string()],
         git_svn_id_footers: vec!["git-svn-id: file:///repo/trunk@2 uuid".to_string()],
         rev_map: vec![RevMapArtifactRecord {
+            source_ref: "refs/remotes/origin/trunk".to_string(),
             revision: 2,
             has_commit: true,
         }],
@@ -160,6 +161,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         refs: vec!["refs/remotes/git-svn".to_string()],
         git_svn_id_footers: vec!["git-svn-id: file:///repo@2 uuid".to_string()],
         rev_map: vec![RevMapArtifactRecord {
+            source_ref: "refs/remotes/git-svn".to_string(),
             revision: 2,
             has_commit: false,
         }],

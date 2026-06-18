@@ -54,6 +54,7 @@ pub struct GoldenFixture {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevMapArtifactRecord {
+    pub source_ref: String,
     pub revision: u32,
     pub has_commit: bool,
 }
@@ -676,7 +677,7 @@ fn collect_supported_artifacts(
         .filter(|line| line.starts_with("git-svn-id: "))
         .map(str::to_string)
         .collect::<Vec<_>>();
-    let rev_map = supported_rev_map(work_tree)?;
+    let rev_map = supported_rev_map(work_tree, &refs)?;
     let file_modes = supported_file_modes(work_tree, rev)?;
     let tree_contents = supported_tree_contents(work_tree, rev, &file_modes)?;
     let empty_dir_placeholders = supported_empty_dir_placeholders(work_tree, rev)?;
@@ -1311,7 +1312,10 @@ fn normalize_config_value<'a>(key: &str, value: &'a str) -> &'a str {
     }
 }
 
-fn supported_rev_map(work_tree: &Path) -> Result<Vec<RevMapArtifactRecord>, String> {
+fn supported_rev_map(
+    work_tree: &Path,
+    refs: &[String],
+) -> Result<Vec<RevMapArtifactRecord>, String> {
     let svn_dir = work_tree.join(".git").join("svn");
     let mut paths = Vec::new();
     collect_rev_map_paths(&svn_dir, &mut paths)?;
@@ -1322,6 +1326,7 @@ fn supported_rev_map(work_tree: &Path) -> Result<Vec<RevMapArtifactRecord>, Stri
 
     let mut records = Vec::new();
     for path in paths {
+        let source_ref = rev_map_source_ref(&svn_dir, &path, refs)?;
         let bytes = fs::read(&path).map_err(|e| e.to_string())?;
         if bytes.len() % 24 != 0 {
             return Err(format!(
@@ -1332,12 +1337,47 @@ fn supported_rev_map(work_tree: &Path) -> Result<Vec<RevMapArtifactRecord>, Stri
         }
 
         records.extend(bytes.chunks_exact(24).map(|record| RevMapArtifactRecord {
+            source_ref: source_ref.clone(),
             revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
             has_commit: record[4..].iter().any(|byte| *byte != 0),
         }));
     }
-    records.sort_by_key(|record| record.revision);
+    records.sort_by(|left, right| {
+        left.source_ref
+            .cmp(&right.source_ref)
+            .then(left.revision.cmp(&right.revision))
+    });
     Ok(records)
+}
+
+fn rev_map_source_ref(svn_dir: &Path, rev_map: &Path, refs: &[String]) -> Result<String, String> {
+    let metadata_dir = rev_map
+        .parent()
+        .ok_or_else(|| format!("rev-map has no metadata parent: {}", rev_map.display()))?;
+    let matches = refs
+        .iter()
+        .filter(|source_ref| {
+            let perl_dir = svn_dir.join(source_ref);
+            let rust_dir = source_ref
+                .strip_prefix("refs/remotes/")
+                .map(|short_ref| svn_dir.join(short_ref.replace('/', ".")));
+            metadata_dir == perl_dir || rust_dir.as_deref() == Some(metadata_dir)
+        })
+        .collect::<Vec<_>>();
+
+    match matches.as_slice() {
+        [source_ref] => Ok((*source_ref).clone()),
+        [] => Err(format!(
+            "rev-map {} does not match any known ref: {:?}",
+            rev_map.display(),
+            refs
+        )),
+        _ => Err(format!(
+            "rev-map {} matches multiple known refs: {:?}",
+            rev_map.display(),
+            matches
+        )),
+    }
 }
 
 fn collect_rev_map_paths(path: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
@@ -1408,7 +1448,12 @@ fn format_config(config: &[(String, String)]) -> String {
 fn format_rev_map(records: &[RevMapArtifactRecord]) -> String {
     records
         .iter()
-        .map(|record| format!("{} {}", record.revision, record.has_commit))
+        .map(|record| {
+            format!(
+                "{} {} {}",
+                record.source_ref, record.revision, record.has_commit
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -1522,26 +1567,29 @@ mod tests {
     }
 
     #[test]
-    fn supported_rev_map_collects_records_from_all_rev_maps() {
+    fn supported_rev_map_normalizes_perl_and_rust_paths_without_flattening_revisions() {
         let tmp = tempfile::tempdir().unwrap();
         let svn_dir = tmp.path().join(".git/svn");
         write_rev_map_fixture(&svn_dir.join("refs/remotes/origin/trunk/.rev_map.uuid"), 1);
-        write_rev_map_fixture(
-            &svn_dir.join("refs/remotes/origin/branches/main/.rev_map.uuid"),
-            2,
-        );
+        write_rev_map_fixture(&svn_dir.join("origin.branches.main/.rev_map.uuid"), 1);
+        let refs = vec![
+            "refs/remotes/origin/trunk".to_string(),
+            "refs/remotes/origin/branches/main".to_string(),
+        ];
 
-        let records = supported_rev_map(tmp.path()).unwrap();
+        let records = supported_rev_map(tmp.path(), &refs).unwrap();
 
         assert_eq!(
             records,
             vec![
                 RevMapArtifactRecord {
+                    source_ref: "refs/remotes/origin/branches/main".to_string(),
                     revision: 1,
                     has_commit: true,
                 },
                 RevMapArtifactRecord {
-                    revision: 2,
+                    source_ref: "refs/remotes/origin/trunk".to_string(),
+                    revision: 1,
                     has_commit: true,
                 },
             ]
@@ -1555,16 +1603,61 @@ mod tests {
             .path()
             .join(".git/svn/refs/remotes/origin/trunk/.rev_map.uuid");
         write_zero_rev_map_fixture(&rev_map, 3);
+        let refs = vec!["refs/remotes/origin/trunk".to_string()];
 
-        let records = supported_rev_map(tmp.path()).unwrap();
+        let records = supported_rev_map(tmp.path(), &refs).unwrap();
 
         assert_eq!(
             records,
             vec![RevMapArtifactRecord {
+                source_ref: "refs/remotes/origin/trunk".to_string(),
                 revision: 3,
                 has_commit: false,
             }]
         );
+    }
+
+    #[test]
+    fn format_rev_map_includes_source_ref() {
+        let records = vec![RevMapArtifactRecord {
+            source_ref: "refs/remotes/origin/trunk".to_string(),
+            revision: 3,
+            has_commit: false,
+        }];
+
+        assert_eq!(
+            format_rev_map(&records),
+            "refs/remotes/origin/trunk 3 false"
+        );
+    }
+
+    #[test]
+    fn supported_rev_map_rejects_unmatched_metadata_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rev_map = tmp.path().join(".git/svn/unknown/.rev_map.uuid");
+        write_rev_map_fixture(&rev_map, 1);
+        let refs = vec!["refs/remotes/origin/trunk".to_string()];
+
+        let error = supported_rev_map(tmp.path(), &refs).unwrap_err();
+
+        assert!(error.contains("does not match any known ref"), "{error}");
+    }
+
+    #[test]
+    fn supported_rev_map_rejects_ambiguous_rust_metadata_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rev_map = tmp.path().join(".git/svn/origin.branch.main/.rev_map.uuid");
+        write_rev_map_fixture(&rev_map, 1);
+        let refs = vec![
+            "refs/remotes/origin/branch/main".to_string(),
+            "refs/remotes/origin.branch/main".to_string(),
+        ];
+
+        let error = supported_rev_map(tmp.path(), &refs).unwrap_err();
+
+        assert!(error.contains("matches multiple known refs"), "{error}");
+        assert!(error.contains(&refs[0]), "{error}");
+        assert!(error.contains(&refs[1]), "{error}");
     }
 
     fn write_rev_map_fixture(path: &Path, revision: u32) {
