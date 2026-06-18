@@ -401,6 +401,81 @@ fn dcommit_filters_invalid_svn_properties_from_gitattributes_when_tools_exist() 
 }
 
 #[test]
+fn dcommit_uses_final_svn_properties_attribute_state_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(
+        work.join(".gitattributes"),
+        "*.txt svn-properties=svn:eol-style=LF;svn:keywords=Id\nreplacement.txt svn-properties=svn:eol-style=CRLF\nunset.txt -svn-properties svn:eol-style=CRLF\nunspecified.txt !svn-properties svn:eol-style=CRLF\n",
+    )
+    .unwrap();
+    for path in ["replacement.txt", "unset.txt", "unspecified.txt"] {
+        std::fs::write(work.join(path), "one\ntwo\n").unwrap();
+    }
+    run_git(
+        &work,
+        &[
+            "add",
+            ".gitattributes",
+            "replacement.txt",
+            "unset.txt",
+            "unspecified.txt",
+        ],
+    );
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "apply final svn-properties state",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("apply final svn-properties state"));
+
+    for path in ["replacement.txt", "unset.txt", "unspecified.txt"] {
+        let url = format!("{}/trunk/{path}", fixture.url());
+        assert_eq!(
+            svn_stdout(&["propget", "--strict", "svn:eol-style", &url]),
+            "CRLF"
+        );
+        svn_propget_missing("svn:keywords", &url);
+    }
+}
+
+#[test]
 fn dcommit_writes_mime_type_from_gitattributes_to_file_svn_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}

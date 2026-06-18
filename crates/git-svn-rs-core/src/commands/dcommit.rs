@@ -368,7 +368,9 @@ fn svn_file_attributes_for_path(
         Ok(attributes) => String::from_utf8(attributes).map_err(|e| e.to_string())?,
         Err(_) => return Ok(Vec::new()),
     };
-    let mut svn_props = Vec::new();
+    let mut svn_properties = None;
+    let mut property_operations = Vec::new();
+    let mut attribute_order = 0;
     for line in attributes.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -382,22 +384,33 @@ fn svn_file_attributes_for_path(
             continue;
         }
         for attr in parts {
+            attribute_order += 1;
             if let Some(value) = attr.strip_prefix("svn-properties=") {
-                for property in value.split(';').filter(|property| !property.is_empty()) {
-                    if let Some((name, value)) = property.split_once('=') {
-                        if !name.is_empty() && !value.is_empty() {
-                            set_svn_file_attribute(&mut svn_props, name, value);
-                        }
-                    }
-                }
+                svn_properties = Some((attribute_order, value));
+            } else if attr == "-svn-properties" || attr == "!svn-properties" {
+                svn_properties = None;
             } else if let Some(value) = attr.strip_prefix("svn:eol-style=") {
-                set_svn_file_attribute(&mut svn_props, "svn:eol-style", value);
+                property_operations.push((attribute_order, "svn:eol-style", value));
             } else if let Some(value) = attr.strip_prefix("svn:mime-type=") {
-                set_svn_file_attribute(&mut svn_props, "svn:mime-type", value);
+                property_operations.push((attribute_order, "svn:mime-type", value));
             } else if let Some(value) = attr.strip_prefix("svn:keywords=") {
-                set_svn_file_attribute(&mut svn_props, "svn:keywords", value);
+                property_operations.push((attribute_order, "svn:keywords", value));
             }
         }
+    }
+    if let Some((order, value)) = svn_properties {
+        for property in value.split(';').filter(|property| !property.is_empty()) {
+            if let Some((name, value)) = property.split_once('=') {
+                if !name.is_empty() && !value.is_empty() {
+                    property_operations.push((order, name, value));
+                }
+            }
+        }
+    }
+    property_operations.sort_by_key(|(order, _, _)| *order);
+    let mut svn_props = Vec::new();
+    for (_, name, value) in property_operations {
+        set_svn_file_attribute(&mut svn_props, name, value);
     }
     Ok(svn_props)
 }
