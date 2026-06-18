@@ -330,6 +330,32 @@ fn log_incremental_omits_svn_log_separator() {
 }
 
 #[test]
+fn log_incremental_show_commit_prints_commit_in_header_without_separator() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--incremental", "--show-commit"])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::is_match(
+                "(?m)^r2 \\| (?:[0-9a-f]{40}|[0-9a-f]{64}) \\| bob \\| .+ \\| 1 line$",
+            )
+            .unwrap(),
+        )
+        .stdout(
+            predicate::str::contains(
+                "------------------------------------------------------------------------",
+            )
+            .not(),
+        )
+        .stdout(predicate::str::contains("\ncommit ").not());
+}
+
+#[test]
 fn log_verbose_prints_changed_paths() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
