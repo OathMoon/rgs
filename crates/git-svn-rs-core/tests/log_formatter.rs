@@ -94,6 +94,25 @@ fn incremental_log_entry_omits_separator() {
 }
 
 #[test]
+fn incremental_log_entry_can_show_commit_in_header_without_separator() {
+    let entry = GitSvnLogEntry {
+        revision: 17,
+        author: "grace".to_string(),
+        date: "2026-01-07T00:00:00Z".to_string(),
+        message: "incremental commit".to_string(),
+        commit: "abcdef1234567890".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    let rendered = GitSvnLogFormatter::incremental(true, false).format_entry(&entry);
+
+    assert_eq!(
+        rendered,
+        "r17 | abcdef1234567890 | grace | 2026-01-07T00:00:00Z | 1 line\n\nincremental commit\n"
+    );
+}
+
+#[test]
 fn counts_internal_blank_lines_and_empty_messages() {
     let entry_with_blank_line = GitSvnLogEntry {
         revision: 15,

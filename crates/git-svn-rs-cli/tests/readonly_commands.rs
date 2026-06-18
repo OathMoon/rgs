@@ -301,8 +301,10 @@ fn log_normal_show_commit_prints_git_commit_in_svn_header() {
         .assert()
         .success()
         .stdout(
-            predicate::str::is_match("(?m)^r2 \\| [0-9a-f]{40} \\| bob \\| .+ \\| 1 line$")
-                .unwrap(),
+            predicate::str::is_match(
+                "(?m)^r2 \\| (?:[0-9a-f]{40}|[0-9a-f]{64}) \\| bob \\| .+ \\| 1 line$",
+            )
+            .unwrap(),
         )
         .stdout(predicate::str::contains("\ncommit ").not());
 }
