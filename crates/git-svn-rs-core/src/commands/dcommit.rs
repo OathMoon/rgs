@@ -385,7 +385,9 @@ fn svn_file_attributes_for_path(
             if let Some(value) = attr.strip_prefix("svn-properties=") {
                 for property in value.split(';').filter(|property| !property.is_empty()) {
                     if let Some((name, value)) = property.split_once('=') {
-                        set_svn_file_attribute(&mut svn_props, name, value);
+                        if !name.is_empty() && !value.is_empty() {
+                            set_svn_file_attribute(&mut svn_props, name, value);
+                        }
                     }
                 }
             } else if let Some(value) = attr.strip_prefix("svn:eol-style=") {

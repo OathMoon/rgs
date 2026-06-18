@@ -325,7 +325,7 @@ fn dcommit_writes_eol_style_from_gitattributes_to_file_svn_when_tools_exist() {
 }
 
 #[test]
-fn dcommit_writes_svn_properties_from_gitattributes_to_file_svn_when_tools_exist() {
+fn dcommit_filters_invalid_svn_properties_from_gitattributes_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
         Err(SvnToolPolicy::Skip(message)) => {
@@ -352,7 +352,7 @@ fn dcommit_writes_svn_properties_from_gitattributes_to_file_svn_when_tools_exist
 
     std::fs::write(
         work.join(".gitattributes"),
-        "*.txt svn-properties=svn:eol-style=LF\n",
+        "*.txt svn-properties=svn:eol-style=LF;svn:keywords=Id;;missing;=ignored;svn:mime-type=; svn:eol-style=CRLF\n",
     )
     .unwrap();
     std::fs::write(work.join("notes.txt"), "one\ntwo\n").unwrap();
@@ -387,7 +387,16 @@ fn dcommit_writes_svn_properties_from_gitattributes_to_file_svn_when_tools_exist
             "svn:eol-style",
             &format!("{}/trunk/notes.txt", fixture.url())
         ]),
-        "LF"
+        "CRLF"
+    );
+    assert_eq!(
+        svn_stdout(&[
+            "propget",
+            "--strict",
+            "svn:keywords",
+            &format!("{}/trunk/notes.txt", fixture.url())
+        ]),
+        "Id"
     );
 }
 
