@@ -13,8 +13,9 @@ pub fn run_in_work_tree(
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
     let git_dir = tracked.git.git_dir()?;
+    let object_format = tracked.git.object_format()?;
     if let Some(revision) = parse_revision(&args.rev_or_commit) {
-        let records = all_rev_map_records(&tracked.git.work_tree().join(&git_dir))?;
+        let records = all_rev_map_records(&tracked.git.work_tree().join(&git_dir), object_format)?;
         let record = if args.before {
             records.into_iter().rfind(|r| r.revision <= revision)
         } else if args.after {
@@ -33,7 +34,7 @@ pub fn run_in_work_tree(
     } else {
         let commit = tracked.git.rev_parse(&args.rev_or_commit)?;
         let commit = commit.trim();
-        let revision = all_rev_map_records(&tracked.git.work_tree().join(git_dir))?
+        let revision = all_rev_map_records(&tracked.git.work_tree().join(git_dir), object_format)?
             .into_iter()
             .find(|record| record.object_id_hex == commit)
             .map(|record| record.revision);
@@ -41,14 +42,17 @@ pub fn run_in_work_tree(
     }
 }
 
-fn all_rev_map_records(git_dir: &Path) -> Result<Vec<RevMapRecord>, String> {
+fn all_rev_map_records(
+    git_dir: &Path,
+    object_format: ObjectFormat,
+) -> Result<Vec<RevMapRecord>, String> {
     let mut paths = Vec::new();
     collect_rev_map_paths(&git_dir.join("svn"), &mut paths)?;
     paths.sort();
 
     let mut records = Vec::new();
     for path in paths {
-        records.extend(RevMap::open(path, ObjectFormat::Sha1)?.records()?);
+        records.extend(RevMap::open(path, object_format)?.records()?);
     }
     records.sort_by_key(|record| record.revision);
     Ok(records)

@@ -31,6 +31,59 @@ fn find_rev_maps_git_commit_to_svn_revision() {
 }
 
 #[test]
+fn find_rev_supports_sha256_rev_maps_bidirectionally() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    git(work, ["init", "--object-format=sha256"]);
+    git(work, ["config", "user.name", "Test User"]);
+    git(work, ["config", "user.email", "test@example.com"]);
+    git(work, ["config", "svn-remote.svn.url", "mock://repo/trunk"]);
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            ":refs/remotes/git-svn",
+        ],
+    );
+    let commit = commit_file(
+        work,
+        "file.txt",
+        "content\n",
+        "message\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/git-svn", &commit]);
+
+    let rev_map_path = work
+        .join(".git")
+        .join("svn")
+        .join("git-svn")
+        .join(".rev_map.mock-uuid");
+    let mut rev_map = git_svn_rs_core::rev_map::RevMap::open(
+        rev_map_path,
+        git_svn_rs_core::rev_map::ObjectFormat::Sha256,
+    )
+    .unwrap();
+    rev_map.append(2, &commit).unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", "r2"])
+        .assert()
+        .success()
+        .stdout(format!("{commit}\n"));
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", &commit])
+        .assert()
+        .success()
+        .stdout("2\n");
+}
+
+#[test]
 fn find_rev_maps_branch_git_commit_to_svn_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();

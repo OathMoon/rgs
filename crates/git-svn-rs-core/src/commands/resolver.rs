@@ -4,7 +4,7 @@ use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
 use crate::mapping::{MappingKind, RefMapping};
 use crate::metadata::svn_metadata_dir;
-use crate::rev_map::{ObjectFormat, RevMap, RevMapRecord};
+use crate::rev_map::{RevMap, RevMapRecord};
 
 pub struct TrackedSvn {
     pub git: GitCli,
@@ -17,7 +17,7 @@ pub struct TrackedSvn {
 
 impl TrackedSvn {
     pub fn open_rev_map(&self) -> Result<RevMap, String> {
-        RevMap::open(&self.rev_map_path, ObjectFormat::Sha1)
+        RevMap::open(&self.rev_map_path, self.git.object_format()?)
     }
 
     pub fn records(&self) -> Result<Vec<RevMapRecord>, String> {
@@ -108,7 +108,7 @@ fn tracked_from_mapping(
 }
 
 fn rev_map_head_score(tracked: &TrackedSvn, head: &str) -> Result<Option<u32>, String> {
-    let rev_map = RevMap::open(&tracked.rev_map_path, ObjectFormat::Sha1)?;
+    let rev_map = RevMap::open(&tracked.rev_map_path, tracked.git.object_format()?)?;
     let records = rev_map.records()?;
     if records.iter().any(|record| record.object_id_hex == head) {
         return Ok(Some(u32::MAX));

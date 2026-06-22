@@ -97,6 +97,14 @@ impl GitCli {
         self.run_args(["rev-parse", rev])
     }
 
+    pub fn object_format(&self) -> Result<crate::rev_map::ObjectFormat, String> {
+        match self.run_args(["rev-parse", "--show-object-format"])?.trim() {
+            "sha1" => Ok(crate::rev_map::ObjectFormat::Sha1),
+            "sha256" => Ok(crate::rev_map::ObjectFormat::Sha256),
+            format => Err(format!("unsupported Git object format: {format}")),
+        }
+    }
+
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, String> {
         let output = Command::new("git")
             .current_dir(&self.work_tree)
