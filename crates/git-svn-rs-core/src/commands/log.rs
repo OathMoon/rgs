@@ -42,10 +42,7 @@ pub fn run_in_work_tree(
         if fields.len() != 4 {
             continue;
         }
-        let Some(id) = fields[3]
-            .lines()
-            .find_map(|line| GitSvnId::parse(line).ok())
-        else {
+        let Some((id, message)) = split_git_svn_footer(fields[3]) else {
             continue;
         };
         if revision_filter
@@ -57,7 +54,6 @@ pub fn run_in_work_tree(
         if args.limit.is_some_and(|limit| included >= limit) {
             break;
         }
-        let message = strip_git_svn_footer(fields[3]);
         let changed_paths = if args.verbose {
             tracked
                 .git
@@ -84,14 +80,17 @@ pub fn run_in_work_tree(
     Ok(out)
 }
 
-fn strip_git_svn_footer(message: &str) -> String {
-    message
-        .lines()
-        .filter(|line| GitSvnId::parse(line).is_err())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_end()
-        .to_string()
+fn split_git_svn_footer(message: &str) -> Option<(GitSvnId, String)> {
+    let mut lines = message.lines().collect::<Vec<_>>();
+    let footer_index = lines.iter().rposition(|line| !line.trim().is_empty())?;
+    let id = GitSvnId::parse(lines[footer_index]).ok()?;
+
+    lines.remove(footer_index);
+    if footer_index > 0 && lines[footer_index - 1].trim().is_empty() {
+        lines.remove(footer_index - 1);
+    }
+
+    Some((id, lines.join("\n")))
 }
 
 struct RevisionFilter {

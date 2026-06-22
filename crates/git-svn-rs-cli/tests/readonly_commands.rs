@@ -260,6 +260,65 @@ fn log_prints_svn_revisions_from_git_history() {
 }
 
 #[test]
+fn log_uses_only_final_nonempty_git_svn_id_line_as_footer() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let commit = commit_file(
+        work,
+        "file.txt",
+        "content\n",
+        "subject\n\ngit-svn-id: mock://repo/body@99 mock-uuid\n\nbody text\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map_for_short_ref(work, "git-svn", &[(2, &commit)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &commit]);
+
+    let output = Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .arg("log")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let output = String::from_utf8(output).unwrap();
+
+    assert!(output.contains("r2 |"), "{output}");
+    assert!(
+        output.contains("git-svn-id: mock://repo/body@99 mock-uuid"),
+        "{output}"
+    );
+    assert!(
+        !output.contains("git-svn-id: mock://repo/trunk@2 mock-uuid"),
+        "{output}"
+    );
+}
+
+#[test]
+fn log_skips_commit_when_final_nonempty_line_is_not_git_svn_id_footer() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let commit = commit_file(
+        work,
+        "file.txt",
+        "content\n",
+        "subject\n\ngit-svn-id: mock://repo/body@99 mock-uuid\n\nfinal body text",
+    );
+    write_rev_map_for_short_ref(work, "git-svn", &[(2, &commit)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &commit]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .arg("log")
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
 fn log_default_ends_with_svn_log_separator() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
