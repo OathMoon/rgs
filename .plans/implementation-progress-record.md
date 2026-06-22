@@ -1,4 +1,4 @@
-# git-svn-rs Implementation Progress Record - 2026-06-15
+# git-svn-rs Implementation Progress Record
 
 This document records the current execution state of the implementation plans in `.plans/`.
 It is intentionally condensed: it keeps the current handoff state, completed capabilities,
