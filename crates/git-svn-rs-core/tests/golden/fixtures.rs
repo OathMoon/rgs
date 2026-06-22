@@ -6,6 +6,7 @@ use git_svn_rs_core::cli::{
     CloneArgs, FindRevArgs, InfoArgs, LayoutArgs, LogArgs, RebaseArgs, ResetArgs, SharedFetchArgs,
 };
 use git_svn_rs_core::commands;
+use git_svn_rs_core::git_svn_id::GitSvnId;
 
 const PERL_GIT_SVN_REQUIRED: &str = "Perl git-svn is required";
 const SVN_TOOLS_REQUIRED: &str = "svnadmin and svn are required";
@@ -57,6 +58,15 @@ pub struct RevMapArtifactRecord {
     pub source_ref: String,
     pub revision: u32,
     pub has_commit: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RustStdlayoutRefArtifact {
+    pub source_ref: String,
+    pub url: String,
+    pub revision: u32,
+    pub uuid: String,
+    pub max_valid_rev_map_revision: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -242,6 +252,81 @@ pub fn require_golden_tools() -> Result<String, CompatDecision> {
             "skipping: {SVN_TOOLS_REQUIRED}"
         )))
     }
+}
+
+pub fn require_svn_tools() -> Result<(), CompatDecision> {
+    if has_svn_tools() {
+        Ok(())
+    } else if strict_compat() {
+        Err(CompatDecision::Fail(SVN_TOOLS_REQUIRED.to_string()))
+    } else {
+        Err(CompatDecision::Skip(format!(
+            "skipping: {SVN_TOOLS_REQUIRED}"
+        )))
+    }
+}
+
+pub fn run_rust_stdlayout_ref_artifacts(
+    root: impl AsRef<Path>,
+) -> Result<Vec<RustStdlayoutRefArtifact>, String> {
+    let root = root.as_ref();
+    let fixture = MaterializedSvnFixture::create(root)?;
+    let rust_path = root.join("rust-stdlayout-clone");
+    commands::clone::run(CloneArgs {
+        url: fixture.url(),
+        path: Some(path_arg(&rust_path)?.to_string()),
+        layout: LayoutArgs {
+            stdlayout: true,
+            trunk: None,
+            branches: Vec::new(),
+            tags: Vec::new(),
+            prefix: None,
+        },
+        shared: default_shared_fetch_args(),
+        no_checkout: false,
+    })?;
+
+    let refs = run_text(
+        &rust_path,
+        "git",
+        &["for-each-ref", "refs/remotes", "--format=%(refname)"],
+    )?
+    .lines()
+    .map(str::to_string)
+    .filter(|line| !line.ends_with("/HEAD"))
+    .collect::<Vec<_>>();
+    let rev_map = supported_rev_map(&rust_path, &refs)?;
+
+    refs.into_iter()
+        .map(|source_ref| {
+            let message = run_text(
+                &rust_path,
+                "git",
+                &["show", "-s", "--format=%B", &source_ref],
+            )?;
+            let footer = message
+                .lines()
+                .rev()
+                .find(|line| !line.trim().is_empty())
+                .ok_or_else(|| format!("missing tip message for {source_ref}"))?;
+            let id = GitSvnId::parse(footer)
+                .map_err(|error| format!("invalid tip git-svn-id for {source_ref}: {error}"))?;
+            let max_valid_rev_map_revision = rev_map
+                .iter()
+                .filter(|record| record.source_ref == source_ref && record.has_commit)
+                .map(|record| record.revision)
+                .max()
+                .ok_or_else(|| format!("missing populated rev-map record for {source_ref}"))?;
+
+            Ok(RustStdlayoutRefArtifact {
+                source_ref,
+                url: id.url,
+                revision: id.revision,
+                uuid: id.uuid,
+                max_valid_rev_map_revision,
+            })
+        })
+        .collect()
 }
 
 pub fn run_standard_trunk_golden_comparison(

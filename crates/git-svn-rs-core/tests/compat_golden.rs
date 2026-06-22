@@ -5,7 +5,8 @@ use golden_fixtures::{
     CompatDecision, FileModeArtifact, GoldenArtifactCapture, GoldenComparisonArtifacts,
     GoldenFixture, GoldenFixtureStep, RevMapArtifactRecord, ToolAvailability,
     compare_supported_subset, missing_perl_git_svn_policy, perl_git_svn_available,
-    require_golden_tools, run_standard_trunk_golden_comparison,
+    require_golden_tools, require_svn_tools, run_rust_stdlayout_ref_artifacts,
+    run_standard_trunk_golden_comparison,
 };
 
 #[test]
@@ -236,4 +237,41 @@ fn standard_trunk_fixture_matches_perl_git_svn_supported_subset() {
     let comparison = run_standard_trunk_golden_comparison(tmp.path()).unwrap();
 
     comparison.assert_supported_subset_matches().unwrap();
+}
+
+#[test]
+fn rust_stdlayout_golden_correlates_ref_tips_and_rev_maps() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-stdlayout-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let artifacts = run_rust_stdlayout_ref_artifacts(tmp.path()).unwrap();
+
+    let expected = [
+        ("refs/remotes/origin/main", "/branches/main", 4),
+        ("refs/remotes/origin/tags/v1", "/tags/v1", 5),
+        ("refs/remotes/origin/trunk", "/trunk", 6),
+    ];
+    assert_eq!(artifacts.len(), expected.len());
+    for (artifact, (source_ref, url_suffix, revision)) in artifacts.iter().zip(expected) {
+        assert_eq!(artifact.source_ref, source_ref);
+        assert!(artifact.url.ends_with(url_suffix), "{}", artifact.url);
+        assert_eq!(artifact.revision, revision);
+        assert_eq!(artifact.max_valid_rev_map_revision, revision);
+    }
+    assert!(!artifacts[0].uuid.is_empty());
+    assert!(
+        artifacts
+            .iter()
+            .all(|artifact| artifact.uuid == artifacts[0].uuid)
+    );
 }
