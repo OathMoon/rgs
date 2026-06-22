@@ -8,7 +8,7 @@ remaining scope, verification evidence, and useful commit anchors.
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `8c22aca test: cover incremental shown commit cli output`
+- Latest implementation commit: `7927615 test: correlate stdlayout golden ref artifacts`
 - Worktree before this progress-record refresh: clean
 - Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
 
@@ -36,6 +36,7 @@ Additional completed work since that batch includes:
 - Phase 6 follow-up `27b0893`: SVN-style log headers now use `1 line` for singular messages, count internal blank lines, and retain the one-line minimum for empty messages.
 - Phase 6 follow-ups `3b42f98` and `22ef18a`: normal and incremental `log --show-commit` output now places the Git commit in the SVN-style header, with formatter and SHA-1/SHA-256-aware CLI coverage.
 - Phase 6 follow-up `8c22aca`: incremental `log --show-commit` now also has command-level coverage for the commit-bearing header and omitted separator.
+- Phase 6 follow-ups `7c8bf7a` and `12b842e`: `log` now recognizes only the final non-empty `git-svn-id` footer, preserves footer-like body lines, and removes metadata without rebuilding or normalizing the remaining message line endings.
 - `find-rev` scans all SVN rev_maps, allowing branch/tag-only revisions and commits to resolve in multi-ref layouts.
 - `info --url` resolves tracked SVN URLs through fetch mappings and can use the current `HEAD` or closest tracked ancestor in multi-ref layouts.
 - Local `file://` `dcommit` now writes adds, deletes, type changes, executable property changes, symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected `.gitattributes`-driven SVN properties.
@@ -49,6 +50,7 @@ Additional completed work since that batch includes:
 - Phase 8 follow-up: golden config artifacts now include `svn-remote.svn.uuid` alongside URL and fetch mappings.
 - Phase 8 follow-up: golden rev_map artifacts now preserve zero-commit records instead of dropping them, allowing placeholder/trailing rev_map slots to be compared.
 - Phase 8 follow-up `2241af4`: golden rev_map records now retain their normalized logical source refs across Perl and Rust metadata directory layouts, preventing records from different refs from being flattened together.
+- Phase 8 follow-up `7927615`: a Rust-only stdlayout golden scenario now correlates each tracked ref tip footer with the matching source-ref rev_map and validates trunk, branch, and tag revisions without requiring Perl git-svn.
 - Phase 8 follow-up: the declarative golden fixture manifest now records the `svn:executable` and `svn:special` property intent used by the materialized fixture.
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including a manual strict compatibility mode.
 
@@ -156,6 +158,7 @@ Key outcomes:
 - Rev_map artifact capture now includes records from all discovered rev_map files under `.git/svn`, improving coverage for future multi-ref Perl-vs-Rust comparisons.
 - Rev_map artifact capture preserves both populated and all-zero commit records.
 - Rev_map artifact capture associates each record with a canonical `refs/remotes/*` source and rejects unmatched or ambiguous metadata paths.
+- Rust stdlayout artifact coverage binds trunk, branch, and tag ref tips to their parsed `git-svn-id` values and maximum populated rev_map revisions.
 - Config artifact capture now includes the SVN remote UUID for stricter metadata comparison.
 - The standard fixture manifest records the executable and special-link SVN properties explicitly, not just the affected file contents.
 - Perl git-svn detection was tightened so the `git-svn-rs` shim is not mistaken for a valid Perl comparison backend.
@@ -227,8 +230,9 @@ Latest recorded verification:
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (14 passed; Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test log_formatter` (5 passed)
 - `cargo test -p git-svn-rs-core --test log_formatter` (7 passed)
-- `cargo test -p git-svn-rs --test readonly_commands` (31 passed)
+- `cargo test -p git-svn-rs --test readonly_commands` (33 passed)
 - `cargo test -p git-svn-rs --test dcommit_linear` (24 passed)
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (15 passed; Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo test -p git-svn-rs-core --test svn_fixture -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 
