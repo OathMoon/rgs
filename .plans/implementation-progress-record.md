@@ -8,7 +8,7 @@ remaining scope, verification evidence, and useful commit anchors.
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `7927615 test: correlate stdlayout golden ref artifacts`
+- Latest implementation commit: `0cb0da7 fix: resolve sha256 rev maps`
 - Worktree before this progress-record refresh: clean
 - Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
 
@@ -37,6 +37,7 @@ Additional completed work since that batch includes:
 - Phase 6 follow-ups `3b42f98` and `22ef18a`: normal and incremental `log --show-commit` output now places the Git commit in the SVN-style header, with formatter and SHA-1/SHA-256-aware CLI coverage.
 - Phase 6 follow-up `8c22aca`: incremental `log --show-commit` now also has command-level coverage for the commit-bearing header and omitted separator.
 - Phase 6 follow-ups `7c8bf7a` and `12b842e`: `log` now recognizes only the final non-empty `git-svn-id` footer, preserves footer-like body lines, and removes metadata without rebuilding or normalizing the remaining message line endings.
+- Phase 6 follow-up `0cb0da7`: tracked SVN resolution and `find-rev` now detect the repository Git object format and decode SHA-1 or SHA-256 rev_maps accordingly, with bidirectional SHA-256 command coverage.
 - `find-rev` scans all SVN rev_maps, allowing branch/tag-only revisions and commits to resolve in multi-ref layouts.
 - `info --url` resolves tracked SVN URLs through fetch mappings and can use the current `HEAD` or closest tracked ancestor in multi-ref layouts.
 - Local `file://` `dcommit` now writes adds, deletes, type changes, executable property changes, symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected `.gitattributes`-driven SVN properties.
@@ -170,6 +171,7 @@ Key outcomes:
 
 - Implement the real `svn-libsvn` backend.
 - Complete deeper auth/libsvn integration.
+- The latest local attempt could resolve crates.io metadata but repeatedly timed out downloading the transitive `bindgen` dependency; no unverified libsvn changes were retained.
 
 ### Phase 5
 
@@ -198,6 +200,12 @@ Key outcomes:
 
 Latest recorded verification:
 
+- `cargo test -p git-svn-rs --test readonly_commands find_rev_supports_sha256_rev_maps_bidirectionally -- --nocapture`
+- `cargo test -p git-svn-rs --test readonly_commands` (34 passed)
+- `cargo test -p git-svn-rs-core --test git_backend` (6 passed)
+- `cargo test -p git-svn-rs-core --features svn-libsvn`
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings` (blocked by pre-existing `collapsible_if` warning in `commands/dcommit.rs`)
 - `cargo test -p git-svn-rs-core --test cli_parse parses_log_git_log_passthrough_args`
 - `cargo test -p git-svn-rs-core --test cli_parse find_rev_before_and_after_conflict`
 - `cargo test -p git-svn-rs-core --test cli_parse`
@@ -257,7 +265,6 @@ Notable targeted suites that have passed during this work:
 
 ## Recommended Next Steps
 
-1. Commit this progress-record cleanup separately if the condensed handoff format is acceptable.
-2. Continue Phase 4/7 production backend work: real `svn-libsvn` integration and remote SVN write-back.
-3. Expand strict compatibility runs in environments with real Perl git-svn, SVN CLI, and `svnserve` available.
-4. Add remaining golden edge cases around remote layouts, refs/config metadata, rev_map records, command output, and property behavior.
+1. Retry Phase 4/7 production backend work in an environment that can fetch the libsvn binding dependency tree and provides libsvn/APR development libraries.
+2. Expand strict compatibility runs in environments with real Perl git-svn, SVN CLI, and `svnserve` available.
+3. Add remaining golden edge cases around remote layouts, refs/config metadata, rev_map records, command output, and property behavior.
