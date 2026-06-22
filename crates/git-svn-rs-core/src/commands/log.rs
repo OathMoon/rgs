@@ -81,16 +81,31 @@ pub fn run_in_work_tree(
 }
 
 fn split_git_svn_footer(message: &str) -> Option<(GitSvnId, String)> {
-    let mut lines = message.lines().collect::<Vec<_>>();
-    let footer_index = lines.iter().rposition(|line| !line.trim().is_empty())?;
-    let id = GitSvnId::parse(lines[footer_index]).ok()?;
+    let footer_end = message.trim_end_matches(char::is_whitespace).len();
+    let footer_start = message[..footer_end]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    let id = GitSvnId::parse(&message[footer_start..footer_end]).ok()?;
 
-    lines.remove(footer_index);
-    if footer_index > 0 && lines[footer_index - 1].trim().is_empty() {
-        lines.remove(footer_index - 1);
+    let mut message_end = line_ending_start_before(message, footer_start).unwrap_or(footer_start);
+    let preceding_line_start = message[..message_end]
+        .rfind('\n')
+        .map_or(0, |index| index + 1);
+    if message[preceding_line_start..message_end].trim().is_empty() {
+        message_end = line_ending_start_before(message, preceding_line_start).unwrap_or(0);
     }
 
-    Some((id, lines.join("\n")))
+    Some((id, message[..message_end].to_string()))
+}
+
+fn line_ending_start_before(message: &str, end: usize) -> Option<usize> {
+    if message[..end].ends_with("\r\n") {
+        Some(end - 2)
+    } else if message[..end].ends_with('\n') {
+        Some(end - 1)
+    } else {
+        None
+    }
 }
 
 struct RevisionFilter {
@@ -133,4 +148,41 @@ fn parse_revision(value: &str) -> Result<u32, String> {
     revision
         .parse::<u32>()
         .map_err(|_| format!("invalid SVN revision: {value}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_git_svn_footer;
+
+    const FOOTER: &str = "git-svn-id: mock://repo/trunk@2 mock-uuid";
+
+    #[test]
+    fn footer_split_preserves_crlf_body() {
+        let (_, message) =
+            split_git_svn_footer(&format!("subject\r\n\r\nbody\r\n\r\n{FOOTER}\r\n")).unwrap();
+
+        assert_eq!(message, "subject\r\n\r\nbody");
+    }
+
+    #[test]
+    fn footer_split_handles_footer_only_message() {
+        let (id, message) = split_git_svn_footer(FOOTER).unwrap();
+
+        assert_eq!(id.revision, 2);
+        assert_eq!(message, "");
+    }
+
+    #[test]
+    fn footer_split_ignores_all_whitespace_after_footer() {
+        let (_, message) = split_git_svn_footer(&format!("subject\n\n{FOOTER}\n \n\t\n")).unwrap();
+
+        assert_eq!(message, "subject");
+    }
+
+    #[test]
+    fn footer_split_removes_only_one_of_multiple_preceding_blank_lines() {
+        let (_, message) = split_git_svn_footer(&format!("subject\n\n\n{FOOTER}")).unwrap();
+
+        assert_eq!(message, "subject\n");
+    }
 }
