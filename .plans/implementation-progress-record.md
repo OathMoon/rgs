@@ -8,7 +8,7 @@ remaining scope, verification evidence, and useful commit anchors.
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `d92819a fix: satisfy dcommit clippy lint`
+- Latest implementation commit: `7424b18 test: compare golden rev map byte lengths`
 - Worktree before this progress-record refresh: clean
 - Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
 
@@ -54,6 +54,7 @@ Additional completed work since that batch includes:
 - Phase 8 follow-up: golden rev_map artifacts now preserve zero-commit records instead of dropping them, allowing placeholder/trailing rev_map slots to be compared.
 - Phase 8 follow-up `2241af4`: golden rev_map records now retain their normalized logical source refs across Perl and Rust metadata directory layouts, preventing records from different refs from being flattened together.
 - Phase 8 follow-up `7927615`: a Rust-only stdlayout golden scenario now correlates each tracked ref tip footer with the matching source-ref rev_map and validates trunk, branch, and tag revisions without requiring Perl git-svn.
+- Phase 8 follow-up `7424b18`: golden artifact capture now records and compares raw `.rev_map` byte lengths per source ref, preserving file-size compatibility alongside parsed revision records.
 - Phase 8 follow-up: the declarative golden fixture manifest now records the `svn:executable` and `svn:special` property intent used by the materialized fixture.
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including a manual strict compatibility mode.
 
@@ -202,6 +203,10 @@ Key outcomes:
 
 Latest recorded verification:
 
+- `cargo test -p git-svn-rs-core --test compat_golden artifact_comparison_reports_supported_subset_mismatches -- --nocapture`
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (15 passed; Perl comparison skipped when Perl git-svn was unavailable)
+- `cargo fmt --check`
+- `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo fmt --check`
 - `cargo test -p git-svn-rs --test dcommit_linear dcommit_filters_invalid_svn_properties_from_gitattributes_when_tools_exist -- --nocapture`
 - `cargo test -p git-svn-rs-core --test dcommit_diff_planner` (3 passed)
