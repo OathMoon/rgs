@@ -56,6 +56,7 @@ Additional completed work since that batch includes:
 - Phase 8 follow-up `7927615`: a Rust-only stdlayout golden scenario now correlates each tracked ref tip footer with the matching source-ref rev_map and validates trunk, branch, and tag revisions without requiring Perl git-svn.
 - Phase 8 follow-up `7424b18`: golden artifact capture now records and compares raw `.rev_map` byte lengths per source ref, preserving file-size compatibility alongside parsed revision records.
 - Phase 8 follow-up: the declarative golden fixture manifest now records the `svn:executable` and `svn:special` property intent used by the materialized fixture.
+- Verification follow-up: `scripts/verify.ps1` passes when allowed enough runtime; a prior shorter tool timeout interrupted `cargo test --workspace` and produced a transient BrokenPipe.
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including a manual strict compatibility mode.
 
 ## Committed Completed Work
@@ -203,6 +204,8 @@ Key outcomes:
 
 Latest recorded verification:
 
+- `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`
+- `cargo test --workspace` (rerun separately after a shorter tool timeout; passed)
 - `cargo test -p git-svn-rs-core --test compat_golden artifact_comparison_reports_supported_subset_mismatches -- --nocapture`
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (15 passed; Perl comparison skipped when Perl git-svn was unavailable)
 - `cargo fmt --check`
