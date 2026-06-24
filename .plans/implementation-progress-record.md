@@ -8,7 +8,7 @@ remaining scope, verification evidence, and useful commit anchors.
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `edb9161 fix: support sha256 import rev maps`
+- Latest implementation commit: `d92819a fix: satisfy dcommit clippy lint`
 - Worktree before this progress-record refresh: clean
 - Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
 
@@ -39,6 +39,7 @@ Additional completed work since that batch includes:
 - Phase 6 follow-ups `7c8bf7a` and `12b842e`: `log` now recognizes only the final non-empty `git-svn-id` footer, preserves footer-like body lines, and removes metadata without rebuilding or normalizing the remaining message line endings.
 - Phase 6 follow-up `0cb0da7`: tracked SVN resolution and `find-rev` now detect the repository Git object format and decode SHA-1 or SHA-256 rev_maps accordingly, with bidirectional SHA-256 command coverage.
 - Phase 5/6 follow-up `edb9161`: mock/SVN import and fetch next-revision detection now use the repository Git object format when reading and writing rev_maps, with SHA-256 import and repeated-fetch coverage.
+- Phase 7 follow-up `d92819a`: the dcommit SVN property parser was mechanically adjusted to satisfy the Rust 1.95 clippy `collapsible_if` lint, restoring the full `cargo clippy --all-targets --all-features -- -D warnings` gate.
 - `find-rev` scans all SVN rev_maps, allowing branch/tag-only revisions and commits to resolve in multi-ref layouts.
 - `info --url` resolves tracked SVN URLs through fetch mappings and can use the current `HEAD` or closest tracked ancestor in multi-ref layouts.
 - Local `file://` `dcommit` now writes adds, deletes, type changes, executable property changes, symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected `.gitattributes`-driven SVN properties.
@@ -201,6 +202,10 @@ Key outcomes:
 
 Latest recorded verification:
 
+- `cargo fmt --check`
+- `cargo test -p git-svn-rs --test dcommit_linear dcommit_filters_invalid_svn_properties_from_gitattributes_when_tools_exist -- --nocapture`
+- `cargo test -p git-svn-rs-core --test dcommit_diff_planner` (3 passed)
+- `cargo clippy --all-targets --all-features -- -D warnings`
 - `cargo test -p git-svn-rs-core --test import_mock imports_mock_revisions_into_sha256_git_repo -- --nocapture`
 - `cargo test -p git-svn-rs --test clone_fetch_smoke fetch_after_import_detects_sha256_rev_map -- --nocapture`
 - `cargo test -p git-svn-rs-core --test import_mock -- --nocapture` (3 passed)
@@ -213,7 +218,6 @@ Latest recorded verification:
 - `cargo test -p git-svn-rs-core --test git_backend` (6 passed)
 - `cargo test -p git-svn-rs-core --features svn-libsvn`
 - `cargo fmt --check`
-- `cargo clippy --all-targets --all-features -- -D warnings` (blocked by pre-existing `collapsible_if` warning in `commands/dcommit.rs`)
 - `cargo test -p git-svn-rs-core --test cli_parse parses_log_git_log_passthrough_args`
 - `cargo test -p git-svn-rs-core --test cli_parse find_rev_before_and_after_conflict`
 - `cargo test -p git-svn-rs-core --test cli_parse`
