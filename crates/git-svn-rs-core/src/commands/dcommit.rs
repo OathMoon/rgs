@@ -400,10 +400,11 @@ fn svn_file_attributes_for_path(
     }
     if let Some((order, value)) = svn_properties {
         for property in value.split(';').filter(|property| !property.is_empty()) {
-            if let Some((name, value)) = property.split_once('=') {
-                if !name.is_empty() && !value.is_empty() {
-                    property_operations.push((order, name, value));
-                }
+            if let Some((name, value)) = property.split_once('=')
+                && !name.is_empty()
+                && !value.is_empty()
+            {
+                property_operations.push((order, name, value));
             }
         }
     }
