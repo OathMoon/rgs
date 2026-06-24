@@ -61,6 +61,12 @@ pub struct RevMapArtifactRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RevMapByteLengthArtifact {
+    pub source_ref: String,
+    pub byte_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RustStdlayoutRefArtifact {
     pub source_ref: String,
     pub url: String,
@@ -81,6 +87,7 @@ pub struct GoldenComparisonArtifacts {
     pub refs: Vec<String>,
     pub git_svn_id_footers: Vec<String>,
     pub rev_map: Vec<RevMapArtifactRecord>,
+    pub rev_map_byte_lengths: Vec<RevMapByteLengthArtifact>,
     pub file_modes: Vec<FileModeArtifact>,
     pub tree_contents: Vec<String>,
     pub empty_dir_placeholders: Vec<String>,
@@ -366,6 +373,10 @@ pub fn run_standard_trunk_golden_comparison(
         &perl.git_svn_id_footers.join("\n"),
     )?;
     capture.write_text("perl/rev-map.txt", &format_rev_map(&perl.rev_map))?;
+    capture.write_text(
+        "perl/rev-map-byte-lengths.txt",
+        &format_rev_map_byte_lengths(&perl.rev_map_byte_lengths),
+    )?;
     capture.write_text("perl/file-modes.txt", &format_file_modes(&perl.file_modes))?;
     capture.write_text("perl/tree-contents.txt", &perl.tree_contents.join("\n"))?;
     capture.write_text(
@@ -415,6 +426,10 @@ pub fn run_standard_trunk_golden_comparison(
         &rust.git_svn_id_footers.join("\n"),
     )?;
     capture.write_text("rust/rev-map.txt", &format_rev_map(&rust.rev_map))?;
+    capture.write_text(
+        "rust/rev-map-byte-lengths.txt",
+        &format_rev_map_byte_lengths(&rust.rev_map_byte_lengths),
+    )?;
     capture.write_text("rust/file-modes.txt", &format_file_modes(&rust.file_modes))?;
     capture.write_text("rust/tree-contents.txt", &rust.tree_contents.join("\n"))?;
     capture.write_text(
@@ -471,6 +486,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "rev_map records differ\nperl: {:?}\nrust: {:?}",
             perl.rev_map, rust.rev_map
+        ));
+    }
+    if perl.rev_map_byte_lengths != rust.rev_map_byte_lengths {
+        mismatches.push(format!(
+            "rev_map byte lengths differ\nperl: {:?}\nrust: {:?}",
+            perl.rev_map_byte_lengths, rust.rev_map_byte_lengths
         ));
     }
     if perl.file_modes != rust.file_modes {
@@ -763,6 +784,7 @@ fn collect_supported_artifacts(
         .map(str::to_string)
         .collect::<Vec<_>>();
     let rev_map = supported_rev_map(work_tree, &refs)?;
+    let rev_map_byte_lengths = supported_rev_map_byte_lengths(work_tree, &refs)?;
     let file_modes = supported_file_modes(work_tree, rev)?;
     let tree_contents = supported_tree_contents(work_tree, rev, &file_modes)?;
     let empty_dir_placeholders = supported_empty_dir_placeholders(work_tree, rev)?;
@@ -791,6 +813,7 @@ fn collect_supported_artifacts(
         refs,
         git_svn_id_footers,
         rev_map,
+        rev_map_byte_lengths,
         file_modes,
         tree_contents,
         empty_dir_placeholders,
@@ -1435,6 +1458,29 @@ fn supported_rev_map(
     Ok(records)
 }
 
+fn supported_rev_map_byte_lengths(
+    work_tree: &Path,
+    refs: &[String],
+) -> Result<Vec<RevMapByteLengthArtifact>, String> {
+    let svn_dir = work_tree.join(".git").join("svn");
+    let mut paths = Vec::new();
+    collect_rev_map_paths(&svn_dir, &mut paths)?;
+    paths.sort();
+    if paths.is_empty() {
+        return Err(format!("missing .rev_map under {}", svn_dir.display()));
+    }
+
+    let mut lengths = Vec::new();
+    for path in paths {
+        lengths.push(RevMapByteLengthArtifact {
+            source_ref: rev_map_source_ref(&svn_dir, &path, refs)?,
+            byte_len: fs::metadata(&path).map_err(|e| e.to_string())?.len() as usize,
+        });
+    }
+    lengths.sort_by(|left, right| left.source_ref.cmp(&right.source_ref));
+    Ok(lengths)
+}
+
 fn rev_map_source_ref(svn_dir: &Path, rev_map: &Path, refs: &[String]) -> Result<String, String> {
     let metadata_dir = rev_map
         .parent()
@@ -1539,6 +1585,14 @@ fn format_rev_map(records: &[RevMapArtifactRecord]) -> String {
                 record.source_ref, record.revision, record.has_commit
             )
         })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_rev_map_byte_lengths(records: &[RevMapByteLengthArtifact]) -> String {
+    records
+        .iter()
+        .map(|record| format!("{} {}", record.source_ref, record.byte_len))
         .collect::<Vec<_>>()
         .join("\n")
 }

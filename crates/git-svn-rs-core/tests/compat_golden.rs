@@ -3,10 +3,10 @@ mod golden_fixtures;
 
 use golden_fixtures::{
     CompatDecision, FileModeArtifact, GoldenArtifactCapture, GoldenComparisonArtifacts,
-    GoldenFixture, GoldenFixtureStep, RevMapArtifactRecord, ToolAvailability,
-    compare_supported_subset, missing_perl_git_svn_policy, perl_git_svn_available,
-    require_golden_tools, require_svn_tools, run_rust_stdlayout_ref_artifacts,
-    run_standard_trunk_golden_comparison,
+    GoldenFixture, GoldenFixtureStep, RevMapArtifactRecord, RevMapByteLengthArtifact,
+    ToolAvailability, compare_supported_subset, missing_perl_git_svn_policy,
+    perl_git_svn_available, require_golden_tools, require_svn_tools,
+    run_rust_stdlayout_ref_artifacts, run_standard_trunk_golden_comparison,
 };
 
 #[test]
@@ -131,6 +131,10 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             revision: 2,
             has_commit: true,
         }],
+        rev_map_byte_lengths: vec![RevMapByteLengthArtifact {
+            source_ref: "refs/remotes/origin/trunk".to_string(),
+            byte_len: 24,
+        }],
         file_modes: vec![FileModeArtifact {
             mode: "100755".to_string(),
             path: "run.sh".to_string(),
@@ -166,6 +170,10 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             revision: 2,
             has_commit: false,
         }],
+        rev_map_byte_lengths: vec![RevMapByteLengthArtifact {
+            source_ref: "refs/remotes/git-svn".to_string(),
+            byte_len: 48,
+        }],
         file_modes: vec![FileModeArtifact {
             mode: "100644".to_string(),
             path: "run.sh".to_string(),
@@ -196,6 +204,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("refs differ"));
     assert!(err.contains("git-svn-id footers differ"));
     assert!(err.contains("rev_map records differ"));
+    assert!(err.contains("rev_map byte lengths differ"));
     assert!(err.contains("file modes differ"));
     assert!(err.contains("tree contents differ"));
     assert!(err.contains("empty dir placeholders differ"));
