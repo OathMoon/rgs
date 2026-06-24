@@ -68,6 +68,40 @@ fn fetch_after_clone_is_a_noop_when_mock_rev_map_is_current() {
 }
 
 #[test]
+fn fetch_after_import_detects_sha256_rev_map() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["init", "--object-format=sha256"])
+        .unwrap();
+    git.run_for_test(["config", "svn-remote.svn.url", "mock://repo/trunk"])
+        .unwrap();
+    git.run_for_test([
+        "config",
+        "--add",
+        "svn-remote.svn.fetch",
+        ":refs/remotes/git-svn",
+    ])
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+}
+
+#[test]
 fn fetch_all_imports_every_configured_svn_remote() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");

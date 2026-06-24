@@ -51,6 +51,35 @@ fn imports_mock_revisions_into_git_and_rev_map() {
 }
 
 #[test]
+fn imports_mock_revisions_into_sha256_git_repo() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.run_for_test(["init", "--object-format=sha256"])
+        .unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", revisions());
+    let config = SvnRemoteConfig::new("svn", "mock://repo/trunk", build_single_path(""));
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    let rev_map = RevMap::open(
+        dir.path().join(".git/svn/git-svn/.rev_map.mock-uuid"),
+        ObjectFormat::Sha256,
+    )
+    .unwrap();
+    let record = rev_map.get(2).unwrap().unwrap();
+    assert_eq!(record.len(), 64);
+}
+
+#[test]
 fn branch_copy_import_uses_source_revision_as_parent() {
     let dir = tempdir().unwrap();
     let git = GitCli::new(dir.path());

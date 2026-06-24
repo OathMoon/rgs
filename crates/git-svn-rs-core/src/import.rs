@@ -9,7 +9,7 @@ use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::glob_spec::GlobSpec;
 use crate::mapping::RefMapping;
-use crate::rev_map::{ObjectFormat, RevMap};
+use crate::rev_map::RevMap;
 use crate::svn::{ChangeAction, NodeKind, RevisionEvent, SvnBackend};
 use fancy_regex::Regex;
 
@@ -172,7 +172,7 @@ fn copy_from_parent_ref(
         if !path.exists() {
             continue;
         }
-        if let Some(commit) = RevMap::open(path, ObjectFormat::Sha1)?.get(source_revision)? {
+        if let Some(commit) = RevMap::open(path, git.object_format()?)?.get(source_revision)? {
             return Ok(Some(commit));
         }
     }
@@ -181,7 +181,7 @@ fn copy_from_parent_ref(
 }
 
 fn max_imported_revision(git: &GitCli, refname: &str, uuid: &str) -> Result<u32, String> {
-    let rev_map = RevMap::open(rev_map_path(git, refname, uuid)?, ObjectFormat::Sha1)?;
+    let rev_map = RevMap::open(rev_map_path(git, refname, uuid)?, git.object_format()?)?;
     Ok(rev_map.max_revision(false)?.unwrap_or(0))
 }
 
@@ -543,7 +543,7 @@ fn write_rev_map(git: &GitCli, refname: &str, uuid: &str, revisions: &[u32]) -> 
         return Err("git rev-list did not return imported commits".to_string());
     }
 
-    let mut rev_map = RevMap::open(rev_map_path(git, refname, uuid)?, ObjectFormat::Sha1)?;
+    let mut rev_map = RevMap::open(rev_map_path(git, refname, uuid)?, git.object_format()?)?;
     for (revision, object_id) in revisions.iter().zip(object_ids) {
         rev_map.append(*revision, object_id)?;
     }

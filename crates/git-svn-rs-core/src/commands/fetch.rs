@@ -3,7 +3,7 @@ use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
 use crate::import::{ImportOptions, import_mock_revisions};
 use crate::mapping::{MappingKind, RefMapping};
-use crate::rev_map::{ObjectFormat, RevMap};
+use crate::rev_map::RevMap;
 use crate::svn::SvnBackend;
 use crate::svn::cli::SvnCliBackend;
 use crate::svn::mock::MockRaSession;
@@ -207,7 +207,7 @@ fn next_revision(git: &GitCli, config: &SvnRemoteConfig, uuid: &str) -> Result<u
         .join("svn")
         .join(short_ref)
         .join(format!(".rev_map.{uuid}"));
-    let rev_map = RevMap::open(rev_map_path, ObjectFormat::Sha1)?;
+    let rev_map = RevMap::open(rev_map_path, git.object_format()?)?;
     Ok(rev_map.max_revision(false)?.unwrap_or(0) + 1)
 }
 
