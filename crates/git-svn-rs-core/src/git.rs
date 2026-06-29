@@ -89,6 +89,14 @@ impl GitCli {
         }
     }
 
+    pub fn refs_under(&self, prefix: &str) -> Result<Vec<String>, String> {
+        Ok(self
+            .run_args(["for-each-ref", prefix, "--format=%(refname)"])?
+            .lines()
+            .map(str::to_string)
+            .collect())
+    }
+
     pub fn fast_import(&self, input: &[u8]) -> Result<(), String> {
         <Self as GitBackend>::fast_import(self, input)
     }

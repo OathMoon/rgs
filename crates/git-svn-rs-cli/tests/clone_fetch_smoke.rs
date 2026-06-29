@@ -102,6 +102,38 @@ fn fetch_after_import_detects_sha256_rev_map() {
 }
 
 #[test]
+fn fetch_accepts_leading_plus_refspec_from_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["init"]).unwrap();
+    git.run_for_test(["config", "svn-remote.svn.url", "mock://repo"])
+        .unwrap();
+    git.run_for_test([
+        "config",
+        "--add",
+        "svn-remote.svn.fetch",
+        "+trunk:refs/remotes/origin/trunk",
+    ])
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    assert!(
+        git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/origin/trunk"])
+            .unwrap()
+            .contains("git-svn-id: mock://repo/trunk@2 mock-uuid")
+    );
+}
+
+#[test]
 fn fetch_all_imports_every_configured_svn_remote() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");

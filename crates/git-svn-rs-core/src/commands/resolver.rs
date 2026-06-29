@@ -36,6 +36,7 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
         .fetch
         .first()
         .ok_or_else(|| "svn remote has no fetch mapping".to_string())?;
+    let mappings = tracked_candidate_mappings(&git, &config)?;
     let git_dir = git.git_dir()?;
     let git_metadata_dir = git.work_tree().join(git_dir);
     let head = git
@@ -45,7 +46,7 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
     let mut fallback = None;
     let mut best_ancestor: Option<(u32, TrackedSvn)> = None;
 
-    for mapping in &config.fetch {
+    for mapping in &mappings {
         let metadata_dir =
             svn_metadata_dir(&git_metadata_dir, &short_ref_for_metadata(&mapping.git_ref));
         let tracked = match tracked_from_mapping(&git, &config, mapping, &metadata_dir) {
@@ -125,17 +126,27 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
         .config_get(&format!("{prefix}.url"))?
         .ok_or_else(|| format!("missing {prefix}.url"))?;
     let fetch = git.config_get_all(&format!("{prefix}.fetch"))?;
+    let branches = git.config_get_all(&format!("{prefix}.branches"))?;
+    let tags = git.config_get_all(&format!("{prefix}.tags"))?;
     let mappings = fetch
         .into_iter()
-        .map(|value| parse_fetch_mapping(&value))
+        .map(|value| parse_mapping(&value, MappingKind::Fetch))
+        .collect::<Result<Vec<_>, _>>()?;
+    let branch_mappings = branches
+        .into_iter()
+        .map(|value| parse_mapping(&value, MappingKind::Branches))
+        .collect::<Result<Vec<_>, _>>()?;
+    let tag_mappings = tags
+        .into_iter()
+        .map(|value| parse_mapping(&value, MappingKind::Tags))
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(SvnRemoteConfig {
         name: remote.to_string(),
         url,
         fetch: mappings,
-        branches: Vec::new(),
-        tags: Vec::new(),
+        branches: branch_mappings,
+        tags: tag_mappings,
         ignore_paths: git.config_get(&format!("{prefix}.ignore-paths"))?,
         include_paths: git.config_get(&format!("{prefix}.include-paths"))?,
         ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
@@ -171,15 +182,48 @@ fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, Str
     })
 }
 
-fn parse_fetch_mapping(value: &str) -> Result<RefMapping, String> {
+fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
     let (svn_path, git_ref) = value
         .split_once(':')
         .ok_or_else(|| format!("invalid fetch mapping: {value}"))?;
     Ok(RefMapping {
-        kind: MappingKind::Fetch,
-        svn_path: svn_path.to_string(),
+        kind,
+        svn_path: svn_path.trim_start_matches('+').to_string(),
         git_ref: git_ref.to_string(),
     })
+}
+
+fn tracked_candidate_mappings(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+) -> Result<Vec<RefMapping>, String> {
+    let mut mappings = config.fetch.clone();
+    let refs = git.refs_under("refs/remotes")?;
+    for mapping in config.branches.iter().chain(config.tags.iter()) {
+        mappings.extend(expand_ref_mapping(mapping, &refs));
+    }
+    Ok(mappings)
+}
+
+fn expand_ref_mapping(mapping: &RefMapping, refs: &[String]) -> Vec<RefMapping> {
+    let Some((git_prefix, git_suffix)) = mapping.git_ref.split_once('*') else {
+        return vec![mapping.clone()];
+    };
+    let Some((svn_prefix, svn_suffix)) = mapping.svn_path.split_once('*') else {
+        return Vec::new();
+    };
+
+    refs.iter()
+        .filter(|refname| !refname.ends_with("/HEAD"))
+        .filter_map(|refname| {
+            let wildcard = refname.strip_prefix(git_prefix)?.strip_suffix(git_suffix)?;
+            Some(RefMapping {
+                kind: mapping.kind.clone(),
+                svn_path: format!("{svn_prefix}{wildcard}{svn_suffix}"),
+                git_ref: refname.clone(),
+            })
+        })
+        .collect()
 }
 
 fn find_rev_map(metadata_dir: &Path) -> Result<(String, PathBuf), String> {

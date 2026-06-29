@@ -186,7 +186,7 @@ fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
         .ok_or_else(|| format!("invalid fetch mapping: {value}"))?;
     Ok(RefMapping {
         kind,
-        svn_path: svn_path.to_string(),
+        svn_path: svn_path.trim_start_matches('+').to_string(),
         git_ref: git_ref.to_string(),
     })
 }

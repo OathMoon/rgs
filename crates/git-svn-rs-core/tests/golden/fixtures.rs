@@ -1393,13 +1393,14 @@ fn supported_empty_dir_placeholders(
 }
 
 fn supported_config(work_tree: &Path) -> Result<Vec<(String, String)>, String> {
-    let keys = [
+    let required_keys = [
         "svn-remote.svn.url",
         "svn-remote.svn.fetch",
         "svn-remote.svn.uuid",
     ];
+    let optional_keys = ["svn-remote.svn.branches", "svn-remote.svn.tags"];
     let mut config = Vec::new();
-    for key in keys {
+    for key in required_keys {
         let values = run_text(work_tree, "git", &["config", "--get-all", key])?;
         config.extend(values.lines().map(|value| {
             (
@@ -1408,12 +1409,45 @@ fn supported_config(work_tree: &Path) -> Result<Vec<(String, String)>, String> {
             )
         }));
     }
+    for key in optional_keys {
+        let output = Command::new("git")
+            .current_dir(work_tree)
+            .args(["config", "--get-all", key])
+            .output()
+            .map_err(|e| format!("git failed to start: {e}"))?;
+        config.extend(optional_config_values(key, output)?);
+    }
     config.sort();
     Ok(config)
 }
 
+fn optional_config_values(
+    key: &str,
+    output: std::process::Output,
+) -> Result<Vec<(String, String)>, String> {
+    if !output.status.success() {
+        if output.status.code() == Some(1) && output.stdout.is_empty() && output.stderr.is_empty() {
+            return Ok(Vec::new());
+        }
+        return Err(command_error("git", output));
+    }
+    let values = String::from_utf8_lossy(&output.stdout);
+    Ok(values
+        .lines()
+        .map(|value| {
+            (
+                key.to_string(),
+                normalize_config_value(key, value).to_string(),
+            )
+        })
+        .collect())
+}
+
 fn normalize_config_value<'a>(key: &str, value: &'a str) -> &'a str {
-    if key == "svn-remote.svn.fetch" {
+    if matches!(
+        key,
+        "svn-remote.svn.fetch" | "svn-remote.svn.branches" | "svn-remote.svn.tags"
+    ) {
         value.trim_start_matches('+')
     } else {
         value
@@ -1436,19 +1470,30 @@ fn supported_rev_map(
     for path in paths {
         let source_ref = rev_map_source_ref(&svn_dir, &path, refs)?;
         let bytes = fs::read(&path).map_err(|e| e.to_string())?;
-        if bytes.len() % 24 != 0 {
+        let record_size = rev_map_record_size(work_tree, bytes.len()).ok_or_else(|| {
+            format!(
+                "unsupported .rev_map size for {}: {}",
+                path.display(),
+                bytes.len()
+            )
+        })?;
+        if bytes.len() % record_size != 0 {
             return Err(format!(
-                "unsupported SHA-1 .rev_map size for {}: {}",
+                "unsupported .rev_map size for {}: {}",
                 path.display(),
                 bytes.len()
             ));
         }
 
-        records.extend(bytes.chunks_exact(24).map(|record| RevMapArtifactRecord {
-            source_ref: source_ref.clone(),
-            revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
-            has_commit: record[4..].iter().any(|byte| *byte != 0),
-        }));
+        records.extend(
+            bytes
+                .chunks_exact(record_size)
+                .map(|record| RevMapArtifactRecord {
+                    source_ref: source_ref.clone(),
+                    revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
+                    has_commit: record[4..].iter().any(|byte| *byte != 0),
+                }),
+        );
     }
     records.sort_by(|left, right| {
         left.source_ref
@@ -1456,6 +1501,29 @@ fn supported_rev_map(
             .then(left.revision.cmp(&right.revision))
     });
     Ok(records)
+}
+
+fn rev_map_record_size(work_tree: &Path, byte_len: usize) -> Option<usize> {
+    match git_object_format(work_tree).as_deref() {
+        Ok("sha1") if byte_len.is_multiple_of(24) => return Some(24),
+        Ok("sha256") if byte_len.is_multiple_of(36) => return Some(36),
+        _ => {}
+    }
+
+    if byte_len.is_multiple_of(24) && !byte_len.is_multiple_of(36) {
+        Some(24)
+    } else if byte_len.is_multiple_of(36) && !byte_len.is_multiple_of(24) {
+        Some(36)
+    } else if byte_len.is_multiple_of(24) {
+        Some(24)
+    } else {
+        None
+    }
+}
+
+fn git_object_format(work_tree: &Path) -> Result<String, String> {
+    run_text(work_tree, "git", &["rev-parse", "--show-object-format"])
+        .map(|format| format.trim().to_string())
 }
 
 fn supported_rev_map_byte_lengths(
@@ -1693,6 +1761,7 @@ fn file_url(path: &Path) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::process::Output;
 
     #[test]
     fn rejects_git_svn_rs_shim_as_perl_git_svn() {
@@ -1757,6 +1826,27 @@ mod tests {
     }
 
     #[test]
+    fn supported_rev_map_reads_sha256_records() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rev_map = tmp
+            .path()
+            .join(".git/svn/refs/remotes/git-svn/.rev_map.uuid");
+        write_sha256_rev_map_fixture(&rev_map, 5);
+        let refs = vec!["refs/remotes/git-svn".to_string()];
+
+        let records = supported_rev_map(tmp.path(), &refs).unwrap();
+
+        assert_eq!(
+            records,
+            vec![RevMapArtifactRecord {
+                source_ref: "refs/remotes/git-svn".to_string(),
+                revision: 5,
+                has_commit: true,
+            }]
+        );
+    }
+
+    #[test]
     fn format_rev_map_includes_source_ref() {
         let records = vec![RevMapArtifactRecord {
             source_ref: "refs/remotes/origin/trunk".to_string(),
@@ -1813,6 +1903,13 @@ mod tests {
         fs::write(path, bytes).unwrap();
     }
 
+    fn write_sha256_rev_map_fixture(path: &Path, revision: u32) {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let mut bytes = revision.to_be_bytes().to_vec();
+        bytes.extend([revision as u8; 32]);
+        fs::write(path, bytes).unwrap();
+    }
+
     #[test]
     fn supported_config_includes_svn_remote_uuid() {
         let tmp = tempfile::tempdir().unwrap();
@@ -1846,5 +1943,129 @@ mod tests {
             "svn-remote.svn.uuid".to_string(),
             "fixture-uuid".to_string()
         )));
+    }
+
+    #[test]
+    fn supported_config_includes_optional_branch_and_tag_mappings() {
+        let tmp = tempfile::tempdir().unwrap();
+        run(tmp.path(), "git", &["init"]).unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &["config", "svn-remote.svn.url", "file:///repo"],
+        )
+        .unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &[
+                "config",
+                "svn-remote.svn.fetch",
+                "+trunk:refs/remotes/origin/trunk",
+            ],
+        )
+        .unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &["config", "svn-remote.svn.uuid", "fixture-uuid"],
+        )
+        .unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &[
+                "config",
+                "--add",
+                "svn-remote.svn.branches",
+                "+branches/*:refs/remotes/origin/*",
+            ],
+        )
+        .unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &[
+                "config",
+                "--add",
+                "svn-remote.svn.tags",
+                "+tags/*:refs/remotes/origin/tags/*",
+            ],
+        )
+        .unwrap();
+
+        let config = supported_config(tmp.path()).unwrap();
+
+        assert_eq!(
+            config,
+            vec![
+                (
+                    "svn-remote.svn.branches".to_string(),
+                    "branches/*:refs/remotes/origin/*".to_string()
+                ),
+                (
+                    "svn-remote.svn.fetch".to_string(),
+                    "trunk:refs/remotes/origin/trunk".to_string()
+                ),
+                (
+                    "svn-remote.svn.tags".to_string(),
+                    "tags/*:refs/remotes/origin/tags/*".to_string()
+                ),
+                ("svn-remote.svn.url".to_string(), "file:///repo".to_string()),
+                (
+                    "svn-remote.svn.uuid".to_string(),
+                    "fixture-uuid".to_string()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn optional_config_values_only_skips_missing_key_status() {
+        let output = output_with_status(128, b"", b"fatal: bad config\n");
+
+        let error = optional_config_values("svn-remote.svn.branches", output).unwrap_err();
+
+        assert!(error.contains("fatal: bad config"), "{error}");
+    }
+
+    #[test]
+    fn optional_config_values_treats_missing_key_as_absent() {
+        let output = output_with_status(1, b"", b"");
+
+        let values = optional_config_values("svn-remote.svn.branches", output).unwrap();
+
+        assert!(values.is_empty());
+    }
+
+    #[test]
+    fn optional_config_values_reports_status_one_with_stderr() {
+        let output = output_with_status(1, b"", b"warning: config issue\n");
+
+        let error = optional_config_values("svn-remote.svn.branches", output).unwrap_err();
+
+        assert!(error.contains("warning: config issue"), "{error}");
+    }
+
+    #[cfg(windows)]
+    fn output_with_status(code: u32, stdout: &[u8], stderr: &[u8]) -> Output {
+        use std::os::windows::process::ExitStatusExt;
+
+        Output {
+            status: std::process::ExitStatus::from_raw(code),
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
+    }
+
+    #[cfg(unix)]
+    fn output_with_status(code: i32, stdout: &[u8], stderr: &[u8]) -> Output {
+        use std::os::unix::process::ExitStatusExt;
+
+        Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: stdout.to_vec(),
+            stderr: stderr.to_vec(),
+        }
     }
 }

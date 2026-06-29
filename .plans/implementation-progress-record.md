@@ -1,270 +1,99 @@
 # git-svn-rs Implementation Progress Record
 
-This document records the current execution state of the implementation plans in `.plans/`.
-It is intentionally condensed: it keeps the current handoff state, completed capabilities,
-remaining scope, verification evidence, and useful commit anchors.
+Condensed handoff record for continuing the `.plans/` implementation work. Keep this file focused on current state, important results, remaining scope, verification evidence, and commit anchors.
 
 ## Current State
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
 - Latest implementation commit: `7424b18 test: compare golden rev map byte lengths`
-- Worktree before this progress-record refresh: clean
-- Overall status: Phases 1-3 are complete; Phase 4/5 foundation and SVN CLI replay are substantially implemented; Phase 6 readonly commands are implemented for the supported local metadata/rev_map flows; Phase 7 has mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller Rust-vs-Perl coverage.
+- Worktree before this simplification: clean
+- Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
-## Recent Progress
+## Important Commit Anchors
 
-The previously pending Phase 4/5/8 follow-up batch was committed:
-
+- `7f531ee feat: add git-svn-rs cli surface`
+- `ab52ef1 feat: add config mapping and git metadata primitives`
+- `44ee04d feat: add svn abstractions and init import primitives`
+- `9d84910 feat: add mock fetch import and svn fixtures`
 - `97d4352 feat: extend svn fixture import coverage`
 - `d898981 feat: preserve svn executable mode in cli import`
 - `a3712d2 feat: preserve svn special links in cli import`
 - `cb30882 test: compare file modes in golden harness`
+- `4eaa751`, `3f44d65`, `a363864`, `27b0893`, `3b42f98`, `22ef18a`, `8c22aca`, `7c8bf7a`, `12b842e`, `0cb0da7`: Phase 6 readonly/log/find-rev compatibility hardening
+- `edb9161`: SHA-256 rev_map handling for import/fetch
+- `298dc66`, `1ad8bf2`, `7e769ad`: `.gitattributes` `svn-properties` dcommit behavior
+- `1461caf`, `2241af4`, `7927615`, `7424b18`: Phase 8 golden artifact and rev_map comparison hardening
+- `d92819a`: clippy compatibility fix for Rust 1.95
 
-Additional completed work since that batch includes:
+## Completed Capabilities
 
-- SVN CLI replay now preserves `svn:executable`, `svn:special` symlinks, deleted-path history lookups through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore path filters, ignored refs, revision ranges, authors mappings, rewritten metadata, and `--no-metadata`.
-- SVN CLI backend accepts `file://`, `svn://`, `svn+ssh://`, `http://`, and `https://` URL schemes; local `svn://` replay is covered through `svnserve` when available.
-- `clone`/`fetch` persist and honor key git-svn options including `--authors-file`, `--authors-prog`, `--log-window-size`, `--localtime`, `--username`, `--config-dir`, `--no-auth-cache`, `--rewrite-root`, `--rewrite-uuid`, `--ignore-refs`, `--ignore-paths`, `--include-paths`, `--preserve-empty-dirs`, and `--placeholder-filename`.
-- `fetch --fetch-all` enumerates configured `svn-remote.*.url` entries and fetches each SVN remote.
-- Incremental import anchors new commits to existing tracked refs, skips already imported mapping revisions, and uses SVN copy-from metadata as the first Git parent when possible.
-- Readonly command coverage expanded for `find-rev`, `info`, `info --url`, `log`, `log -v`, `log --incremental`, `log --oneline --show-commit`, `log --limit`, `log --revision`, `reset`, `rebase --dry-run`, and `gc`.
-- Phase 6 follow-up `4eaa751`: `git-svn-rs log` accepts trailing `git log` pass-through arguments such as pathspec filters (`git-svn-rs log --oneline -- path`), preserving existing git-svn formatting after Git history selection.
-- Phase 6 follow-up `3f44d65`: `git-svn-rs log --revision` now rejects invalid revision filters instead of silently treating them as no filter and printing unrelated history.
-- Phase 6 follow-up `a363864`: `git-svn-rs find-rev --before` and `--after` are now mutually exclusive at CLI parse time.
-- Phase 6 follow-up: default non-incremental `git-svn-rs log` output now emits the trailing SVN-style separator after the last entry.
-- Phase 6 follow-up `27b0893`: SVN-style log headers now use `1 line` for singular messages, count internal blank lines, and retain the one-line minimum for empty messages.
-- Phase 6 follow-ups `3b42f98` and `22ef18a`: normal and incremental `log --show-commit` output now places the Git commit in the SVN-style header, with formatter and SHA-1/SHA-256-aware CLI coverage.
-- Phase 6 follow-up `8c22aca`: incremental `log --show-commit` now also has command-level coverage for the commit-bearing header and omitted separator.
-- Phase 6 follow-ups `7c8bf7a` and `12b842e`: `log` now recognizes only the final non-empty `git-svn-id` footer, preserves footer-like body lines, and removes metadata without rebuilding or normalizing the remaining message line endings.
-- Phase 6 follow-up `0cb0da7`: tracked SVN resolution and `find-rev` now detect the repository Git object format and decode SHA-1 or SHA-256 rev_maps accordingly, with bidirectional SHA-256 command coverage.
-- Phase 5/6 follow-up `edb9161`: mock/SVN import and fetch next-revision detection now use the repository Git object format when reading and writing rev_maps, with SHA-256 import and repeated-fetch coverage.
-- Phase 7 follow-up `d92819a`: the dcommit SVN property parser was mechanically adjusted to satisfy the Rust 1.95 clippy `collapsible_if` lint, restoring the full `cargo clippy --all-targets --all-features -- -D warnings` gate.
-- `find-rev` scans all SVN rev_maps, allowing branch/tag-only revisions and commits to resolve in multi-ref layouts.
-- `info --url` resolves tracked SVN URLs through fetch mappings and can use the current `HEAD` or closest tracked ancestor in multi-ref layouts.
-- Local `file://` `dcommit` now writes adds, deletes, type changes, executable property changes, symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected `.gitattributes`-driven SVN properties.
-- `dcommit` default rebase behavior and `--no-rebase` behavior are covered for local `file://` write-back.
-- Phase 7 follow-ups `298dc66` and `1ad8bf2`: local `file://` dcommit now accepts upstream-style `svn-properties=name=value[;name=value...]` attributes, preserves later-rule overrides, and ignores malformed or empty property entries.
-- Phase 7 follow-up `7e769ad`: `svn-properties` follows final Git attribute state, so later container values replace earlier ones and `-svn-properties`/`!svn-properties` clear prior values without suppressing direct SVN attributes.
-- Golden compatibility artifacts now compare normalized tree modes, tree contents, symlink targets, empty-directory placeholders, clone output success, readonly command output, `log --oneline -- path`, `reset`, `rebase --dry-run`, and `gc`.
-- Phase 8 follow-up `1461caf`: golden compatibility capture now records and compares `log --oneline -- src/lib.rs` pathspec output for Perl-vs-Rust supported subsets.
-- Phase 8 follow-up: the standard golden fixture manifest and materialized SVN history now include an explicit empty directory before branch/tag copies, exercising the existing preserve-empty-dirs placeholder artifact comparison.
-- Phase 8 follow-up: golden rev_map artifact capture now reads every `.rev_map.*` under `.git/svn` instead of only the first sorted path, so multi-ref layouts can expose branch/tag rev_map differences.
-- Phase 8 follow-up: golden config artifacts now include `svn-remote.svn.uuid` alongside URL and fetch mappings.
-- Phase 8 follow-up: golden rev_map artifacts now preserve zero-commit records instead of dropping them, allowing placeholder/trailing rev_map slots to be compared.
-- Phase 8 follow-up `2241af4`: golden rev_map records now retain their normalized logical source refs across Perl and Rust metadata directory layouts, preventing records from different refs from being flattened together.
-- Phase 8 follow-up `7927615`: a Rust-only stdlayout golden scenario now correlates each tracked ref tip footer with the matching source-ref rev_map and validates trunk, branch, and tag revisions without requiring Perl git-svn.
-- Phase 8 follow-up `7424b18`: golden artifact capture now records and compares raw `.rev_map` byte lengths per source ref, preserving file-size compatibility alongside parsed revision records.
-- Phase 8 follow-up: the declarative golden fixture manifest now records the `svn:executable` and `svn:special` property intent used by the materialized fixture.
-- Verification follow-up: `scripts/verify.ps1` passes when allowed enough runtime; a prior shorter tool timeout interrupted `cargo test --workspace` and produced a transient BrokenPipe.
-- Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including a manual strict compatibility mode.
+### Phase 1: CLI Workspace
 
-## Committed Completed Work
-
-### Phase 1: Foundation CLI Workspace
-
-Status: completed and committed.
-
-Commit:
-
-- `7f531ee feat: add git-svn-rs cli surface`
-
-Key outcomes:
-
-- Created the Cargo workspace with `git-svn-rs` CLI and `git-svn-rs-core`.
-- Added typed CLI coverage for `init`, `clone`, `fetch`, `rebase`, `dcommit`, `log`, `info`, `find-rev`, `gc`, `reset`, `diagnose`, and explicit unsupported v1 commands.
-- Added CLI smoke tests and parsing tests.
+- Created the Rust workspace with `git-svn-rs` CLI, `git-svn-rs-core`, and the compatibility shim crate.
+- Added typed CLI parsing and coverage for `init`, `clone`, `fetch`, `rebase`, `dcommit`, `log`, `info`, `find-rev`, `gc`, `reset`, `diagnose`, and explicitly unsupported v1 commands.
 
 ### Phase 2: Config, Mapping, Authors, Filters
 
-Status: completed and committed.
-
-Commit:
-
-- `ab52ef1 feat: add config mapping and git metadata primitives`
-
-Key outcomes:
-
-- Added SVN remote config serialization, single-path and standard-layout mapping builders, URL/path helpers, authors file parsing, include/ignore filters, `.git` exclusion, and ignore-over-include precedence.
-- Added compatibility constraints for glob specs and review-requested coverage.
+- Added SVN remote config serialization, single-path and standard-layout mappings, URL/path helpers, authors file parsing, include/ignore filters, `.git` exclusion, and ignore-over-include precedence.
+- `clone`/`fetch` persist and honor key git-svn options including authors, auth/config, rewrite root/UUID, metadata, revision windows, ignored refs, path filters, empty-directory preservation, and placeholders.
 
 ### Phase 3: Git Metadata and RevMap
 
-Status: completed and committed.
+- Added `GitCli` basics, `git-svn-id` parsing/formatting, `.git/svn` metadata helpers, migration metadata inspection, and binary `.rev_map` read/write support for SHA-1 and SHA-256.
+- Added rev_map locking, reset/list behavior, `sync_all`, all-zero record handling, out-of-order append rejection, gitfile/commondir discovery, and object-format-aware rev_map decoding.
 
-Commit:
+### Phases 4/5: SVN Abstractions and Import Replay
 
-- `ab52ef1 feat: add config mapping and git metadata primitives`
-
-Key outcomes:
-
-- Added `GitCli` basics, `git-svn-id` parser/formatter, `.git/svn` metadata helpers, migration metadata inspection, and binary `.rev_map` read/write support for SHA-1 and SHA-256.
-- Added rev_map locking, reset/list behavior, `sync_all`, trailing all-zero record handling, out-of-order append rejection, and gitfile/commondir metadata discovery.
-
-### Phase 4/5: SVN Abstractions, Init, Fixtures, Import
-
-Status: foundation completed and committed; replay support continues through later commits.
-
-Important commits:
-
-- `44ee04d feat: add svn abstractions and init import primitives`
-- `9d84910 feat: add mock fetch import and svn fixtures`
-
-Key outcomes:
-
-- Added SVN domain types, mock backend, RA session/fetch editor traits, auth prompt mock, `svn-libsvn` feature shell, fast-import stream writer, and `git-svn-rs init`.
-- Added SVN CLI fixture builder with skip-by-default behavior and strict compatibility mode via `GIT_SVN_RS_STRICT_COMPAT=1`.
-- Added mock import planner, mock-only `clone`/`fetch`, `GitCli::fast_import`, and fetch editor planning for content, executable mode, symlink mode, copy, and delete.
-- Added real SVN CLI replay for supported URL schemes, with the strongest coverage currently around local `file://` and local `svn://` fixtures.
-
-### Phase 5: Replay and Import Compatibility
-
-Status: substantially implemented for local SVN CLI replay.
-
-Key outcomes:
-
-- Persisted and honored common git-svn configuration options for authors, auth/config, metadata rewriting, revision windows, filters, empty directories, and fetch-all.
-- Preserved executable files, symlinks, deleted historical paths, copied branch/tag history, empty-directory placeholders, and Git tree modes/content in replay output.
-- Added local `svnserve` coverage for `svn://` clone/fetch, including standard-layout branch/tag discovery, copy-from parent preservation, and empty-directory placeholders.
+- Added SVN domain types, mock backend, RA session/fetch editor traits, auth prompt mock, `svn-libsvn` feature shell, fast-import writer, and `git-svn-rs init`.
+- Added fixture builders and mock import/fetch planning for content, executable mode, symlink mode, copy, and delete.
+- SVN CLI replay supports `file://`, local `svn://`, `svn+ssh://`, `http://`, and `https://` URL schemes, with strongest coverage around local fixtures.
+- Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
+- `fetch --fetch-all` enumerates configured `svn-remote.*.url` entries.
 
 ### Phase 6: Readonly Commands
 
-Status: implemented for supported metadata/rev_map flows.
-
-Key outcomes:
-
-- Added tracked SVN resolution from `svn-remote.svn.*` config and `.git/svn/<ref>/.rev_map.<uuid>`.
-- Implemented `find-rev`, `info`, `info --url`, `log`, `gc`, `reset`, and `rebase` paths used by the current CLI/tests.
-- Added log formatting for oneline output, Git commit prefixes, incremental output, verbose changed paths, rename/copy detection, revision filtering, trailing non-incremental separators, and limit handling with SVN-style newest-first ordering.
-- Expanded resolver behavior so multi-ref layouts can resolve commits/revisions across branch/tag rev_maps.
+- Implemented supported flows for `find-rev`, `info`, `info --url`, `log`, `log -v`, `log --incremental`, `log --oneline --show-commit`, `log --limit`, `log --revision`, `reset`, `rebase --dry-run`, and `gc`.
+- Resolver behavior covers tracked SVN config, `.git/svn/<ref>/.rev_map.<uuid>`, multi-ref branch/tag layouts, current `HEAD`, and closest tracked ancestors.
+- Readonly resolver accepts Perl-style leading `+` in configured fetch refspecs when deriving tracked SVN URLs.
+- Readonly resolver expands configured `svn-remote.svn.branches`/`tags` wildcard mappings against existing remote refs when resolving the current tracked SVN URL.
+- Log output now handles pathspec pass-through, invalid revision rejection, mutually exclusive `find-rev --before/--after`, SVN-style separators, singular/plural line counts, `--show-commit`, final non-empty `git-svn-id` footer recognition, and message line-ending preservation.
 
 ### Phase 7: Dcommit, Shim, Windows Verification
 
-Status: local/mock write-back implemented; remote/libsvn write-back remains guarded.
-
-Key outcomes:
-
-- Added `dcommit` foundations: diff planner, commit editor, path ensurer, property mapper, mock commit backend extensions, and associated tests.
-- Implemented local `file://` SVN write-back for linear commits, add/modify/delete, type changes, executable/symlink property writes and removals, renames/copies with copy-from metadata, missing destination parent creation, explicit commit URLs, explicit mergeinfo, and selected `.gitattributes` SVN property mappings.
-- Added upstream-style `.gitattributes` `svn-properties=` parsing for multiple semicolon-separated SVN properties while retaining the existing direct property forms.
-- Added final-state handling for replacement, unset, and unspecified `svn-properties` attributes.
-- Added default post-dcommit rebase coverage and `--no-rebase` local write-back coverage.
-- Added the `git-svn` shim crate, forwarding behavior, shim smoke tests, `scripts/verify.ps1`, Windows workflow, and README verification/dependency notes.
+- Added dcommit diff planning, commit editor, path ensurer, property mapper, mock commit backend extensions, and tests.
+- Local `file://` dcommit writes linear commits, adds, deletes, type changes, executable/symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected SVN properties from `.gitattributes`.
+- Upstream-style `svn-properties=name=value[;name=value...]` attributes are parsed, later rules override earlier ones, malformed/empty entries are ignored, and `-svn-properties`/`!svn-properties` clear prior container values without suppressing direct SVN attributes.
+- Direct `.gitattributes` SVN property mapping now includes `svn:needs-lock` for local `file://` dcommit write-back.
+- Default post-dcommit rebase and `--no-rebase` behavior are covered for local write-back.
+- Added `git-svn` shim forwarding behavior, smoke tests, `scripts/verify.ps1`, Windows workflow, and strict compatibility mode wiring.
 
 ### Phase 8: Golden Compatibility
 
-Status: harness implemented and expanded; full strict Rust-vs-Perl compatibility remains future work.
-
-Key outcomes:
-
-- Added golden compatibility harness skeleton and normalized artifact comparisons.
-- Current artifacts cover tree modes/content, symlink targets, empty-directory placeholders, clone command success, `find-rev`, `info`, `info --url`, `log` variants, `rebase --dry-run`, `reset -rN`, and `gc`.
-- The standard golden fixture now creates `trunk/empty-dir` so empty-directory placeholder comparisons are backed by a concrete SVN history edge case.
-- Rev_map artifact capture now includes records from all discovered rev_map files under `.git/svn`, improving coverage for future multi-ref Perl-vs-Rust comparisons.
-- Rev_map artifact capture preserves both populated and all-zero commit records.
-- Rev_map artifact capture associates each record with a canonical `refs/remotes/*` source and rejects unmatched or ambiguous metadata paths.
-- Rust stdlayout artifact coverage binds trunk, branch, and tag ref tips to their parsed `git-svn-id` values and maximum populated rev_map revisions.
-- Config artifact capture now includes the SVN remote UUID for stricter metadata comparison.
-- The standard fixture manifest records the executable and special-link SVN properties explicitly, not just the affected file contents.
-- Perl git-svn detection was tightened so the `git-svn-rs` shim is not mistaken for a valid Perl comparison backend.
-- Manual Windows strict compatibility mode is available through the GitHub Actions `strict_compat` input.
+- Added golden compatibility harness and normalized artifact comparisons.
+- Current artifacts cover tree modes/content, symlink targets, empty-directory placeholders, clone success, readonly command output, `log --oneline -- path`, `reset`, `rebase --dry-run`, `gc`, config URL/fetch/UUID, and rev_map records.
+- Standard fixture now includes explicit executable and special-link property intent plus an empty directory before branch/tag copies.
+- Rev_map capture reads all `.rev_map.*` files under `.git/svn`, preserves zero-commit records, records raw byte lengths, keeps canonical logical source refs, and rejects unmatched or ambiguous metadata paths.
+- Golden rev_map capture accepts SHA-1 and SHA-256 record widths, preferring the repository object format when available.
+- Golden config artifact capture includes optional stdlayout branch and tag refspecs when present, with leading `+` normalized like fetch mappings.
+- Golden optional config lookup reports unexpected `git config` failures instead of treating every nonzero optional-key lookup as a missing key.
+- Rust-only stdlayout coverage validates trunk, branch, and tag ref tips against matching `git-svn-id` values and rev_map revisions.
+- Perl git-svn detection avoids mistaking the `git-svn-rs` shim for a Perl comparison backend.
 
 ## Remaining Work
 
-### Phase 4
+- Implement the real `svn-libsvn` backend and deeper auth/libsvn integration. A previous local attempt resolved crates.io metadata but timed out downloading `bindgen`; no unverified libsvn changes were retained.
+- Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://`, especially remote auth/service scenarios and full RA session integration.
+- Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` behavior against non-local SVN servers.
+- Complete the remaining planned `Log.pm` compatibility modes and more complex multi-ref/rev_map resolver cases.
+- Implement production remote SVN/libsvn dcommit write-back; current supported non-dry-run path is local `file://`, with remote write-back guarded.
+- Expand SVN property/autoprops support and add automatic mergeinfo generation if it remains in v1 scope.
+- Run and harden strict Rust-vs-Perl artifact comparisons where Perl git-svn, SVN CLI, and `svnserve` are available.
+- Add more golden scenarios for remote layouts, refs/config metadata, rev_map records, command output, properties, copies, deletes, symlinks, modes, empty dirs, and `git-svn-id` footers.
 
-- Implement the real `svn-libsvn` backend.
-- Complete deeper auth/libsvn integration.
-- The latest local attempt could resolve crates.io metadata but repeatedly timed out downloading the transitive `bindgen` dependency; no unverified libsvn changes were retained.
+## Verification Evidence
 
-### Phase 5
-
-- Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://` fixtures, especially remote auth/service scenarios.
-- Finish full RA session, `SvnFetchEditor`, fast-import, metadata, and rev_map integration for real remote SVN histories.
-- Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` compatibility against non-local SVN servers.
-
-### Phase 6
-
-- Complete all planned `Log.pm` compatibility modes.
-- Broaden resolver behavior for complex multi-ref layouts and rev_map discovery edge cases.
-
-### Phase 7
-
-- Implement production remote SVN/libsvn write-back.
-- Keep local `file://` dcommit as the current supported non-dry-run path; remote SVN/libsvn write-back is still guarded.
-- Add automatic mergeinfo generation if it enters v1 scope.
-- Expand SVN property/autoprops support beyond the current selected `.gitattributes` mappings.
-
-### Phase 8
-
-- Run and harden real Rust-vs-Perl artifact comparisons where Perl git-svn is available.
-- Add more edge-case golden scenarios for config, refs, log output, `git-svn-id` footers, rev_map records, file modes, symlinks, copies, deletes, empty dirs, and command output.
-
-## Verification Snapshot
-
-Latest recorded verification:
-
-- `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`
-- `cargo test --workspace` (rerun separately after a shorter tool timeout; passed)
-- `cargo test -p git-svn-rs-core --test compat_golden artifact_comparison_reports_supported_subset_mismatches -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (15 passed; Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo fmt --check`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo fmt --check`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_filters_invalid_svn_properties_from_gitattributes_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs-core --test dcommit_diff_planner` (3 passed)
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `cargo test -p git-svn-rs-core --test import_mock imports_mock_revisions_into_sha256_git_repo -- --nocapture`
-- `cargo test -p git-svn-rs --test clone_fetch_smoke fetch_after_import_detects_sha256_rev_map -- --nocapture`
-- `cargo test -p git-svn-rs-core --test import_mock -- --nocapture` (3 passed)
-- `cargo test -p git-svn-rs --test clone_fetch_smoke -- --nocapture` (5 passed)
-- `cargo test -p git-svn-rs-core --test git_backend` (6 passed)
-- `cargo test -p git-svn-rs-core --features svn-libsvn`
-- `cargo fmt --check`
-- `cargo test -p git-svn-rs --test readonly_commands find_rev_supports_sha256_rev_maps_bidirectionally -- --nocapture`
-- `cargo test -p git-svn-rs --test readonly_commands` (34 passed)
-- `cargo test -p git-svn-rs-core --test git_backend` (6 passed)
-- `cargo test -p git-svn-rs-core --features svn-libsvn`
-- `cargo fmt --check`
-- `cargo test -p git-svn-rs-core --test cli_parse parses_log_git_log_passthrough_args`
-- `cargo test -p git-svn-rs-core --test cli_parse find_rev_before_and_after_conflict`
-- `cargo test -p git-svn-rs-core --test cli_parse`
-- `cargo test -p git-svn-rs --test readonly_commands log_passes_pathspec_args_to_git_log`
-- `cargo test -p git-svn-rs --test readonly_commands log_invalid_revision_filter_fails`
-- `cargo test -p git-svn-rs-core --test compat_golden artifact_comparison_reports_supported_subset_mismatches`
-- `cargo test -p git-svn-rs --test readonly_commands`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture`
-- `cargo fmt --check`
-- `cargo test --workspace`
-- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`
-- `cargo test -p git-svn-rs-core --test import_mock`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden standard_fixture_manifest_is_deterministic`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_rev_map_collects_records_from_all_rev_maps`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_config_includes_svn_remote_uuid`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo test -p git-svn-rs --test readonly_commands log_default_ends_with_svn_log_separator`
-- `cargo test -p git-svn-rs --test readonly_commands log_incremental_omits_svn_log_separator`
-- `cargo test -p git-svn-rs-core --test log_formatter`
-- `cargo test -p git-svn-rs --test readonly_commands`
-- `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_rev_map_preserves_zero_records`
-- `cargo test -p git-svn-rs-core --test compat_golden golden_fixtures::tests::supported_rev_map_collects_records_from_all_rev_maps`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo test -p git-svn-rs-core --test compat_golden standard_fixture_manifest_records_svn_properties`
-- `cargo test -p git-svn-rs-core --test compat_golden standard_fixture_manifest_is_deterministic`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (14 passed; Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo test -p git-svn-rs-core --test log_formatter` (5 passed)
-- `cargo test -p git-svn-rs-core --test log_formatter` (7 passed)
-- `cargo test -p git-svn-rs --test readonly_commands` (33 passed)
-- `cargo test -p git-svn-rs --test dcommit_linear` (24 passed)
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (15 passed; Perl comparison skipped when Perl git-svn was unavailable)
-- `cargo test -p git-svn-rs-core --test svn_fixture -- --nocapture`
-- `cargo clippy --all-targets --all-features -- -D warnings`
-
-Full integration verification recorded after the larger Phase 5/6/7/8 batch:
+Latest full gates recorded as passing:
 
 - `cargo fmt --check`
 - `cargo test --workspace`
@@ -272,19 +101,31 @@ Full integration verification recorded after the larger Phase 5/6/7/8 batch:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`
 
-Notable targeted suites that have passed during this work:
+Important targeted suites recorded as passing during this work:
 
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands -- --nocapture`
+- `cargo test -p git-svn-rs --test readonly_commands info_url_resolves_branch_from_branches_mapping -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`
+- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_needs_lock_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
+- `cargo test -p git-svn-rs --test clone_fetch_smoke -- --nocapture`
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture`
+- `cargo test -p git-svn-rs-core --test compat_golden supported_rev_map_reads_sha256_records -- --nocapture`
+- `cargo test -p git-svn-rs-core --test compat_golden supported_config_includes_optional_branch_and_tag_mappings -- --nocapture`
+- `cargo test -p git-svn-rs-core --test compat_golden optional_config_values -- --nocapture`
 - `cargo test -p git-svn-rs-core --test import_mock -- --nocapture`
 - `cargo test -p git-svn-rs-core --test dcommit_diff_planner -- --nocapture`
 - `cargo test -p git-svn-rs-core --test git_backend -- --nocapture`
 - `cargo test -p git-svn-rs-core --test fast_import`
 
+Compatibility notes:
+
+- Perl comparisons skip when Perl git-svn is unavailable unless strict compatibility mode is enabled.
+- `scripts/verify.ps1` passes when allowed enough runtime; one earlier short tool timeout interrupted `cargo test --workspace` and produced a transient BrokenPipe.
+- Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including manual strict compatibility mode.
+
 ## Recommended Next Steps
 
-1. Retry Phase 4/7 production backend work in an environment that can fetch the libsvn binding dependency tree and provides libsvn/APR development libraries.
-2. Expand strict compatibility runs in environments with real Perl git-svn, SVN CLI, and `svnserve` available.
+1. Retry Phase 4/7 production backend work in an environment with libsvn/APR development libraries and reliable access to the libsvn binding dependency tree.
+2. Expand strict compatibility runs in environments with Perl git-svn, SVN CLI, and `svnserve`.
 3. Add remaining golden edge cases around remote layouts, refs/config metadata, rev_map records, command output, and property behavior.
