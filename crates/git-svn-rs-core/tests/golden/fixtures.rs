@@ -81,6 +81,13 @@ pub struct FileModeArtifact {
     pub path: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilePropertyArtifact {
+    pub path: String,
+    pub name: String,
+    pub value: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct GoldenComparisonArtifacts {
     pub config: Vec<(String, String)>,
@@ -89,6 +96,7 @@ pub struct GoldenComparisonArtifacts {
     pub rev_map: Vec<RevMapArtifactRecord>,
     pub rev_map_byte_lengths: Vec<RevMapByteLengthArtifact>,
     pub file_modes: Vec<FileModeArtifact>,
+    pub file_properties: Vec<FilePropertyArtifact>,
     pub tree_contents: Vec<String>,
     pub empty_dir_placeholders: Vec<String>,
     pub log_oneline: String,
@@ -378,6 +386,10 @@ pub fn run_standard_trunk_golden_comparison(
         &format_rev_map_byte_lengths(&perl.rev_map_byte_lengths),
     )?;
     capture.write_text("perl/file-modes.txt", &format_file_modes(&perl.file_modes))?;
+    capture.write_text(
+        "perl/file-properties.txt",
+        &format_file_properties(&perl.file_properties),
+    )?;
     capture.write_text("perl/tree-contents.txt", &perl.tree_contents.join("\n"))?;
     capture.write_text(
         "perl/empty-dir-placeholders.txt",
@@ -431,6 +443,10 @@ pub fn run_standard_trunk_golden_comparison(
         &format_rev_map_byte_lengths(&rust.rev_map_byte_lengths),
     )?;
     capture.write_text("rust/file-modes.txt", &format_file_modes(&rust.file_modes))?;
+    capture.write_text(
+        "rust/file-properties.txt",
+        &format_file_properties(&rust.file_properties),
+    )?;
     capture.write_text("rust/tree-contents.txt", &rust.tree_contents.join("\n"))?;
     capture.write_text(
         "rust/empty-dir-placeholders.txt",
@@ -498,6 +514,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "file modes differ\nperl: {:?}\nrust: {:?}",
             perl.file_modes, rust.file_modes
+        ));
+    }
+    if perl.file_properties != rust.file_properties {
+        mismatches.push(format!(
+            "file properties differ\nperl: {:?}\nrust: {:?}",
+            perl.file_properties, rust.file_properties
         ));
     }
     if perl.tree_contents != rust.tree_contents {
@@ -800,6 +822,7 @@ fn collect_supported_artifacts(
     let log_path_oneline = supported_log_path_oneline(work_tree, tool)?;
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
     let info_url = supported_info_url(work_tree, tool)?;
+    let file_properties = supported_file_properties(work_tree, &info_url, &file_modes)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
     let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
     let find_rev_nearest = supported_find_rev_nearest(work_tree, tool, first_revision + 1)?;
@@ -815,6 +838,7 @@ fn collect_supported_artifacts(
         rev_map,
         rev_map_byte_lengths,
         file_modes,
+        file_properties,
         tree_contents,
         empty_dir_placeholders,
         log_oneline,
@@ -1371,6 +1395,56 @@ fn supported_tree_contents(
         .collect()
 }
 
+fn supported_file_properties(
+    work_tree: &Path,
+    info_url: &str,
+    file_modes: &[FileModeArtifact],
+) -> Result<Vec<FilePropertyArtifact>, String> {
+    let mut records = Vec::new();
+    let root_url = info_url.trim();
+    for file in file_modes.iter().filter(|record| record.mode != "040000") {
+        let url = format!(
+            "{}/{}",
+            root_url.trim_end_matches('/'),
+            file.path.trim_start_matches('/')
+        );
+        for name in [
+            "svn:executable",
+            "svn:special",
+            "svn:eol-style",
+            "svn:mime-type",
+            "svn:keywords",
+            "svn:needs-lock",
+        ] {
+            match run_text(work_tree, "svn", &["propget", "--strict", name, &url]) {
+                Ok(value) if !value.is_empty() => records.push(FilePropertyArtifact {
+                    path: file.path.clone(),
+                    name: name.to_string(),
+                    value: normalize_property_value(name, &value),
+                }),
+                Ok(_) => {}
+                Err(error) if error.contains(&format!("Property '{name}' not found")) => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+    records.sort_by(|left, right| {
+        left.path
+            .cmp(&right.path)
+            .then_with(|| left.name.cmp(&right.name))
+            .then_with(|| left.value.cmp(&right.value))
+    });
+    Ok(records)
+}
+
+fn normalize_property_value(name: &str, value: &str) -> String {
+    if matches!(name, "svn:executable" | "svn:special" | "svn:needs-lock") {
+        "*".to_string()
+    } else {
+        value.to_string()
+    }
+}
+
 fn escape_artifact_value(value: &str) -> String {
     value
         .replace('\\', "\\\\")
@@ -1669,6 +1743,21 @@ fn format_file_modes(records: &[FileModeArtifact]) -> String {
     records
         .iter()
         .map(|record| format!("{} {}", record.mode, record.path))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_file_properties(records: &[FilePropertyArtifact]) -> String {
+    records
+        .iter()
+        .map(|record| {
+            format!(
+                "{} {} {}",
+                record.path,
+                record.name,
+                escape_artifact_value(&record.value)
+            )
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

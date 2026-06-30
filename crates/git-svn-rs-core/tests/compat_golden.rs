@@ -2,10 +2,10 @@
 mod golden_fixtures;
 
 use golden_fixtures::{
-    CompatDecision, FileModeArtifact, GoldenArtifactCapture, GoldenComparisonArtifacts,
-    GoldenFixture, GoldenFixtureStep, RevMapArtifactRecord, RevMapByteLengthArtifact,
-    ToolAvailability, compare_supported_subset, missing_perl_git_svn_policy,
-    perl_git_svn_available, require_golden_tools, require_svn_tools,
+    CompatDecision, FileModeArtifact, FilePropertyArtifact, GoldenArtifactCapture,
+    GoldenComparisonArtifacts, GoldenFixture, GoldenFixtureStep, RevMapArtifactRecord,
+    RevMapByteLengthArtifact, ToolAvailability, compare_supported_subset,
+    missing_perl_git_svn_policy, perl_git_svn_available, require_golden_tools, require_svn_tools,
     run_rust_stdlayout_ref_artifacts, run_standard_trunk_golden_comparison,
 };
 
@@ -139,6 +139,11 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             mode: "100755".to_string(),
             path: "run.sh".to_string(),
         }],
+        file_properties: vec![FilePropertyArtifact {
+            path: "run.sh".to_string(),
+            name: "svn:executable".to_string(),
+            value: "*".to_string(),
+        }],
         tree_contents: vec!["run.sh\t#!/bin/sh\\necho hi\\n".to_string()],
         empty_dir_placeholders: vec!["empty-dir/.gitkeep".to_string()],
         log_oneline: "r2 | add files\n".to_string(),
@@ -178,6 +183,11 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             mode: "100644".to_string(),
             path: "run.sh".to_string(),
         }],
+        file_properties: vec![FilePropertyArtifact {
+            path: "run.sh".to_string(),
+            name: "svn:eol-style".to_string(),
+            value: "LF".to_string(),
+        }],
         tree_contents: vec!["run.sh\t#!/bin/sh\\necho bye\\n".to_string()],
         empty_dir_placeholders: Vec::new(),
         log_oneline: "r2 | add trunk file\n".to_string(),
@@ -206,6 +216,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("rev_map records differ"));
     assert!(err.contains("rev_map byte lengths differ"));
     assert!(err.contains("file modes differ"));
+    assert!(err.contains("file properties differ"));
     assert!(err.contains("tree contents differ"));
     assert!(err.contains("empty dir placeholders differ"));
     assert!(err.contains("log --oneline differs"));
