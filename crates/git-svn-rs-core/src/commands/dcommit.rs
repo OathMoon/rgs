@@ -403,6 +403,8 @@ fn svn_file_attributes_for_path(
                 property_operations.push((attribute_order, "svn:executable", Some(value)));
             } else if attr == "svn:executable" {
                 property_operations.push((attribute_order, "svn:executable", Some("x")));
+            } else if let Some(value) = attr.strip_prefix("svn:special=") {
+                property_operations.push((attribute_order, "svn:special", Some(value)));
             } else if attr == "svn:special" {
                 property_operations.push((attribute_order, "svn:special", Some("x")));
             } else if attr == "svn:needs-lock" {
