@@ -389,16 +389,18 @@ fn svn_file_attributes_for_path(
                 svn_properties = Some((attribute_order, value));
             } else if attr == "-svn-properties" || attr == "!svn-properties" {
                 svn_properties = None;
+            } else if let Some(name) = direct_svn_property_clear(attr) {
+                property_operations.push((attribute_order, name, None));
             } else if let Some(value) = attr.strip_prefix("svn:eol-style=") {
-                property_operations.push((attribute_order, "svn:eol-style", value));
+                property_operations.push((attribute_order, "svn:eol-style", Some(value)));
             } else if let Some(value) = attr.strip_prefix("svn:mime-type=") {
-                property_operations.push((attribute_order, "svn:mime-type", value));
+                property_operations.push((attribute_order, "svn:mime-type", Some(value)));
             } else if let Some(value) = attr.strip_prefix("svn:keywords=") {
-                property_operations.push((attribute_order, "svn:keywords", value));
+                property_operations.push((attribute_order, "svn:keywords", Some(value)));
             } else if let Some(value) = attr.strip_prefix("svn:needs-lock=") {
-                property_operations.push((attribute_order, "svn:needs-lock", value));
+                property_operations.push((attribute_order, "svn:needs-lock", Some(value)));
             } else if attr == "svn:needs-lock" {
-                property_operations.push((attribute_order, "svn:needs-lock", "x"));
+                property_operations.push((attribute_order, "svn:needs-lock", Some("x")));
             }
         }
     }
@@ -408,23 +410,41 @@ fn svn_file_attributes_for_path(
                 && !name.is_empty()
                 && !value.is_empty()
             {
-                property_operations.push((order, name, value));
+                property_operations.push((order, name, Some(value)));
             }
         }
     }
     property_operations.sort_by_key(|(order, _, _)| *order);
     let mut svn_props = Vec::new();
     for (_, name, value) in property_operations {
-        set_svn_file_attribute(&mut svn_props, name, value);
+        apply_svn_file_attribute_operation(&mut svn_props, name, value);
     }
     Ok(svn_props)
 }
 
-fn set_svn_file_attribute(props: &mut Vec<(String, String)>, name: &str, value: &str) {
-    if let Some((_, existing)) = props.iter_mut().find(|(property, _)| property == name) {
-        *existing = value.to_string();
-    } else {
-        props.push((name.to_string(), value.to_string()));
+fn direct_svn_property_clear(attr: &str) -> Option<&'static str> {
+    match attr {
+        "-svn:eol-style" | "!svn:eol-style" => Some("svn:eol-style"),
+        "-svn:mime-type" | "!svn:mime-type" => Some("svn:mime-type"),
+        "-svn:keywords" | "!svn:keywords" => Some("svn:keywords"),
+        "-svn:needs-lock" | "!svn:needs-lock" => Some("svn:needs-lock"),
+        _ => None,
+    }
+}
+
+fn apply_svn_file_attribute_operation(
+    props: &mut Vec<(String, String)>,
+    name: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        if let Some((_, existing)) = props.iter_mut().find(|(property, _)| property == name) {
+            *existing = value.to_string();
+        } else {
+            props.push((name.to_string(), value.to_string()));
+        }
+    } else if let Some(index) = props.iter().position(|(property, _)| property == name) {
+        props.remove(index);
     }
 }
 
