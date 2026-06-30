@@ -399,6 +399,8 @@ fn svn_file_attributes_for_path(
                 property_operations.push((attribute_order, "svn:keywords", Some(value)));
             } else if let Some(value) = attr.strip_prefix("svn:needs-lock=") {
                 property_operations.push((attribute_order, "svn:needs-lock", Some(value)));
+            } else if attr == "svn:executable" {
+                property_operations.push((attribute_order, "svn:executable", Some("x")));
             } else if attr == "svn:needs-lock" {
                 property_operations.push((attribute_order, "svn:needs-lock", Some("x")));
             }
@@ -427,6 +429,7 @@ fn direct_svn_property_clear(attr: &str) -> Option<&'static str> {
         "-svn:eol-style" | "!svn:eol-style" => Some("svn:eol-style"),
         "-svn:mime-type" | "!svn:mime-type" => Some("svn:mime-type"),
         "-svn:keywords" | "!svn:keywords" => Some("svn:keywords"),
+        "-svn:executable" | "!svn:executable" => Some("svn:executable"),
         "-svn:needs-lock" | "!svn:needs-lock" => Some("svn:needs-lock"),
         _ => None,
     }
