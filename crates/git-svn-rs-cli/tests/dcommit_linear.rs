@@ -663,6 +663,69 @@ fn dcommit_writes_needs_lock_from_gitattributes_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_writes_boolean_needs_lock_from_gitattributes_to_file_svn_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(work.join(".gitattributes"), "*.lock svn:needs-lock\n").unwrap();
+    std::fs::write(work.join("boolean.lock"), "locked\n").unwrap();
+    run_git(&work, &["add", ".gitattributes", "boolean.lock"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "add boolean needs-lock attributed file",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "add boolean needs-lock attributed file",
+        ));
+
+    assert_eq!(
+        svn_stdout(&[
+            "propget",
+            "--strict",
+            "svn:needs-lock",
+            &format!("{}/trunk/boolean.lock", fixture.url())
+        ]),
+        "*"
+    );
+}
+
+#[test]
 fn dcommit_gitattributes_later_matching_rule_overrides_earlier_rule_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
