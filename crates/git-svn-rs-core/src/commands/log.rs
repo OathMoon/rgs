@@ -122,10 +122,17 @@ impl RevisionFilter {
 
 fn parse_revision_filter(value: &str) -> Result<RevisionFilter, String> {
     if let Some((start, end)) = value.split_once(':') {
-        return Ok(RevisionFilter {
-            start: parse_optional_revision(start)?,
-            end: parse_optional_revision(end)?,
-        });
+        let start = parse_optional_revision(start)?;
+        let end = parse_optional_revision(end)?;
+        if let (Some(start), Some(end)) = (start, end)
+            && start > end
+        {
+            return Ok(RevisionFilter {
+                start: Some(end),
+                end: Some(start),
+            });
+        }
+        return Ok(RevisionFilter { start, end });
     }
 
     let revision = parse_revision(value)?;
