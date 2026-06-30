@@ -325,6 +325,75 @@ fn dcommit_writes_eol_style_from_gitattributes_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_honors_svn_config_auto_props_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let svn_config = temp.path().join("svn-config");
+    std::fs::create_dir_all(&svn_config).unwrap();
+    std::fs::write(
+        svn_config.join("config"),
+        "[miscellany]\nenable-auto-props = yes\n[auto-props]\n*.auto = svn:eol-style=LF\n",
+    )
+    .unwrap();
+    let svn_config = svn_config.to_string_lossy().to_string();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    run_git(&work, &["config", "svn-remote.svn.config-dir", &svn_config]);
+
+    std::fs::write(work.join("generated.auto"), "one\ntwo\n").unwrap();
+    run_git(&work, &["add", "generated.auto"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "add auto-props text",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("add auto-props text"));
+
+    assert_eq!(
+        svn_stdout(&[
+            "propget",
+            "--strict",
+            "svn:eol-style",
+            &format!("{}/trunk/generated.auto", fixture.url())
+        ]),
+        "LF"
+    );
+}
+
+#[test]
 fn dcommit_filters_invalid_svn_properties_from_gitattributes_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}

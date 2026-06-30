@@ -55,13 +55,16 @@ pub fn run_in_work_tree(
                 &tracked.svn_path
             };
             return dcommit_file_svn(
-                &tracked.git,
-                target_url,
-                commit_svn_path,
-                &tracked.refname,
+                FileSvnDcommit {
+                    git: &tracked.git,
+                    svn_root_url: target_url,
+                    svn_path: commit_svn_path,
+                    refname: &tracked.refname,
+                    no_rebase: args.no_rebase,
+                    mergeinfo: args.mergeinfo.as_deref(),
+                    config_dir: tracked.config.config_dir.as_deref(),
+                },
                 commits,
-                args.no_rebase,
-                args.mergeinfo.as_deref(),
             );
         }
         {
@@ -97,23 +100,35 @@ pub fn run_in_work_tree(
     Ok(out)
 }
 
-fn dcommit_file_svn(
-    git: &GitCli,
-    svn_root_url: &str,
-    svn_path: &str,
-    refname: &str,
-    commits: Vec<GitCommitSummary>,
+struct FileSvnDcommit<'a> {
+    git: &'a GitCli,
+    svn_root_url: &'a str,
+    svn_path: &'a str,
+    refname: &'a str,
     no_rebase: bool,
-    mergeinfo: Option<&str>,
+    mergeinfo: Option<&'a str>,
+    config_dir: Option<&'a str>,
+}
+
+struct FileSvnWorkingCopy<'a> {
+    git: &'a GitCli,
+    wc: &'a Path,
+    config_dir: Option<&'a str>,
+}
+
+fn dcommit_file_svn(
+    ctx: FileSvnDcommit<'_>,
+    commits: Vec<GitCommitSummary>,
 ) -> Result<String, String> {
     if commits.is_empty() {
         return Ok("No local commits to dcommit.\n".to_string());
     }
 
     let temp = TempCheckout::new()?;
-    let checkout_url = svn_checkout_url(svn_root_url, svn_path);
+    let checkout_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
     run_svn(
         None,
+        ctx.config_dir,
         &[
             "checkout".to_string(),
             "--quiet".to_string(),
@@ -123,13 +138,17 @@ fn dcommit_file_svn(
     )?;
 
     let mut out = format!("Committed {} local Git commit(s)\n", commits.len());
-    let mut diff_base = refname.to_string();
+    let mut diff_base = ctx.refname.to_string();
+    let wc = FileSvnWorkingCopy {
+        git: ctx.git,
+        wc: &temp.wc,
+        config_dir: ctx.config_dir,
+    };
     for commit in &commits {
-        let changes = git.diff_name_status(&diff_base, &commit.id)?;
+        let changes = ctx.git.diff_name_status(&diff_base, &commit.id)?;
         for change in changes {
             apply_file_svn_change(
-                git,
-                &temp.wc,
+                &wc,
                 &diff_base,
                 &commit.id,
                 &change.status,
@@ -137,11 +156,11 @@ fn dcommit_file_svn(
                 change.old_path.as_deref(),
             )?;
         }
-        if let Some(mergeinfo) = mergeinfo {
-            apply_mergeinfo(&temp.wc, mergeinfo)?;
+        if let Some(mergeinfo) = ctx.mergeinfo {
+            apply_mergeinfo(&temp.wc, mergeinfo, ctx.config_dir)?;
         }
-        let revision = svn_commit(&temp.wc, &commit.subject)?;
-        fetch::run_in_work_tree(git.work_tree().to_path_buf(), default_fetch_args())?;
+        let revision = svn_commit(&temp.wc, &commit.subject, ctx.config_dir)?;
+        fetch::run_in_work_tree(ctx.git.work_tree().to_path_buf(), default_fetch_args())?;
         diff_base = commit.id.clone();
         out.push_str(&format!(
             "Committed {} {} as r{revision}\n",
@@ -149,11 +168,11 @@ fn dcommit_file_svn(
         ));
     }
 
-    if no_rebase {
+    if ctx.no_rebase {
         out.push_str("Skipped rebase (--no-rebase).\n");
     } else {
         out.push_str(&rebase::run_in_work_tree(
-            git.work_tree().to_path_buf(),
+            ctx.git.work_tree().to_path_buf(),
             crate::cli::RebaseArgs {
                 dry_run: false,
                 merge: false,
@@ -167,72 +186,78 @@ fn dcommit_file_svn(
 }
 
 fn apply_file_svn_change(
-    git: &GitCli,
-    wc: &Path,
+    wc: &FileSvnWorkingCopy<'_>,
     base: &str,
     commit: &str,
     status: &str,
     path: &str,
     old_path: Option<&str>,
 ) -> Result<(), String> {
-    let target = wc.join(path);
+    let target = wc.wc.join(path);
     match status {
         "A" => {
             if let Some(parent) = target.parent() {
                 std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
             }
-            std::fs::write(&target, svn_file_content(git, commit, path)?)
+            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             run_svn(
-                Some(wc),
+                Some(wc.wc),
+                wc.config_dir,
                 &[
                     "add".to_string(),
                     "--parents".to_string(),
                     path.replace('\\', "/"),
                 ],
             )?;
-            apply_file_props(git, wc, commit, path, "000000")?;
+            apply_file_props(wc.git, wc.wc, commit, path, "000000", wc.config_dir)?;
         }
         "M" | "T" => {
-            std::fs::write(&target, svn_file_content(git, commit, path)?)
+            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
-            let old_mode = git.ls_tree_file(base, path)?.mode;
-            apply_file_props(git, wc, commit, path, &old_mode)?;
+            let old_mode = wc.git.ls_tree_file(base, path)?.mode;
+            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.config_dir)?;
         }
         "D" => {
-            run_svn(Some(wc), &["delete".to_string(), path.replace('\\', "/")])?;
+            run_svn(
+                Some(wc.wc),
+                wc.config_dir,
+                &["delete".to_string(), path.replace('\\', "/")],
+            )?;
         }
         status if status.starts_with('R') => {
             let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
-            ensure_svn_parent_dirs(wc, path)?;
+            ensure_svn_parent_dirs(wc.wc, path, wc.config_dir)?;
             run_svn(
-                Some(wc),
+                Some(wc.wc),
+                wc.config_dir,
                 &[
                     "move".to_string(),
                     old_path.replace('\\', "/"),
                     path.replace('\\', "/"),
                 ],
             )?;
-            std::fs::write(&target, svn_file_content(git, commit, path)?)
+            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
-            let old_mode = git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(git, wc, commit, path, &old_mode)?;
+            let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
+            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.config_dir)?;
         }
         status if status.starts_with('C') => {
             let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
-            ensure_svn_parent_dirs(wc, path)?;
+            ensure_svn_parent_dirs(wc.wc, path, wc.config_dir)?;
             run_svn(
-                Some(wc),
+                Some(wc.wc),
+                wc.config_dir,
                 &[
                     "copy".to_string(),
                     old_path.replace('\\', "/"),
                     path.replace('\\', "/"),
                 ],
             )?;
-            std::fs::write(&target, svn_file_content(git, commit, path)?)
+            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
-            let old_mode = git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(git, wc, commit, path, &old_mode)?;
+            let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
+            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.config_dir)?;
         }
         other => {
             return Err(format!(
@@ -243,7 +268,7 @@ fn apply_file_svn_change(
     Ok(())
 }
 
-fn ensure_svn_parent_dirs(wc: &Path, path: &str) -> Result<(), String> {
+fn ensure_svn_parent_dirs(wc: &Path, path: &str, config_dir: Option<&str>) -> Result<(), String> {
     let Some(parent) = Path::new(path).parent() else {
         return Ok(());
     };
@@ -259,6 +284,7 @@ fn ensure_svn_parent_dirs(wc: &Path, path: &str) -> Result<(), String> {
     std::fs::create_dir_all(&parent_path).map_err(|e| e.to_string())?;
     run_svn(
         Some(wc),
+        config_dir,
         &[
             "add".to_string(),
             "--parents".to_string(),
@@ -279,9 +305,10 @@ fn svn_file_content(git: &GitCli, commit: &str, path: &str) -> Result<Vec<u8>, S
     }
 }
 
-fn apply_mergeinfo(wc: &Path, mergeinfo: &str) -> Result<(), String> {
+fn apply_mergeinfo(wc: &Path, mergeinfo: &str, config_dir: Option<&str>) -> Result<(), String> {
     run_svn(
         Some(wc),
+        config_dir,
         &[
             "propset".to_string(),
             "--non-interactive".to_string(),
@@ -298,11 +325,13 @@ fn apply_file_props(
     commit: &str,
     path: &str,
     old_mode: &str,
+    config_dir: Option<&str>,
 ) -> Result<(), String> {
     let new_mode = git.ls_tree_file(commit, path)?.mode;
     if new_mode == "100755" {
         run_svn(
             Some(wc),
+            config_dir,
             &[
                 "propset".to_string(),
                 "--non-interactive".to_string(),
@@ -314,6 +343,7 @@ fn apply_file_props(
     } else if old_mode == "100755" {
         run_svn(
             Some(wc),
+            config_dir,
             &[
                 "propdel".to_string(),
                 "--non-interactive".to_string(),
@@ -325,6 +355,7 @@ fn apply_file_props(
     if new_mode == "120000" {
         run_svn(
             Some(wc),
+            config_dir,
             &[
                 "propset".to_string(),
                 "--non-interactive".to_string(),
@@ -336,6 +367,7 @@ fn apply_file_props(
     } else if old_mode == "120000" {
         run_svn(
             Some(wc),
+            config_dir,
             &[
                 "propdel".to_string(),
                 "--non-interactive".to_string(),
@@ -347,6 +379,7 @@ fn apply_file_props(
     for (property, value) in svn_file_attributes_for_path(git, commit, path)? {
         run_svn(
             Some(wc),
+            config_dir,
             &[
                 "propset".to_string(),
                 "--non-interactive".to_string(),
@@ -474,9 +507,10 @@ fn attribute_pattern_matches(pattern: &str, path: &str) -> bool {
     false
 }
 
-fn svn_commit(wc: &Path, message: &str) -> Result<u32, String> {
+fn svn_commit(wc: &Path, message: &str, config_dir: Option<&str>) -> Result<u32, String> {
     let output = run_svn_output(
         Some(wc),
+        config_dir,
         &["commit".to_string(), "-m".to_string(), message.to_string()],
     )?;
     parse_committed_revision(&output)
@@ -503,14 +537,21 @@ fn svn_checkout_url(root_url: &str, svn_path: &str) -> String {
     }
 }
 
-fn run_svn(cwd: Option<&Path>, args: &[String]) -> Result<(), String> {
-    run_svn_output(cwd, args).map(|_| ())
+fn run_svn(cwd: Option<&Path>, config_dir: Option<&str>, args: &[String]) -> Result<(), String> {
+    run_svn_output(cwd, config_dir, args).map(|_| ())
 }
 
-fn run_svn_output(cwd: Option<&Path>, args: &[String]) -> Result<String, String> {
+fn run_svn_output(
+    cwd: Option<&Path>,
+    config_dir: Option<&str>,
+    args: &[String],
+) -> Result<String, String> {
     let mut command = Command::new("svn");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
+    }
+    if let Some(config_dir) = config_dir {
+        command.args(["--config-dir", config_dir]);
     }
     let output = command
         .args(args)
