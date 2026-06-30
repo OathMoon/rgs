@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `7424b18 test: compare golden rev map byte lengths`
+- Latest implementation commit: `d1a3a64 feat: support boolean needs-lock attributes`
 - Worktree before this simplification: clean
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -22,7 +22,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `cb30882 test: compare file modes in golden harness`
 - `4eaa751`, `3f44d65`, `a363864`, `27b0893`, `3b42f98`, `22ef18a`, `8c22aca`, `7c8bf7a`, `12b842e`, `0cb0da7`: Phase 6 readonly/log/find-rev compatibility hardening
 - `edb9161`: SHA-256 rev_map handling for import/fetch
-- `298dc66`, `1ad8bf2`, `7e769ad`: `.gitattributes` `svn-properties` dcommit behavior
+- `298dc66`, `1ad8bf2`, `7e769ad`, `d1a3a64`: `.gitattributes` SVN property dcommit behavior
 - `1461caf`, `2241af4`, `7927615`, `7424b18`: Phase 8 golden artifact and rev_map comparison hardening
 - `d92819a`: clippy compatibility fix for Rust 1.95
 
@@ -64,7 +64,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Added dcommit diff planning, commit editor, path ensurer, property mapper, mock commit backend extensions, and tests.
 - Local `file://` dcommit writes linear commits, adds, deletes, type changes, executable/symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected SVN properties from `.gitattributes`.
 - Upstream-style `svn-properties=name=value[;name=value...]` attributes are parsed, later rules override earlier ones, malformed/empty entries are ignored, and `-svn-properties`/`!svn-properties` clear prior container values without suppressing direct SVN attributes.
-- Direct `.gitattributes` SVN property mapping now includes `svn:needs-lock` for local `file://` dcommit write-back.
+- Direct `.gitattributes` SVN property mapping now includes valued and boolean `svn:needs-lock` for local `file://` dcommit write-back.
 - Default post-dcommit rebase and `--no-rebase` behavior are covered for local write-back.
 - Added `git-svn` shim forwarding behavior, smoke tests, `scripts/verify.ps1`, Windows workflow, and strict compatibility mode wiring.
 
@@ -108,6 +108,7 @@ Important targeted suites recorded as passing during this work:
 - `cargo test -p git-svn-rs --test readonly_commands info_url_resolves_branch_from_branches_mapping -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_needs_lock_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
+- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_boolean_needs_lock_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
 - `cargo test -p git-svn-rs --test clone_fetch_smoke -- --nocapture`
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture`
 - `cargo test -p git-svn-rs-core --test compat_golden supported_rev_map_reads_sha256_records -- --nocapture`
