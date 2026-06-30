@@ -399,6 +399,8 @@ fn svn_file_attributes_for_path(
                 property_operations.push((attribute_order, "svn:keywords", Some(value)));
             } else if let Some(value) = attr.strip_prefix("svn:needs-lock=") {
                 property_operations.push((attribute_order, "svn:needs-lock", Some(value)));
+            } else if let Some(value) = attr.strip_prefix("svn:executable=") {
+                property_operations.push((attribute_order, "svn:executable", Some(value)));
             } else if attr == "svn:executable" {
                 property_operations.push((attribute_order, "svn:executable", Some("x")));
             } else if attr == "svn:special" {

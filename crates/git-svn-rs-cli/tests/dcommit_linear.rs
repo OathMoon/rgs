@@ -789,6 +789,69 @@ fn dcommit_writes_boolean_executable_from_gitattributes_to_file_svn_when_tools_e
 }
 
 #[test]
+fn dcommit_writes_valued_executable_from_gitattributes_to_file_svn_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(work.join(".gitattributes"), "*.cmd svn:executable=x\n").unwrap();
+    std::fs::write(work.join("valued.cmd"), "echo valued\n").unwrap();
+    run_git(&work, &["add", ".gitattributes", "valued.cmd"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "add valued executable attributed command",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "add valued executable attributed command",
+        ));
+
+    assert_eq!(
+        svn_stdout(&[
+            "propget",
+            "--strict",
+            "svn:executable",
+            &format!("{}/trunk/valued.cmd", fixture.url())
+        ]),
+        "*"
+    );
+}
+
+#[test]
 fn dcommit_writes_boolean_special_from_gitattributes_to_file_svn_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
