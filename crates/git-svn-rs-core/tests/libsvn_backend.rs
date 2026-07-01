@@ -6,6 +6,11 @@ use git_svn_rs_core::svn::libsvn::{
     LibSvnBackend, LibSvnLinkStatus,
 };
 
+#[path = "support/svn_fixture.rs"]
+mod svn_fixture;
+
+use svn_fixture::{StandardSvnFixture, SvnToolPolicy, require_svn_tools};
+
 #[test]
 fn reports_feature_enabled_link_probe_state() {
     let availability = LibSvnBackend::availability();
@@ -41,13 +46,42 @@ fn backend_reports_native_version_when_linked() {
 #[test]
 fn backend_methods_report_unimplemented_or_not_linked() {
     let backend = LibSvnBackend::new();
-    let expected = if cfg!(git_svn_rs_libsvn_linked) {
-        LIBSVN_NOT_IMPLEMENTED_MESSAGE
-    } else {
-        LIBSVN_NOT_LINKED_MESSAGE
-    };
+    if cfg!(git_svn_rs_libsvn_linked) {
+        let expected = "libsvn backend requires an SVN repository URL";
 
-    assert_eq!(backend.uuid().unwrap_err(), expected);
-    assert_eq!(backend.latest_revnum().unwrap_err(), expected);
-    assert_eq!(backend.log(0, 1).unwrap_err(), expected);
+        assert_eq!(backend.uuid().unwrap_err(), expected);
+        assert_eq!(backend.latest_revnum().unwrap_err(), expected);
+        assert_eq!(
+            backend.log(0, 1).unwrap_err(),
+            LIBSVN_NOT_IMPLEMENTED_MESSAGE
+        );
+    } else {
+        assert_eq!(backend.uuid().unwrap_err(), LIBSVN_NOT_LINKED_MESSAGE);
+        assert_eq!(
+            backend.latest_revnum().unwrap_err(),
+            LIBSVN_NOT_LINKED_MESSAGE
+        );
+        assert_eq!(backend.log(0, 1).unwrap_err(), LIBSVN_NOT_LINKED_MESSAGE);
+    }
+}
+
+#[test]
+fn linked_backend_reads_file_repository_metadata() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let backend = LibSvnBackend::for_url(fixture.url());
+
+    assert_eq!(backend.latest_revnum().unwrap(), fixture.latest_revision());
+    assert_eq!(backend.uuid().unwrap(), fixture.uuid());
 }

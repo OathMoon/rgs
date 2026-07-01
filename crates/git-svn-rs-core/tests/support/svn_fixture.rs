@@ -163,6 +163,20 @@ impl StandardSvnFixture {
             .parse()
             .expect("svn info revision should be numeric")
     }
+
+    #[allow(dead_code)]
+    pub fn uuid(&self) -> String {
+        let output = Command::new("svn")
+            .args(["info", "--show-item", "repos-uuid", self.url().as_str()])
+            .output()
+            .expect("svn info should run");
+        assert!(
+            output.status.success(),
+            "svn info failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
 }
 
 fn command_succeeds(program: &str, args: &[&str]) -> bool {
