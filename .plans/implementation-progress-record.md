@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `b4765c7 test: capture golden file properties`
+- Latest implementation commit: `16e024f feat: probe libsvn linkage with vcpkg`
 - Worktree before this simplification: clean
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -25,6 +25,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `298dc66`, `1ad8bf2`, `7e769ad`, `d1a3a64`, `b0c39fa`, `9279ac5`, `1694046`, `cce0cb3`, `b3fe080`, `c691d7e`: `.gitattributes`/auto-props SVN property dcommit behavior
 - `1461caf`, `2241af4`, `7927615`, `7424b18`, `b4765c7`: Phase 8 golden artifact and rev_map comparison hardening
 - `d92819a`: clippy compatibility fix for Rust 1.95
+- `16e024f`: `svn-libsvn` build script performs a vcpkg Subversion link probe and diagnostics can report `linked` when the probe succeeds.
 
 ## Completed Capabilities
 
@@ -45,7 +46,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 ### Phases 4/5: SVN Abstractions and Import Replay
 
-- Added SVN domain types, mock backend, RA session/fetch editor traits, auth prompt mock, `svn-libsvn` feature shell, fast-import writer, and `git-svn-rs init`.
+- Added SVN domain types, mock backend, RA session/fetch editor traits, auth prompt mock, `svn-libsvn` feature shell with a vcpkg Subversion link probe, fast-import writer, and `git-svn-rs init`.
 - Added fixture builders and mock import/fetch planning for content, executable mode, symlink mode, copy, and delete.
 - SVN CLI replay supports `file://`, local `svn://`, `svn+ssh://`, `http://`, and `https://` URL schemes, with strongest coverage around local fixtures.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
@@ -84,6 +85,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 ## Remaining Work
 
 - Implement the real `svn-libsvn` backend and deeper auth/libsvn integration. A previous local attempt resolved crates.io metadata but timed out downloading `bindgen`; no unverified libsvn changes were retained.
+- Current `svn-libsvn` feature builds and runs a vcpkg Subversion link probe; in this environment the probe currently reports `not-linked` because vcpkg could not find Subversion under `E:\Program Files\vcpkg`.
 - Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://`, especially remote auth/service scenarios and full RA session integration.
 - Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` behavior against non-local SVN servers.
 - Complete the remaining planned `Log.pm` compatibility modes and more complex multi-ref/rev_map resolver cases.
@@ -99,6 +101,9 @@ Latest full gates recorded as passing:
 - `cargo fmt --check`
 - `cargo test --workspace`
 - `cargo test -p git-svn-rs-core --features svn-libsvn`
+- `cargo test -p git-svn-rs-core --features svn-libsvn libsvn -- --nocapture`
+- `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
+- `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`
 
