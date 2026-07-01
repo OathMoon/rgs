@@ -159,7 +159,7 @@ pub struct DcommitArgs {
 pub struct LogArgs {
     #[arg(short = 'r', long = "revision")]
     pub revision: Option<String>,
-    #[arg(long)]
+    #[arg(short = 'n', long)]
     pub limit: Option<u32>,
     #[arg(short = 'v', long)]
     pub verbose: bool,
