@@ -85,7 +85,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 ## Remaining Work
 
 - Implement the real `svn-libsvn` backend and deeper auth/libsvn integration. A previous local attempt resolved crates.io metadata but timed out downloading `bindgen`; no unverified libsvn changes were retained.
-- Current `svn-libsvn` feature builds and runs a vcpkg Subversion link probe; in this environment the probe currently reports `not-linked` because vcpkg could not find Subversion under `E:\Program Files\vcpkg`.
+- Current `svn-libsvn` feature builds and runs a vcpkg Subversion link probe; this environment links when `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and the vcpkg `installed\x64-windows\bin` directory is on `PATH`.
 - Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://`, especially remote auth/service scenarios and full RA session integration.
 - Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` behavior against non-local SVN servers.
 - Complete the remaining planned `Log.pm` compatibility modes and more complex multi-ref/rev_map resolver cases.
@@ -104,6 +104,8 @@ Latest full gates recorded as passing:
 - `cargo test -p git-svn-rs-core --features svn-libsvn libsvn -- --nocapture`
 - `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
 - `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
+- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`
 
