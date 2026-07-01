@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `16e024f feat: probe libsvn linkage with vcpkg`
+- Latest implementation commit: `15e6e03 feat: support log short limit option`
 - Worktree before this simplification: clean
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -20,7 +20,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `d898981 feat: preserve svn executable mode in cli import`
 - `a3712d2 feat: preserve svn special links in cli import`
 - `cb30882 test: compare file modes in golden harness`
-- `4eaa751`, `3f44d65`, `a363864`, `27b0893`, `3b42f98`, `22ef18a`, `8c22aca`, `7c8bf7a`, `12b842e`, `0cb0da7`, `0eb9d48`: Phase 6 readonly/log/find-rev compatibility hardening
+- `4eaa751`, `3f44d65`, `a363864`, `27b0893`, `3b42f98`, `22ef18a`, `8c22aca`, `7c8bf7a`, `12b842e`, `0cb0da7`, `0eb9d48`, `15e6e03`: Phase 6 readonly/log/find-rev compatibility hardening
 - `edb9161`: SHA-256 rev_map handling for import/fetch
 - `298dc66`, `1ad8bf2`, `7e769ad`, `d1a3a64`, `b0c39fa`, `9279ac5`, `1694046`, `cce0cb3`, `b3fe080`, `c691d7e`: `.gitattributes`/auto-props SVN property dcommit behavior
 - `1461caf`, `2241af4`, `7927615`, `7424b18`, `b4765c7`: Phase 8 golden artifact and rev_map comparison hardening
@@ -58,7 +58,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Resolver behavior covers tracked SVN config, `.git/svn/<ref>/.rev_map.<uuid>`, multi-ref branch/tag layouts, current `HEAD`, and closest tracked ancestors.
 - Readonly resolver accepts Perl-style leading `+` in configured fetch refspecs when deriving tracked SVN URLs.
 - Readonly resolver expands configured `svn-remote.svn.branches`/`tags` wildcard mappings against existing remote refs when resolving the current tracked SVN URL.
-- Log output now handles pathspec pass-through, invalid revision rejection, reverse revision ranges, mutually exclusive `find-rev --before/--after`, SVN-style separators, singular/plural line counts, `--show-commit`, final non-empty `git-svn-id` footer recognition, and message line-ending preservation.
+- Log output now handles pathspec pass-through, invalid revision rejection, reverse revision ranges, `-n`/`--limit`, mutually exclusive `find-rev --before/--after`, SVN-style separators, singular/plural line counts, `--show-commit`, final non-empty `git-svn-id` footer recognition, and message line-ending preservation.
 
 ### Phase 7: Dcommit, Shim, Windows Verification
 
@@ -112,6 +112,7 @@ Important targeted suites recorded as passing during this work:
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands info_url_resolves_branch_from_branches_mapping -- --nocapture`
+- `cargo test -p git-svn-rs --test readonly_commands log_short_limit_returns_latest_svn_revisions -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands log_revision_reverse_range_filters_to_requested_svn_revisions -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear dcommit_honors_svn_config_auto_props_when_tools_exist -- --nocapture`
