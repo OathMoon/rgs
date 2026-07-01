@@ -14,7 +14,11 @@ fn reports_libsvn_feature_state() {
 #[test]
 fn reports_libsvn_link_state() {
     let expected = if cfg!(feature = "svn-libsvn") {
-        "not-linked"
+        if cfg!(git_svn_rs_libsvn_linked) {
+            "linked"
+        } else {
+            "not-linked"
+        }
     } else {
         "not-compiled"
     };

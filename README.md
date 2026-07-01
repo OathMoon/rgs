@@ -22,6 +22,16 @@ The golden compatibility harness compares the deterministic trunk fixture subset
 
 ## `svn-libsvn` feature status
 
-The `svn-libsvn` Cargo feature currently compiles a feature-gated backend shell without linking to libsvn. Default builds do not require libsvn. In this Windows environment, Subversion is available through TortoiseSVN `svn.exe` 1.14.0 and runtime DLLs, but the libsvn headers/import libraries or `pkg-config` metadata needed for reliable Rust FFI linking are not present.
+The `svn-libsvn` Cargo feature currently compiles a feature-gated backend shell and runs a vcpkg-based libsvn link probe at build time. Default builds do not require libsvn. On Windows with vcpkg, install the development libraries with:
 
-When built with `--features svn-libsvn`, `git-svn-rs diagnose` reports the feature as enabled and the link status as `not-linked`; `LibSvnBackend` methods return a clear not-linked error instead of silently falling back.
+```powershell
+vcpkg install subversion:x64-windows
+$env:VCPKG_ROOT = "E:\vcpkg"
+$env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
+$env:VCPKGRS_DYNAMIC = "1"
+$env:PATH = "$env:VCPKG_ROOT\installed\x64-windows\bin;$env:PATH"
+```
+
+`VCPKG_ROOT` should point at the actual vcpkg checkout. `VCPKGRS_DYNAMIC=1` is required for the dynamic `x64-windows` triplet so test binaries can load the vcpkg DLLs at runtime.
+
+When built with `--features svn-libsvn`, `git-svn-rs diagnose` reports the feature as enabled. The link status is `linked` when the vcpkg probe finds Subversion, or `not-linked` when the probe cannot find it. `linked` currently means only that the native development libraries are discoverable; `LibSvnBackend` API methods still return a clear not-implemented error until real libsvn RA bindings are added.
