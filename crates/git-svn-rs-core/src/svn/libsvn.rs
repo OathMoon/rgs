@@ -1,4 +1,8 @@
 use super::{RevisionEvent, SvnBackend};
+#[cfg(git_svn_rs_libsvn_linked)]
+use std::ffi::CStr;
+#[cfg(git_svn_rs_libsvn_linked)]
+use std::os::raw::c_char;
 
 pub const LIBSVN_NOT_LINKED_MESSAGE: &str =
     "libsvn backend is enabled but not linked: no libsvn FFI bindings are compiled into this build";
@@ -52,6 +56,27 @@ impl LibSvnBackend {
     }
 
     pub fn version(&self) -> Result<String, String> {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            let version = unsafe { svn_subr_version() };
+            if version.is_null() {
+                return Err("libsvn returned a null version record".to_string());
+            }
+            let version = unsafe { &*version };
+            let tag = if version.tag.is_null() {
+                String::new()
+            } else {
+                unsafe { CStr::from_ptr(version.tag) }
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            return Ok(format!(
+                "{}.{}.{}{}",
+                version.major, version.minor, version.patch, tag
+            ));
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
         Err(Self::unavailable_message().to_string())
     }
 
@@ -62,6 +87,20 @@ impl LibSvnBackend {
             LIBSVN_NOT_LINKED_MESSAGE
         }
     }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
+struct svn_version_t {
+    major: i32,
+    minor: i32,
+    patch: i32,
+    tag: *const c_char,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe extern "C" {
+    fn svn_subr_version() -> *const svn_version_t;
 }
 
 impl SvnBackend for LibSvnBackend {

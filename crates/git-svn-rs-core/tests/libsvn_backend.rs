@@ -23,6 +23,22 @@ fn reports_feature_enabled_link_probe_state() {
 }
 
 #[test]
+fn backend_reports_native_version_when_linked() {
+    let backend = LibSvnBackend::new();
+
+    if cfg!(git_svn_rs_libsvn_linked) {
+        let version = backend.version().unwrap();
+        assert!(!version.trim().is_empty());
+        assert!(
+            version.chars().any(|character| character.is_ascii_digit()),
+            "{version}"
+        );
+    } else {
+        assert_eq!(backend.version().unwrap_err(), LIBSVN_NOT_LINKED_MESSAGE);
+    }
+}
+
+#[test]
 fn backend_methods_report_unimplemented_or_not_linked() {
     let backend = LibSvnBackend::new();
     let expected = if cfg!(git_svn_rs_libsvn_linked) {
