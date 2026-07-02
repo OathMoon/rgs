@@ -1,6 +1,7 @@
 #![cfg(feature = "svn-libsvn")]
 
 use git_svn_rs_core::svn::SvnBackend;
+use git_svn_rs_core::svn::editor::FetchEditor;
 use git_svn_rs_core::svn::libsvn::{
     LIBSVN_LINKED_PROBE_MESSAGE, LIBSVN_NOT_LINKED_MESSAGE, LibSvnBackend, LibSvnLinkStatus,
 };
@@ -130,6 +131,101 @@ fn linked_backend_implements_ra_session_read_methods() {
 }
 
 #[test]
+fn linked_backend_do_update_drives_fetch_editor_callbacks() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session.do_update("trunk", 2, &mut editor).unwrap();
+
+    assert!(editor.events.contains(&"open_root:2".to_string()));
+    assert!(
+        editor
+            .events
+            .contains(&"add_directory:/trunk/src".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"add_file:/trunk/src/lib.rs".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"add_file:/trunk/run.sh".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"change_file_prop:/trunk/run.sh:svn:executable=*".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"apply_textdelta:/trunk/run.sh:18".to_string())
+    );
+    assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
+fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session
+        .do_switch(
+            "branches/main",
+            3,
+            &format!("{}/trunk", fixture.url()),
+            &mut editor,
+        )
+        .unwrap();
+
+    assert!(editor.events.contains(&"open_root:3".to_string()));
+    assert!(
+        editor
+            .events
+            .contains(&"add_directory:/branches/main".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"add_file:/branches/main/src/lib.rs".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"apply_textdelta:/branches/main/src/lib.rs:29".to_string())
+    );
+    assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
 fn linked_backend_reads_log_metadata_and_changed_paths() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
@@ -220,4 +316,55 @@ fn linked_backend_reads_log_metadata_and_changed_paths() {
             && path.content.as_deref() == Some(b"#!/bin/sh\necho hi\n".as_slice())
             && path.properties.get("svn:executable").map(String::as_str) == Some("*")
     }));
+}
+
+#[derive(Default)]
+struct RecordingFetchEditor {
+    events: Vec<String>,
+}
+
+impl FetchEditor for RecordingFetchEditor {
+    fn open_root(&mut self, revision: u32) -> Result<(), String> {
+        self.events.push(format!("open_root:{revision}"));
+        Ok(())
+    }
+
+    fn add_directory(&mut self, path: &str, _copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        self.events.push(format!("add_directory:{path}"));
+        Ok(())
+    }
+
+    fn add_file(&mut self, path: &str, _copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        self.events.push(format!("add_file:{path}"));
+        Ok(())
+    }
+
+    fn delete_entry(&mut self, path: &str, revision: u32) -> Result<(), String> {
+        self.events.push(format!("delete_entry:{path}@{revision}"));
+        Ok(())
+    }
+
+    fn change_file_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        self.events.push(format!(
+            "change_file_prop:{path}:{name}={}",
+            value.unwrap_or_default()
+        ));
+        Ok(())
+    }
+
+    fn apply_textdelta(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
+        self.events
+            .push(format!("apply_textdelta:{path}:{}", content.len()));
+        Ok(())
+    }
+
+    fn close_edit(&mut self) -> Result<(), String> {
+        self.events.push("close_edit".to_string());
+        Ok(())
+    }
 }

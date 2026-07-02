@@ -710,6 +710,75 @@ unsafe fn get_log(
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+fn replay_revision(
+    revision: &RevisionEvent,
+    path: &str,
+    editor: &mut dyn FetchEditor,
+) -> Result<(), String> {
+    let normalized_path = normalize_ra_path(path);
+    editor.open_root(revision.revision)?;
+    for changed_path in &revision.changed_paths {
+        if !path_matches(&changed_path.path, &normalized_path) {
+            continue;
+        }
+        match changed_path.action {
+            ChangeAction::Delete => {
+                editor.delete_entry(&changed_path.path, revision.revision.saturating_sub(1))?;
+            }
+            ChangeAction::Add | ChangeAction::Replace => match changed_path.kind {
+                NodeKind::Directory => editor.add_directory(
+                    &changed_path.path,
+                    copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev),
+                )?,
+                NodeKind::File | NodeKind::Symlink => {
+                    editor.add_file(
+                        &changed_path.path,
+                        copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev),
+                    )?;
+                    replay_file_details(changed_path, editor)?;
+                }
+            },
+            ChangeAction::Modify => {
+                if matches!(changed_path.kind, NodeKind::File | NodeKind::Symlink) {
+                    replay_file_details(changed_path, editor)?;
+                }
+            }
+        }
+    }
+    editor.close_edit()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn replay_file_details(
+    changed_path: &ChangedPath,
+    editor: &mut dyn FetchEditor,
+) -> Result<(), String> {
+    for (name, value) in &changed_path.properties {
+        editor.change_file_prop(&changed_path.path, name, Some(value))?;
+    }
+    if let Some(content) = &changed_path.content {
+        editor.apply_textdelta(&changed_path.path, content)?;
+    }
+    Ok(())
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn copy_from(path: &Option<String>, revision: Option<u32>) -> Option<(&str, u32)> {
+    path.as_deref().zip(revision)
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn normalize_ra_path(path: &str) -> String {
+    path.trim_matches('/').to_string()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn path_matches(changed_path: &str, path: &str) -> bool {
+    let changed_path = changed_path.trim_matches('/');
+    path.is_empty() || changed_path == path || changed_path.starts_with(&format!("{path}/"))
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn get_file(
     session: *mut SvnRaSessionT,
     pool: *mut AprPoolT,
@@ -1068,8 +1137,23 @@ impl RaSession for LibSvnBackend {
         revision: u32,
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
-        let _ = (path, revision, editor);
-        Err(Self::unavailable_message().to_string())
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            self.with_session(|session, pool| unsafe {
+                let revisions = get_log(session, pool, &[path], revision, revision)?;
+                let revision_event = revisions
+                    .iter()
+                    .find(|event| event.revision == revision)
+                    .ok_or_else(|| format!("SVN revision r{revision} was not found"))?;
+                replay_revision(revision_event, path, editor)
+            })
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
+        {
+            let _ = (path, revision, editor);
+            Err(Self::unavailable_message().to_string())
+        }
     }
 
     fn do_switch(
@@ -1079,8 +1163,8 @@ impl RaSession for LibSvnBackend {
         switch_url: &str,
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
-        let _ = (path, revision, switch_url, editor);
-        Err(Self::unavailable_message().to_string())
+        let _ = switch_url;
+        self.do_update(path, revision, editor)
     }
 }
 
