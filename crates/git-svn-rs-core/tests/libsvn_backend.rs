@@ -126,7 +126,21 @@ fn linked_backend_reads_log_metadata_and_changed_paths() {
             && path.kind == NodeKind::File
             && path.copy_from_path.is_none()
             && path.copy_from_rev.is_none()
-            && path.content.is_none()
+            && path.content.as_deref() == Some(b"pub fn answer() -> u8 { 42 }\n".as_slice())
             && path.properties.is_empty()
+    }));
+    assert!(trunk.changed_paths.iter().any(|path| {
+        path.path == "/trunk/run.sh"
+            && path.action == ChangeAction::Add
+            && path.kind == NodeKind::File
+            && path.content.as_deref() == Some(b"#!/bin/sh\necho hi\n".as_slice())
+            && path.properties.get("svn:executable").map(String::as_str) == Some("*")
+    }));
+    assert!(trunk.changed_paths.iter().any(|path| {
+        path.path == "/trunk/link-to-lib"
+            && path.action == ChangeAction::Add
+            && path.kind == NodeKind::File
+            && path.content.as_deref() == Some(b"link src/lib.rs".as_slice())
+            && path.properties.get("svn:special").map(String::as_str) == Some("*")
     }));
 }

@@ -193,6 +193,15 @@ struct svn_string_t {
 
 #[cfg(git_svn_rs_libsvn_linked)]
 #[repr(C)]
+struct svn_stringbuf_t {
+    pool: *mut AprPoolT,
+    data: *mut c_char,
+    len: usize,
+    blocksize: usize,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
 struct svn_log_changed_path2_t {
     action: c_char,
     copyfrom_path: *const c_char,
@@ -232,6 +241,9 @@ enum AprHashT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 enum AprHashIndexT {}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+enum SvnStreamT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 enum SvnRaCallbacks2T {}
@@ -430,6 +442,115 @@ unsafe fn changed_path_to_rust(
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn fill_file_details(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    revisions: &mut [RevisionEvent],
+) -> Result<(), String> {
+    for revision in revisions {
+        let revision_number: c_long = revision.revision.try_into().map_err(|_| {
+            format!(
+                "SVN revision {} does not fit in svn_revnum_t",
+                revision.revision
+            )
+        })?;
+        for path in &mut revision.changed_paths {
+            if !matches!(
+                path.action,
+                ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
+            ) || path.kind != NodeKind::File
+            {
+                continue;
+            }
+            let (content, properties) =
+                unsafe { get_file(session, pool, &path.path, revision_number) }?;
+            path.content = Some(content);
+            path.properties = properties;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn get_file(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    path: &str,
+    revision: c_long,
+) -> Result<(Vec<u8>, BTreeMap<String, String>), String> {
+    let relative_path = CString::new(path.trim_start_matches('/'))
+        .map_err(|_| "SVN path contains NUL".to_string())?;
+    let buffer = unsafe { svn_stringbuf_create_empty(pool) };
+    if buffer.is_null() {
+        return Err("libsvn returned a null string buffer".to_string());
+    }
+    let stream = unsafe { svn_stream_from_stringbuf(buffer, pool) };
+    if stream.is_null() {
+        return Err("libsvn returned a null stream".to_string());
+    }
+
+    let mut props = ptr::null_mut();
+    let result = unsafe {
+        svn_call(
+            svn_ra_get_file(
+                session,
+                relative_path.as_ptr(),
+                revision,
+                stream,
+                ptr::null_mut(),
+                &mut props,
+                pool,
+            ),
+            "svn_ra_get_file",
+        )
+    };
+    result?;
+
+    let content = unsafe { stringbuf_bytes(buffer) };
+    let properties = unsafe { svn_file_properties(props) };
+    Ok((content, properties))
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn stringbuf_bytes(buffer: *const svn_stringbuf_t) -> Vec<u8> {
+    if buffer.is_null() {
+        return Vec::new();
+    }
+    let buffer = unsafe { &*buffer };
+    if buffer.data.is_null() || buffer.len == 0 {
+        return Vec::new();
+    }
+    unsafe { slice::from_raw_parts(buffer.data.cast::<u8>(), buffer.len) }.to_vec()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn svn_file_properties(props: *mut AprHashT) -> BTreeMap<String, String> {
+    let mut properties = BTreeMap::new();
+    if props.is_null() {
+        return properties;
+    }
+
+    let mut index = unsafe { apr_hash_first(ptr::null_mut(), props) };
+    while !index.is_null() {
+        let mut key: *const c_void = ptr::null();
+        let mut key_len: isize = 0;
+        let mut value: *mut c_void = ptr::null_mut();
+        unsafe { apr_hash_this(index, &mut key, &mut key_len, &mut value) };
+        if let Some(name) = unsafe { hash_key_to_string(key, key_len) }
+            && matches!(name.as_str(), "svn:executable" | "svn:special")
+        {
+            let value = unsafe { svn_string_to_string(value as *const svn_string_t) };
+            if !value.is_empty() {
+                properties.insert(name, value);
+            }
+        }
+        index = unsafe { apr_hash_next(index) };
+    }
+
+    properties
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn svn_call(error: *mut svn_error_t, context: &str) -> Result<(), String> {
     if error.is_null() {
         Ok(())
@@ -473,6 +594,11 @@ unsafe extern "C" {
         key_len: *mut isize,
         value: *mut *mut c_void,
     );
+    fn svn_stringbuf_create_empty(pool: *mut AprPoolT) -> *mut svn_stringbuf_t;
+    fn svn_stream_from_stringbuf(
+        buffer: *mut svn_stringbuf_t,
+        pool: *mut AprPoolT,
+    ) -> *mut SvnStreamT;
     fn svn_subr_version() -> *const svn_version_t;
     fn svn_err_best_message(
         error: *const svn_error_t,
@@ -504,6 +630,15 @@ unsafe extern "C" {
     fn svn_ra_get_uuid2(
         session: *mut SvnRaSessionT,
         uuid: *mut *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
+    fn svn_ra_get_file(
+        session: *mut SvnRaSessionT,
+        path: *const c_char,
+        revision: c_long,
+        stream: *mut SvnStreamT,
+        fetched_rev: *mut c_long,
+        props: *mut *mut AprHashT,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
     fn svn_ra_get_log2(
@@ -615,6 +750,7 @@ impl SvnBackend for LibSvnBackend {
                     ),
                     "svn_ra_get_log2",
                 )?;
+                fill_file_details(session, pool, &mut revisions)?;
                 Ok(revisions)
             })
         }
