@@ -1,3 +1,7 @@
+use super::editor::FetchEditor;
+#[cfg(git_svn_rs_libsvn_linked)]
+use super::ra::DirEntry;
+use super::ra::{DirListing, RaSession, SvnNodeKind};
 #[cfg(git_svn_rs_libsvn_linked)]
 use super::{ChangeAction, ChangedPath, NodeKind};
 use super::{RevisionEvent, SvnBackend};
@@ -460,6 +464,26 @@ fn node_kind_from_raw(kind: c_int) -> NodeKind {
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+fn svn_node_kind_from_raw(kind: c_int) -> Option<SvnNodeKind> {
+    match kind {
+        0 => None,
+        1 => Some(SvnNodeKind::File),
+        2 => Some(SvnNodeKind::Directory),
+        4 => Some(SvnNodeKind::Symlink),
+        _ => None,
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn svn_node_kind_from_change_kind(kind: &NodeKind) -> SvnNodeKind {
+    match kind {
+        NodeKind::File => SvnNodeKind::File,
+        NodeKind::Directory => SvnNodeKind::Directory,
+        NodeKind::Symlink => SvnNodeKind::Symlink,
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn fill_file_details(
     session: *mut SvnRaSessionT,
     pool: *mut AprPoolT,
@@ -607,6 +631,82 @@ unsafe fn dir_entries(
     }
 
     Ok(entries)
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn get_log(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    paths: &[&str],
+    start: u32,
+    end: u32,
+) -> Result<Vec<RevisionEvent>, String> {
+    let path_strings = if paths.is_empty() {
+        vec![CString::new("").expect("static path should not contain NUL")]
+    } else {
+        paths
+            .iter()
+            .map(|path| {
+                CString::new(path.trim_matches('/'))
+                    .map_err(|_| "SVN log path contains NUL".to_string())
+            })
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    let pointer_size = std::mem::size_of::<*const c_char>()
+        .try_into()
+        .expect("pointer size should fit APR int");
+
+    let log_paths = unsafe { apr_array_make(pool, path_strings.len() as c_int, pointer_size) };
+    if log_paths.is_null() {
+        return Err("APR returned a null paths array".to_string());
+    }
+    for path in &path_strings {
+        unsafe {
+            *(apr_array_push(log_paths) as *mut *const c_char) = path.as_ptr();
+        }
+    }
+
+    let revprops = unsafe { apr_array_make(pool, 3, pointer_size) };
+    if revprops.is_null() {
+        return Err("APR returned a null revprops array".to_string());
+    }
+    unsafe {
+        *(apr_array_push(revprops) as *mut *const c_char) =
+            SVN_PROP_REVISION_AUTHOR.as_ptr().cast::<c_char>();
+        *(apr_array_push(revprops) as *mut *const c_char) =
+            SVN_PROP_REVISION_DATE.as_ptr().cast::<c_char>();
+        *(apr_array_push(revprops) as *mut *const c_char) =
+            SVN_PROP_REVISION_LOG.as_ptr().cast::<c_char>();
+    }
+
+    let start: c_long = start
+        .try_into()
+        .map_err(|_| format!("SVN revision {start} does not fit in svn_revnum_t"))?;
+    let end: c_long = end
+        .try_into()
+        .map_err(|_| format!("SVN revision {end} does not fit in svn_revnum_t"))?;
+    let mut revisions = Vec::new();
+    unsafe {
+        svn_call(
+            svn_ra_get_log2(
+                session,
+                log_paths,
+                start,
+                end,
+                0,
+                1,
+                0,
+                0,
+                revprops,
+                receive_log_entry,
+                (&mut revisions as *mut Vec<RevisionEvent>).cast::<c_void>(),
+                pool,
+            ),
+            "svn_ra_get_log2",
+        )?;
+        fill_file_details(session, pool, &mut revisions)?;
+    }
+    Ok(revisions)
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -765,6 +865,13 @@ unsafe extern "C" {
         latest_revnum: *mut c_long,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
+    fn svn_ra_check_path(
+        session: *mut SvnRaSessionT,
+        path: *const c_char,
+        revision: c_long,
+        kind: *mut c_int,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
     fn svn_ra_get_uuid2(
         session: *mut SvnRaSessionT,
         uuid: *mut *const c_char,
@@ -851,56 +958,7 @@ impl SvnBackend for LibSvnBackend {
     fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
         #[cfg(git_svn_rs_libsvn_linked)]
         {
-            self.with_session(|session, pool| unsafe {
-                let root_path = CString::new("").expect("static path should not contain NUL");
-                let pointer_size = std::mem::size_of::<*const c_char>()
-                    .try_into()
-                    .expect("pointer size should fit APR int");
-
-                let paths = apr_array_make(pool, 1, pointer_size);
-                if paths.is_null() {
-                    return Err("APR returned a null paths array".to_string());
-                }
-                *(apr_array_push(paths) as *mut *const c_char) = root_path.as_ptr();
-
-                let revprops = apr_array_make(pool, 3, pointer_size);
-                if revprops.is_null() {
-                    return Err("APR returned a null revprops array".to_string());
-                }
-                *(apr_array_push(revprops) as *mut *const c_char) =
-                    SVN_PROP_REVISION_AUTHOR.as_ptr().cast::<c_char>();
-                *(apr_array_push(revprops) as *mut *const c_char) =
-                    SVN_PROP_REVISION_DATE.as_ptr().cast::<c_char>();
-                *(apr_array_push(revprops) as *mut *const c_char) =
-                    SVN_PROP_REVISION_LOG.as_ptr().cast::<c_char>();
-
-                let start: c_long = start
-                    .try_into()
-                    .map_err(|_| format!("SVN revision {start} does not fit in svn_revnum_t"))?;
-                let end: c_long = end
-                    .try_into()
-                    .map_err(|_| format!("SVN revision {end} does not fit in svn_revnum_t"))?;
-                let mut revisions = Vec::new();
-                svn_call(
-                    svn_ra_get_log2(
-                        session,
-                        paths,
-                        start,
-                        end,
-                        0,
-                        1,
-                        0,
-                        0,
-                        revprops,
-                        receive_log_entry,
-                        (&mut revisions as *mut Vec<RevisionEvent>).cast::<c_void>(),
-                        pool,
-                    ),
-                    "svn_ra_get_log2",
-                )?;
-                fill_file_details(session, pool, &mut revisions)?;
-                Ok(revisions)
-            })
+            self.with_session(|session, pool| unsafe { get_log(session, pool, &[], start, end) })
         }
 
         #[cfg(not(git_svn_rs_libsvn_linked))]
@@ -908,6 +966,121 @@ impl SvnBackend for LibSvnBackend {
             let _ = (start, end);
             Err(Self::unavailable_message().to_string())
         }
+    }
+}
+
+impl RaSession for LibSvnBackend {
+    fn url(&self) -> &str {
+        self.url.as_deref().unwrap_or_default()
+    }
+
+    fn repos_root(&self) -> &str {
+        self.url()
+    }
+
+    fn uuid(&self) -> Result<String, String> {
+        SvnBackend::uuid(self)
+    }
+
+    fn latest_revnum(&self) -> Result<u32, String> {
+        SvnBackend::latest_revnum(self)
+    }
+
+    fn check_path(&self, path: &str, revision: u32) -> Result<Option<SvnNodeKind>, String> {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            self.with_session(|session, pool| unsafe {
+                let path = CString::new(path.trim_matches('/'))
+                    .map_err(|_| "SVN path contains NUL".to_string())?;
+                let revision: c_long = revision
+                    .try_into()
+                    .map_err(|_| format!("SVN revision {revision} does not fit in svn_revnum_t"))?;
+                let mut kind = 0;
+                svn_call(
+                    svn_ra_check_path(session, path.as_ptr(), revision, &mut kind, pool),
+                    "svn_ra_check_path",
+                )?;
+                Ok(svn_node_kind_from_raw(kind))
+            })
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
+        {
+            let _ = (path, revision);
+            Err(Self::unavailable_message().to_string())
+        }
+    }
+
+    fn get_dir(&self, path: &str, revision: u32) -> Result<DirListing, String> {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            self.with_session(|session, pool| unsafe {
+                let revision_number: c_long = revision
+                    .try_into()
+                    .map_err(|_| format!("SVN revision {revision} does not fit in svn_revnum_t"))?;
+                if self.check_path(path, revision)? != Some(SvnNodeKind::Directory) {
+                    return Err(format!(
+                        "path is not a directory at r{revision}: {}",
+                        path.trim_matches('/')
+                    ));
+                }
+                let entries = dir_entries(session, pool, path, revision_number)?
+                    .into_iter()
+                    .map(|(name, kind)| {
+                        (
+                            name,
+                            DirEntry {
+                                kind: svn_node_kind_from_change_kind(&kind),
+                            },
+                        )
+                    })
+                    .collect();
+                Ok(DirListing {
+                    entries,
+                    properties: BTreeMap::new(),
+                })
+            })
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
+        {
+            let _ = (path, revision);
+            Err(Self::unavailable_message().to_string())
+        }
+    }
+
+    fn get_log(&self, paths: &[&str], start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            self.with_session(|session, pool| unsafe { get_log(session, pool, paths, start, end) })
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
+        {
+            let _ = (paths, start, end);
+            Err(Self::unavailable_message().to_string())
+        }
+    }
+
+    fn do_update(
+        &self,
+        path: &str,
+        revision: u32,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        let _ = (path, revision, editor);
+        Err(Self::unavailable_message().to_string())
+    }
+
+    fn do_switch(
+        &self,
+        path: &str,
+        revision: u32,
+        switch_url: &str,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        let _ = (path, revision, switch_url, editor);
+        Err(Self::unavailable_message().to_string())
     }
 }
 
@@ -920,7 +1093,7 @@ mod tests {
         let backend = LibSvnBackend::new();
 
         assert_eq!(
-            backend.uuid().unwrap_err(),
+            SvnBackend::uuid(&backend).unwrap_err(),
             LibSvnBackend::unavailable_message()
         );
     }

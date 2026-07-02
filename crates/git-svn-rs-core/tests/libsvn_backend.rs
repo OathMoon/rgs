@@ -4,6 +4,7 @@ use git_svn_rs_core::svn::SvnBackend;
 use git_svn_rs_core::svn::libsvn::{
     LIBSVN_LINKED_PROBE_MESSAGE, LIBSVN_NOT_LINKED_MESSAGE, LibSvnBackend, LibSvnLinkStatus,
 };
+use git_svn_rs_core::svn::ra::{RaSession, SvnNodeKind};
 use git_svn_rs_core::svn::{ChangeAction, NodeKind};
 
 #[path = "support/svn_fixture.rs"]
@@ -49,13 +50,16 @@ fn backend_methods_report_unimplemented_or_not_linked() {
     if cfg!(git_svn_rs_libsvn_linked) {
         let expected = "libsvn backend requires an SVN repository URL";
 
-        assert_eq!(backend.uuid().unwrap_err(), expected);
-        assert_eq!(backend.latest_revnum().unwrap_err(), expected);
+        assert_eq!(SvnBackend::uuid(&backend).unwrap_err(), expected);
+        assert_eq!(SvnBackend::latest_revnum(&backend).unwrap_err(), expected);
         assert_eq!(backend.log(0, 1).unwrap_err(), expected);
     } else {
-        assert_eq!(backend.uuid().unwrap_err(), LIBSVN_NOT_LINKED_MESSAGE);
         assert_eq!(
-            backend.latest_revnum().unwrap_err(),
+            SvnBackend::uuid(&backend).unwrap_err(),
+            LIBSVN_NOT_LINKED_MESSAGE
+        );
+        assert_eq!(
+            SvnBackend::latest_revnum(&backend).unwrap_err(),
             LIBSVN_NOT_LINKED_MESSAGE
         );
         assert_eq!(backend.log(0, 1).unwrap_err(), LIBSVN_NOT_LINKED_MESSAGE);
@@ -79,8 +83,50 @@ fn linked_backend_reads_file_repository_metadata() {
     let fixture = StandardSvnFixture::create().unwrap();
     let backend = LibSvnBackend::for_url(fixture.url());
 
-    assert_eq!(backend.latest_revnum().unwrap(), fixture.latest_revision());
-    assert_eq!(backend.uuid().unwrap(), fixture.uuid());
+    assert_eq!(
+        SvnBackend::latest_revnum(&backend).unwrap(),
+        fixture.latest_revision()
+    );
+    assert_eq!(SvnBackend::uuid(&backend).unwrap(), fixture.uuid());
+}
+
+#[test]
+fn linked_backend_implements_ra_session_read_methods() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+
+    assert_eq!(RaSession::url(&session), fixture.url());
+    assert_eq!(RaSession::repos_root(&session), fixture.url());
+    assert_eq!(
+        session.check_path("trunk/src/lib.rs", 2).unwrap(),
+        Some(SvnNodeKind::File)
+    );
+    assert_eq!(
+        session.check_path("trunk", 2).unwrap(),
+        Some(SvnNodeKind::Directory)
+    );
+    assert_eq!(session.check_path("trunk/missing", 2).unwrap(), None);
+
+    let trunk = session.get_dir("trunk", 2).unwrap();
+    assert_eq!(trunk.entries["src"].kind, SvnNodeKind::Directory);
+    assert_eq!(trunk.entries["run.sh"].kind, SvnNodeKind::File);
+    assert!(trunk.properties.is_empty());
+
+    let log = session.get_log(&["trunk"], 1, 2).unwrap();
+    assert!(log.iter().any(|revision| revision.revision == 2));
+    assert!(!log.iter().any(|revision| revision.revision == 3));
 }
 
 #[test]
