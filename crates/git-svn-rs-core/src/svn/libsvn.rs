@@ -1,10 +1,16 @@
+#[cfg(git_svn_rs_libsvn_linked)]
+use super::{ChangeAction, ChangedPath, NodeKind};
 use super::{RevisionEvent, SvnBackend};
+#[cfg(git_svn_rs_libsvn_linked)]
+use std::collections::BTreeMap;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::ffi::{CStr, CString};
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::os::raw::{c_char, c_int, c_long, c_void};
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::ptr;
+#[cfg(git_svn_rs_libsvn_linked)]
+use std::slice;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::sync::OnceLock;
 
@@ -14,6 +20,14 @@ pub const LIBSVN_LINKED_PROBE_MESSAGE: &str =
     "libsvn link probe succeeded via vcpkg; backend API calls are not implemented yet";
 pub const LIBSVN_NOT_IMPLEMENTED_MESSAGE: &str =
     "libsvn backend is linked, but native libsvn API calls are not implemented yet";
+#[cfg(git_svn_rs_libsvn_linked)]
+const APR_HASH_KEY_STRING: isize = -1;
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_PROP_REVISION_AUTHOR: &[u8] = b"svn:author\0";
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_PROP_REVISION_DATE: &[u8] = b"svn:date\0";
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_PROP_REVISION_LOG: &[u8] = b"svn:log\0";
 
 #[derive(Debug, Default)]
 pub struct LibSvnBackend {
@@ -93,6 +107,7 @@ impl LibSvnBackend {
         Err(Self::unavailable_message().to_string())
     }
 
+    #[cfg_attr(git_svn_rs_libsvn_linked, allow(dead_code))]
     fn unavailable_message() -> &'static str {
         if Self::availability().link_status == LibSvnLinkStatus::Linked {
             LIBSVN_NOT_IMPLEMENTED_MESSAGE
@@ -170,7 +185,53 @@ struct svn_error_t {
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
+struct svn_string_t {
+    data: *const c_char,
+    len: usize,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
+struct svn_log_changed_path2_t {
+    action: c_char,
+    copyfrom_path: *const c_char,
+    copyfrom_rev: c_long,
+    node_kind: c_int,
+    text_modified: c_int,
+    props_modified: c_int,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
+struct svn_log_entry_t {
+    changed_paths: *mut AprHashT,
+    revision: c_long,
+    revprops: *mut AprHashT,
+    has_children: c_int,
+    changed_paths2: *mut AprHashT,
+    non_inheritable: c_int,
+    subtractive_merge: c_int,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
+struct apr_array_header_t {
+    pool: *mut AprPoolT,
+    elt_size: c_int,
+    nelts: c_int,
+    nalloc: c_int,
+    elts: *mut c_char,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 enum AprPoolT {}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+enum AprHashT {}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+enum AprHashIndexT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 enum SvnRaCallbacks2T {}
@@ -234,6 +295,141 @@ impl Drop for AprPool {
 type AprAbortFunc = Option<unsafe extern "C" fn(c_int) -> c_int>;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+unsafe extern "C" fn receive_log_entry(
+    baton: *mut c_void,
+    log_entry: *mut svn_log_entry_t,
+    _pool: *mut AprPoolT,
+) -> *mut svn_error_t {
+    if baton.is_null() || log_entry.is_null() {
+        return ptr::null_mut();
+    }
+
+    let revisions = unsafe { &mut *(baton as *mut Vec<RevisionEvent>) };
+    let log_entry = unsafe { &*log_entry };
+    if log_entry.revision < 0 {
+        return ptr::null_mut();
+    }
+
+    let Ok(revision) = u32::try_from(log_entry.revision) else {
+        return ptr::null_mut();
+    };
+
+    revisions.push(RevisionEvent {
+        revision,
+        author: unsafe { revprop_string(log_entry.revprops, SVN_PROP_REVISION_AUTHOR.as_ptr()) },
+        message: unsafe { revprop_string(log_entry.revprops, SVN_PROP_REVISION_LOG.as_ptr()) },
+        timestamp: unsafe { revprop_string(log_entry.revprops, SVN_PROP_REVISION_DATE.as_ptr()) },
+        changed_paths: unsafe { changed_paths(log_entry.changed_paths2) },
+    });
+
+    ptr::null_mut()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn revprop_string(revprops: *mut AprHashT, name: *const u8) -> String {
+    if revprops.is_null() {
+        return String::new();
+    }
+    let value = unsafe { apr_hash_get(revprops, name.cast::<c_void>(), APR_HASH_KEY_STRING) }
+        as *const svn_string_t;
+    unsafe { svn_string_to_string(value) }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn svn_string_to_string(value: *const svn_string_t) -> String {
+    if value.is_null() {
+        return String::new();
+    }
+    let value = unsafe { &*value };
+    if value.data.is_null() || value.len == 0 {
+        return String::new();
+    }
+    let bytes = unsafe { slice::from_raw_parts(value.data.cast::<u8>(), value.len) };
+    String::from_utf8_lossy(bytes).into_owned()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn changed_paths(paths: *mut AprHashT) -> Vec<ChangedPath> {
+    let mut changed_paths = Vec::new();
+    if paths.is_null() {
+        return changed_paths;
+    }
+
+    let mut index = unsafe { apr_hash_first(ptr::null_mut(), paths) };
+    while !index.is_null() {
+        let mut key: *const c_void = ptr::null();
+        let mut key_len: isize = 0;
+        let mut value: *mut c_void = ptr::null_mut();
+        unsafe { apr_hash_this(index, &mut key, &mut key_len, &mut value) };
+        if let Some(path) = unsafe { hash_key_to_string(key, key_len) } {
+            let changed_path = value as *const svn_log_changed_path2_t;
+            if let Some(change) = unsafe { changed_path_to_rust(path, changed_path) } {
+                changed_paths.push(change);
+            }
+        }
+        index = unsafe { apr_hash_next(index) };
+    }
+
+    changed_paths
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn hash_key_to_string(key: *const c_void, key_len: isize) -> Option<String> {
+    if key.is_null() {
+        return None;
+    }
+    if key_len >= 0 {
+        let bytes = unsafe { slice::from_raw_parts(key.cast::<u8>(), key_len as usize) };
+        Some(String::from_utf8_lossy(bytes).into_owned())
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(key.cast::<c_char>()) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn changed_path_to_rust(
+    path: String,
+    changed_path: *const svn_log_changed_path2_t,
+) -> Option<ChangedPath> {
+    if changed_path.is_null() {
+        return None;
+    }
+    let changed_path = unsafe { &*changed_path };
+    Some(ChangedPath {
+        path,
+        action: match changed_path.action as u8 as char {
+            'A' => ChangeAction::Add,
+            'M' => ChangeAction::Modify,
+            'D' => ChangeAction::Delete,
+            'R' => ChangeAction::Replace,
+            _ => return None,
+        },
+        copy_from_path: if changed_path.copyfrom_path.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(changed_path.copyfrom_path) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        },
+        copy_from_rev: u32::try_from(changed_path.copyfrom_rev).ok(),
+        kind: match changed_path.node_kind {
+            1 => NodeKind::File,
+            2 => NodeKind::Directory,
+            4 => NodeKind::Symlink,
+            _ => NodeKind::Directory,
+        },
+        properties: BTreeMap::new(),
+        content: None,
+    })
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn svn_call(error: *mut svn_error_t, context: &str) -> Result<(), String> {
     if error.is_null() {
         Ok(())
@@ -262,6 +458,21 @@ unsafe extern "C" {
         allocator: *mut c_void,
     ) -> c_int;
     fn apr_pool_destroy(pool: *mut AprPoolT);
+    fn apr_array_make(
+        pool: *mut AprPoolT,
+        nelts: c_int,
+        elt_size: c_int,
+    ) -> *mut apr_array_header_t;
+    fn apr_array_push(array: *mut apr_array_header_t) -> *mut c_void;
+    fn apr_hash_get(hash: *mut AprHashT, key: *const c_void, key_len: isize) -> *mut c_void;
+    fn apr_hash_first(pool: *mut AprPoolT, hash: *mut AprHashT) -> *mut AprHashIndexT;
+    fn apr_hash_next(index: *mut AprHashIndexT) -> *mut AprHashIndexT;
+    fn apr_hash_this(
+        index: *mut AprHashIndexT,
+        key: *mut *const c_void,
+        key_len: *mut isize,
+        value: *mut *mut c_void,
+    );
     fn svn_subr_version() -> *const svn_version_t;
     fn svn_err_best_message(
         error: *const svn_error_t,
@@ -293,6 +504,24 @@ unsafe extern "C" {
     fn svn_ra_get_uuid2(
         session: *mut SvnRaSessionT,
         uuid: *mut *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
+    fn svn_ra_get_log2(
+        session: *mut SvnRaSessionT,
+        paths: *const apr_array_header_t,
+        start: c_long,
+        end: c_long,
+        limit: c_int,
+        discover_changed_paths: c_int,
+        strict_node_history: c_int,
+        include_merged_revisions: c_int,
+        revprops: *const apr_array_header_t,
+        receiver: unsafe extern "C" fn(
+            *mut c_void,
+            *mut svn_log_entry_t,
+            *mut AprPoolT,
+        ) -> *mut svn_error_t,
+        receiver_baton: *mut c_void,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
 }
@@ -336,8 +565,65 @@ impl SvnBackend for LibSvnBackend {
         Err(Self::unavailable_message().to_string())
     }
 
-    fn log(&self, _start: u32, _end: u32) -> Result<Vec<RevisionEvent>, String> {
-        Err(Self::unavailable_message().to_string())
+    fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            self.with_session(|session, pool| unsafe {
+                let root_path = CString::new("").expect("static path should not contain NUL");
+                let pointer_size = std::mem::size_of::<*const c_char>()
+                    .try_into()
+                    .expect("pointer size should fit APR int");
+
+                let paths = apr_array_make(pool, 1, pointer_size);
+                if paths.is_null() {
+                    return Err("APR returned a null paths array".to_string());
+                }
+                *(apr_array_push(paths) as *mut *const c_char) = root_path.as_ptr();
+
+                let revprops = apr_array_make(pool, 3, pointer_size);
+                if revprops.is_null() {
+                    return Err("APR returned a null revprops array".to_string());
+                }
+                *(apr_array_push(revprops) as *mut *const c_char) =
+                    SVN_PROP_REVISION_AUTHOR.as_ptr().cast::<c_char>();
+                *(apr_array_push(revprops) as *mut *const c_char) =
+                    SVN_PROP_REVISION_DATE.as_ptr().cast::<c_char>();
+                *(apr_array_push(revprops) as *mut *const c_char) =
+                    SVN_PROP_REVISION_LOG.as_ptr().cast::<c_char>();
+
+                let start: c_long = start
+                    .try_into()
+                    .map_err(|_| format!("SVN revision {start} does not fit in svn_revnum_t"))?;
+                let end: c_long = end
+                    .try_into()
+                    .map_err(|_| format!("SVN revision {end} does not fit in svn_revnum_t"))?;
+                let mut revisions = Vec::new();
+                svn_call(
+                    svn_ra_get_log2(
+                        session,
+                        paths,
+                        start,
+                        end,
+                        0,
+                        1,
+                        0,
+                        0,
+                        revprops,
+                        receive_log_entry,
+                        (&mut revisions as *mut Vec<RevisionEvent>).cast::<c_void>(),
+                        pool,
+                    ),
+                    "svn_ra_get_log2",
+                )?;
+                Ok(revisions)
+            })
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
+        {
+            let _ = (start, end);
+            Err(Self::unavailable_message().to_string())
+        }
     }
 }
 

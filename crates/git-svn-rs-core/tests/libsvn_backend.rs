@@ -2,9 +2,9 @@
 
 use git_svn_rs_core::svn::SvnBackend;
 use git_svn_rs_core::svn::libsvn::{
-    LIBSVN_LINKED_PROBE_MESSAGE, LIBSVN_NOT_IMPLEMENTED_MESSAGE, LIBSVN_NOT_LINKED_MESSAGE,
-    LibSvnBackend, LibSvnLinkStatus,
+    LIBSVN_LINKED_PROBE_MESSAGE, LIBSVN_NOT_LINKED_MESSAGE, LibSvnBackend, LibSvnLinkStatus,
 };
+use git_svn_rs_core::svn::{ChangeAction, NodeKind};
 
 #[path = "support/svn_fixture.rs"]
 mod svn_fixture;
@@ -51,10 +51,7 @@ fn backend_methods_report_unimplemented_or_not_linked() {
 
         assert_eq!(backend.uuid().unwrap_err(), expected);
         assert_eq!(backend.latest_revnum().unwrap_err(), expected);
-        assert_eq!(
-            backend.log(0, 1).unwrap_err(),
-            LIBSVN_NOT_IMPLEMENTED_MESSAGE
-        );
+        assert_eq!(backend.log(0, 1).unwrap_err(), expected);
     } else {
         assert_eq!(backend.uuid().unwrap_err(), LIBSVN_NOT_LINKED_MESSAGE);
         assert_eq!(
@@ -84,4 +81,52 @@ fn linked_backend_reads_file_repository_metadata() {
 
     assert_eq!(backend.latest_revnum().unwrap(), fixture.latest_revision());
     assert_eq!(backend.uuid().unwrap(), fixture.uuid());
+}
+
+#[test]
+fn linked_backend_reads_log_metadata_and_changed_paths() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let backend = LibSvnBackend::for_url(fixture.url());
+
+    let revisions = backend.log(1, fixture.latest_revision()).unwrap();
+
+    let layout = revisions
+        .iter()
+        .find(|revision| revision.revision == 1)
+        .expect("layout revision should be present");
+    assert_eq!(layout.message, "layout");
+    assert!(!layout.author.is_empty());
+    assert!(!layout.timestamp.is_empty());
+    assert!(layout.changed_paths.iter().any(|path| {
+        path.path == "/trunk"
+            && path.action == ChangeAction::Add
+            && path.kind == NodeKind::Directory
+    }));
+
+    let trunk = revisions
+        .iter()
+        .find(|revision| revision.revision == 2)
+        .expect("trunk file revision should be present");
+    assert_eq!(trunk.message, "add trunk file");
+    assert!(trunk.changed_paths.iter().any(|path| {
+        path.path == "/trunk/src/lib.rs"
+            && path.action == ChangeAction::Add
+            && path.kind == NodeKind::File
+            && path.copy_from_path.is_none()
+            && path.copy_from_rev.is_none()
+            && path.content.is_none()
+            && path.properties.is_empty()
+    }));
 }
