@@ -2,11 +2,11 @@
 use super::{ChangeAction, ChangedPath, NodeKind};
 use super::{RevisionEvent, SvnBackend};
 #[cfg(git_svn_rs_libsvn_linked)]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::ffi::{CStr, CString};
 #[cfg(git_svn_rs_libsvn_linked)]
-use std::os::raw::{c_char, c_int, c_long, c_void};
+use std::os::raw::{c_char, c_int, c_long, c_uint, c_void};
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::ptr;
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -22,6 +22,8 @@ pub const LIBSVN_NOT_IMPLEMENTED_MESSAGE: &str =
     "libsvn backend is linked, but native libsvn API calls are not implemented yet";
 #[cfg(git_svn_rs_libsvn_linked)]
 const APR_HASH_KEY_STRING: isize = -1;
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_DIRENT_KIND: c_uint = 0x0000_0001;
 #[cfg(git_svn_rs_libsvn_linked)]
 const SVN_PROP_REVISION_AUTHOR: &[u8] = b"svn:author\0";
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -221,6 +223,17 @@ struct svn_log_entry_t {
     changed_paths2: *mut AprHashT,
     non_inheritable: c_int,
     subtractive_merge: c_int,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
+struct svn_dirent_t {
+    kind: c_int,
+    size: i64,
+    has_props: c_int,
+    created_rev: c_long,
+    time: i64,
+    last_author: *const c_char,
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -430,15 +443,20 @@ unsafe fn changed_path_to_rust(
             )
         },
         copy_from_rev: u32::try_from(changed_path.copyfrom_rev).ok(),
-        kind: match changed_path.node_kind {
-            1 => NodeKind::File,
-            2 => NodeKind::Directory,
-            4 => NodeKind::Symlink,
-            _ => NodeKind::Directory,
-        },
+        kind: node_kind_from_raw(changed_path.node_kind),
         properties: BTreeMap::new(),
         content: None,
     })
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn node_kind_from_raw(kind: c_int) -> NodeKind {
+    match kind {
+        1 => NodeKind::File,
+        2 => NodeKind::Directory,
+        4 => NodeKind::Symlink,
+        _ => NodeKind::Directory,
+    }
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -454,21 +472,141 @@ unsafe fn fill_file_details(
                 revision.revision
             )
         })?;
+        let mut known_paths = revision
+            .changed_paths
+            .iter()
+            .map(|path| path.path.clone())
+            .collect::<BTreeSet<_>>();
+        let mut copied_files = Vec::new();
         for path in &mut revision.changed_paths {
-            if !matches!(
+            if matches!(
                 path.action,
                 ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
-            ) || path.kind != NodeKind::File
+            ) && path.kind == NodeKind::File
+            {
+                let (content, properties) =
+                    unsafe { get_file(session, pool, &path.path, revision_number) }?;
+                path.content = Some(content);
+                path.properties = properties;
+            }
+
+            if !matches!(path.action, ChangeAction::Add | ChangeAction::Replace)
+                || path.kind != NodeKind::Directory
+                || path.copy_from_path.is_none()
             {
                 continue;
             }
-            let (content, properties) =
-                unsafe { get_file(session, pool, &path.path, revision_number) }?;
-            path.content = Some(content);
-            path.properties = properties;
+            for relative in unsafe { list_files(session, pool, &path.path, revision_number) }? {
+                let file_path = format!("{}/{}", path.path.trim_end_matches('/'), relative);
+                if !known_paths.insert(file_path.clone()) {
+                    continue;
+                }
+                let (content, properties) =
+                    unsafe { get_file(session, pool, &file_path, revision_number) }?;
+                copied_files.push(ChangedPath {
+                    path: file_path,
+                    action: ChangeAction::Add,
+                    copy_from_path: path
+                        .copy_from_path
+                        .as_ref()
+                        .map(|source| format!("{}/{}", source.trim_end_matches('/'), relative)),
+                    copy_from_rev: path.copy_from_rev,
+                    kind: NodeKind::File,
+                    properties,
+                    content: Some(content),
+                });
+            }
+        }
+        revision.changed_paths.extend(copied_files);
+    }
+    Ok(())
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn list_files(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    path: &str,
+    revision: c_long,
+) -> Result<Vec<String>, String> {
+    let mut files = Vec::new();
+    unsafe { list_files_recursive(session, pool, path, revision, "", &mut files) }?;
+    Ok(files)
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn list_files_recursive(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    path: &str,
+    revision: c_long,
+    relative_prefix: &str,
+    files: &mut Vec<String>,
+) -> Result<(), String> {
+    for (name, kind) in unsafe { dir_entries(session, pool, path, revision) }? {
+        let child_relative = if relative_prefix.is_empty() {
+            name.clone()
+        } else {
+            format!("{relative_prefix}/{name}")
+        };
+        let child_path = format!("{}/{}", path.trim_end_matches('/'), name);
+        match kind {
+            NodeKind::File | NodeKind::Symlink => files.push(child_relative),
+            NodeKind::Directory => unsafe {
+                list_files_recursive(session, pool, &child_path, revision, &child_relative, files)?
+            },
         }
     }
     Ok(())
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn dir_entries(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    path: &str,
+    revision: c_long,
+) -> Result<BTreeMap<String, NodeKind>, String> {
+    let relative_path = CString::new(path.trim_start_matches('/'))
+        .map_err(|_| "SVN path contains NUL".to_string())?;
+    let mut dirents = ptr::null_mut();
+    unsafe {
+        svn_call(
+            svn_ra_get_dir2(
+                session,
+                &mut dirents,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                relative_path.as_ptr(),
+                revision,
+                SVN_DIRENT_KIND,
+                pool,
+            ),
+            "svn_ra_get_dir2",
+        )?;
+    }
+
+    let mut entries = BTreeMap::new();
+    if dirents.is_null() {
+        return Ok(entries);
+    }
+
+    let mut index = unsafe { apr_hash_first(ptr::null_mut(), dirents) };
+    while !index.is_null() {
+        let mut key: *const c_void = ptr::null();
+        let mut key_len: isize = 0;
+        let mut value: *mut c_void = ptr::null_mut();
+        unsafe { apr_hash_this(index, &mut key, &mut key_len, &mut value) };
+        if let Some(name) = unsafe { hash_key_to_string(key, key_len) } {
+            let dirent = value as *const svn_dirent_t;
+            if !dirent.is_null() {
+                entries.insert(name, node_kind_from_raw(unsafe { (*dirent).kind }));
+            }
+        }
+        index = unsafe { apr_hash_next(index) };
+    }
+
+    Ok(entries)
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -639,6 +777,16 @@ unsafe extern "C" {
         stream: *mut SvnStreamT,
         fetched_rev: *mut c_long,
         props: *mut *mut AprHashT,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
+    fn svn_ra_get_dir2(
+        session: *mut SvnRaSessionT,
+        dirents: *mut *mut AprHashT,
+        fetched_rev: *mut c_long,
+        props: *mut *mut AprHashT,
+        path: *const c_char,
+        revision: c_long,
+        dirent_fields: c_uint,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
     fn svn_ra_get_log2(

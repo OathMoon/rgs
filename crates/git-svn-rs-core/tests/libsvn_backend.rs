@@ -143,4 +143,35 @@ fn linked_backend_reads_log_metadata_and_changed_paths() {
             && path.content.as_deref() == Some(b"link src/lib.rs".as_slice())
             && path.properties.get("svn:special").map(String::as_str) == Some("*")
     }));
+
+    let branch = revisions
+        .iter()
+        .find(|revision| revision.revision == 3)
+        .expect("branch copy revision should be present");
+    assert_eq!(branch.message, "branch main");
+    assert!(branch.changed_paths.iter().any(|path| {
+        path.path == "/branches/main"
+            && path.action == ChangeAction::Add
+            && path.kind == NodeKind::Directory
+            && path.copy_from_path.as_deref() == Some("/trunk")
+            && path.copy_from_rev == Some(1)
+    }));
+    assert!(branch.changed_paths.iter().any(|path| {
+        path.path == "/branches/main/src/lib.rs"
+            && path.action == ChangeAction::Add
+            && path.kind == NodeKind::File
+            && path.copy_from_path.as_deref() == Some("/trunk/src/lib.rs")
+            && path.copy_from_rev == Some(2)
+            && path.content.as_deref() == Some(b"pub fn answer() -> u8 { 42 }\n".as_slice())
+            && path.properties.is_empty()
+    }));
+    assert!(branch.changed_paths.iter().any(|path| {
+        path.path == "/branches/main/run.sh"
+            && path.action == ChangeAction::Add
+            && path.kind == NodeKind::File
+            && path.copy_from_path.as_deref() == Some("/trunk/run.sh")
+            && path.copy_from_rev == Some(2)
+            && path.content.as_deref() == Some(b"#!/bin/sh\necho hi\n".as_slice())
+            && path.properties.get("svn:executable").map(String::as_str) == Some("*")
+    }));
 }
