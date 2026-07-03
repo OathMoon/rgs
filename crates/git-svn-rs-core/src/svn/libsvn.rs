@@ -5,6 +5,7 @@ use super::ra::{DirListing, RaSession, SvnNodeKind};
 #[cfg(git_svn_rs_libsvn_linked)]
 use super::{ChangeAction, ChangedPath, NodeKind};
 use super::{RevisionEvent, SvnBackend};
+use crate::config::SvnRemoteConfig;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::collections::{BTreeMap, BTreeSet};
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -39,6 +40,8 @@ const SVN_PROP_REVISION_LOG: &[u8] = b"svn:log\0";
 pub struct LibSvnBackend {
     #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
     url: Option<String>,
+    #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
+    config_dir: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,13 +60,29 @@ pub struct LibSvnAvailability {
 
 impl LibSvnBackend {
     pub fn new() -> Self {
-        Self { url: None }
+        Self {
+            url: None,
+            config_dir: None,
+        }
     }
 
     pub fn for_url(url: impl Into<String>) -> Self {
         Self {
             url: Some(url.into()),
+            config_dir: None,
         }
+    }
+
+    pub fn from_config(config: &SvnRemoteConfig) -> Self {
+        Self {
+            url: Some(config.url.clone()),
+            config_dir: config.config_dir.clone(),
+        }
+    }
+
+    pub fn with_config_dir(mut self, config_dir: impl Into<String>) -> Self {
+        self.config_dir = Some(config_dir.into());
+        self
     }
 
     pub fn availability() -> LibSvnAvailability {
@@ -145,6 +164,8 @@ impl LibSvnBackend {
                 "svn_ra_create_callbacks",
             )?;
 
+            let config = self.config_hash(pool.as_ptr())?;
+
             let mut session: *mut SvnRaSessionT = ptr::null_mut();
             svn_call(
                 svn_ra_open5(
@@ -155,7 +176,7 @@ impl LibSvnBackend {
                     ptr::null(),
                     callbacks,
                     ptr::null_mut(),
-                    ptr::null_mut(),
+                    config,
                     pool.as_ptr(),
                 ),
                 "svn_ra_open5",
@@ -167,6 +188,23 @@ impl LibSvnBackend {
 
             operation(session, pool.as_ptr())
         }
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn config_hash(&self, pool: *mut AprPoolT) -> Result<*mut AprHashT, String> {
+        let Some(config_dir) = self.config_dir.as_deref() else {
+            return Ok(ptr::null_mut());
+        };
+        let config_dir = CString::new(config_dir)
+            .map_err(|_| "SVN config directory contains NUL".to_string())?;
+        let mut config = ptr::null_mut();
+        unsafe {
+            svn_call(
+                svn_config_get_config(&mut config, config_dir.as_ptr(), pool),
+                "svn_config_get_config",
+            )?;
+        }
+        Ok(config)
     }
 }
 
@@ -932,6 +970,11 @@ unsafe extern "C" {
         buffer_size: usize,
     ) -> *const c_char;
     fn svn_error_clear(error: *mut svn_error_t);
+    fn svn_config_get_config(
+        config: *mut *mut AprHashT,
+        config_dir: *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
     fn svn_ra_initialize(pool: *mut AprPoolT) -> *mut svn_error_t;
     fn svn_ra_create_callbacks(
         callbacks: *mut *mut SvnRaCallbacks2T,
@@ -945,7 +988,7 @@ unsafe extern "C" {
         uuid: *const c_char,
         callbacks: *const SvnRaCallbacks2T,
         callback_baton: *mut c_void,
-        config: *mut c_void,
+        config: *mut AprHashT,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
     fn svn_ra_get_latest_revnum(

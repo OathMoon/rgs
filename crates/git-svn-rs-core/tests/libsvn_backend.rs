@@ -1,5 +1,7 @@
 #![cfg(feature = "svn-libsvn")]
 
+use git_svn_rs_core::config::SvnRemoteConfig;
+use git_svn_rs_core::mapping::build_single_path;
 use git_svn_rs_core::svn::SvnBackend;
 use git_svn_rs_core::svn::editor::FetchEditor;
 use git_svn_rs_core::svn::libsvn::{
@@ -85,6 +87,33 @@ fn linked_backend_reads_file_repository_metadata() {
 
     let fixture = StandardSvnFixture::create().unwrap();
     let backend = LibSvnBackend::for_url(fixture.url());
+
+    assert_eq!(
+        SvnBackend::latest_revnum(&backend).unwrap(),
+        fixture.latest_revision()
+    );
+    assert_eq!(SvnBackend::uuid(&backend).unwrap(), fixture.uuid());
+}
+
+#[test]
+fn linked_backend_reads_metadata_with_config_dir_from_remote_config() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let config = SvnRemoteConfig::new("svn", fixture.url(), build_single_path(""))
+        .with_config_dir(config_dir.path().to_string_lossy());
+    let backend = LibSvnBackend::from_config(&config);
 
     assert_eq!(
         SvnBackend::latest_revnum(&backend).unwrap(),
