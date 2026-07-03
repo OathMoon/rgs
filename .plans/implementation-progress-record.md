@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `607f821c feat: add libsvn basic auth baton`
+- Latest implementation commit: `19328574 feat: use linked libsvn backend for fetch`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -37,6 +37,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `d4ad78b0`: linked `LibSvnBackend` test coverage validates native RA metadata, path-filtered log, and update replay over a local `svn://` repository served by `svnserve`.
 - `0c8cd255`: linked `LibSvnBackend` can be constructed from `SvnRemoteConfig` and passes configured `svn-remote.*.config-dir` through `svn_config_get_config()` into native RA sessions.
 - `607f821c`: linked `LibSvnBackend` creates a native auth baton with simple/username providers, default username/password parameters, and no-auth-cache support; coverage includes a username/password-protected local `svn://` repository.
+- `19328574`: `fetch` now selects the linked `LibSvnBackend` for real SVN remotes when `svn-libsvn` is enabled and linked, while default and unlinked feature builds continue to use the SVN CLI backend.
 
 ## Completed Capabilities
 
@@ -61,6 +62,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Added fixture builders and mock import/fetch planning for content, executable mode, symlink mode, copy, and delete.
 - SVN CLI replay supports `file://`, local `svn://`, `svn+ssh://`, `http://`, and `https://` URL schemes, with strongest coverage around local fixtures.
 - Linked libsvn coverage now includes local `file://` and local `svn://` fixture access for native RA metadata, path-filtered log, and log-backed update/switch replay.
+- Feature-gated command fetch now routes real SVN remotes through linked `LibSvnBackend` when available, falling back to the SVN CLI backend for default and unlinked feature builds.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
 - `fetch --fetch-all` enumerates configured `svn-remote.*.url` entries.
 
@@ -98,7 +100,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Continue the real `svn-libsvn` backend beyond native version, RA repository metadata, read-only `RaSession` methods, RA log metadata, changed-file content/property reads, copied-directory file materialization, config-dir propagation, basic auth baton support, and initial path-compatible log-backed `do_update`/`do_switch` replay; remaining backend work includes true libsvn delta editor integration, richer auth prompt/provider flows, remote service validation, and deeper libsvn error/session handling.
 - Current `svn-libsvn` feature builds and runs a vcpkg Subversion link probe; this environment links when `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and the vcpkg `installed\x64-windows\bin` directory is on `PATH`.
-- Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://`, especially remote auth/service scenarios and full RA session integration.
+- Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://`, especially remote auth/service scenarios and full RA editor integration.
 - Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` behavior against non-local SVN servers.
 - Complete the remaining planned `Log.pm` compatibility modes and more complex multi-ref/rev_map resolver cases.
 - Implement production remote SVN/libsvn dcommit write-back; current supported non-dry-run path is local `file://`, with remote write-back guarded.
@@ -127,6 +129,10 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_metadata_with_config_dir_from_remote_config -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_authenticated_svnserve_with_credentials -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_log_metadata_and_changed_paths -- --nocapture` (covers changed-path metadata, file content, `svn:executable`/`svn:special` file properties, and copied-directory file materialization)
+- `cargo test -p git-svn-rs-core commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
+- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
+- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_file_url_imports_trunk_history_after_init -- --nocapture`
+- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo clippy -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- -D warnings`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
 - `cargo clippy --all-targets --all-features -- -D warnings`
