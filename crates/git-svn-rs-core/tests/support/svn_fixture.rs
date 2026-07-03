@@ -191,6 +191,21 @@ impl StandardSvnFixture {
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
+
+    #[allow(dead_code)]
+    pub fn require_basic_auth(&self, username: &str, password: &str) -> Result<(), String> {
+        let conf = self.repo.join("conf");
+        std::fs::write(
+            conf.join("svnserve.conf"),
+            "[general]\nanon-access = none\nauth-access = read\npassword-db = passwd\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(
+            conf.join("passwd"),
+            format!("[users]\n{username} = {password}\n"),
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 #[allow(dead_code)]
@@ -219,7 +234,7 @@ impl SvnServe {
             ])
             .spawn()
             .map_err(|e| format!("svnserve failed to start: {e}"))?;
-        let server = Self { child, port };
+        let mut server = Self { child, port };
         server.wait_until_ready()?;
         Ok(server)
     }
@@ -228,18 +243,20 @@ impl SvnServe {
         format!("svn://127.0.0.1:{}/repo", self.port)
     }
 
-    fn wait_until_ready(&self) -> Result<(), String> {
-        let url = self.repo_url();
+    fn wait_until_ready(&mut self) -> Result<(), String> {
         let mut last_error = String::new();
         for _ in 0..50 {
-            let output = Command::new("svn")
-                .args(["info", "--non-interactive", &url])
-                .output()
-                .map_err(|e| e.to_string())?;
-            if output.status.success() {
-                return Ok(());
+            match std::net::TcpStream::connect(("127.0.0.1", self.port)) {
+                Ok(_) => {
+                    return Ok(());
+                }
+                Err(err) => {
+                    last_error = err.to_string();
+                }
             }
-            last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            if self.child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                return Err("svnserve exited before accepting connections".to_string());
+            }
             std::thread::sleep(Duration::from_millis(100));
         }
         Err(format!("svnserve did not become ready: {last_error}"))

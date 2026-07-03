@@ -296,6 +296,32 @@ fn linked_backend_replays_local_svnserve_repository() {
 }
 
 #[test]
+fn linked_backend_reads_authenticated_svnserve_with_credentials() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let backend = LibSvnBackend::for_url(svnserve.repo_url()).with_credentials("alice", "secret");
+
+    assert_eq!(
+        SvnBackend::latest_revnum(&backend).unwrap(),
+        fixture.latest_revision()
+    );
+    assert_eq!(SvnBackend::uuid(&backend).unwrap(), fixture.uuid());
+}
+
+#[test]
 fn linked_backend_reads_log_metadata_and_changed_paths() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

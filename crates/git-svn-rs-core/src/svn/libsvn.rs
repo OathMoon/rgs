@@ -35,6 +35,14 @@ const SVN_PROP_REVISION_AUTHOR: &[u8] = b"svn:author\0";
 const SVN_PROP_REVISION_DATE: &[u8] = b"svn:date\0";
 #[cfg(git_svn_rs_libsvn_linked)]
 const SVN_PROP_REVISION_LOG: &[u8] = b"svn:log\0";
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_AUTH_PARAM_DEFAULT_USERNAME: &[u8] = b"svn:auth:username\0";
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_AUTH_PARAM_DEFAULT_PASSWORD: &[u8] = b"svn:auth:password\0";
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_AUTH_PARAM_NO_AUTH_CACHE: &[u8] = b"svn:auth:no-auth-cache\0";
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_AUTH_PRESENT_VALUE: &[u8] = b"1\0";
 
 #[derive(Debug, Default)]
 pub struct LibSvnBackend {
@@ -42,6 +50,12 @@ pub struct LibSvnBackend {
     url: Option<String>,
     #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
     config_dir: Option<String>,
+    #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
+    username: Option<String>,
+    #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
+    password: Option<String>,
+    #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
+    no_auth_cache: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,6 +77,9 @@ impl LibSvnBackend {
         Self {
             url: None,
             config_dir: None,
+            username: None,
+            password: None,
+            no_auth_cache: false,
         }
     }
 
@@ -70,6 +87,9 @@ impl LibSvnBackend {
         Self {
             url: Some(url.into()),
             config_dir: None,
+            username: None,
+            password: None,
+            no_auth_cache: false,
         }
     }
 
@@ -77,11 +97,29 @@ impl LibSvnBackend {
         Self {
             url: Some(config.url.clone()),
             config_dir: config.config_dir.clone(),
+            username: config.username.clone(),
+            password: None,
+            no_auth_cache: config.no_auth_cache,
         }
     }
 
     pub fn with_config_dir(mut self, config_dir: impl Into<String>) -> Self {
         self.config_dir = Some(config_dir.into());
+        self
+    }
+
+    pub fn with_credentials(
+        mut self,
+        username: impl Into<String>,
+        password: impl Into<String>,
+    ) -> Self {
+        self.username = Some(username.into());
+        self.password = Some(password.into());
+        self
+    }
+
+    pub fn without_auth_cache(mut self) -> Self {
+        self.no_auth_cache = true;
         self
     }
 
@@ -163,6 +201,10 @@ impl LibSvnBackend {
                 svn_ra_create_callbacks(&mut callbacks, pool.as_ptr()),
                 "svn_ra_create_callbacks",
             )?;
+            let auth_baton = self.auth_baton(pool.as_ptr())?;
+            if !callbacks.is_null() {
+                (*callbacks).auth_baton = auth_baton;
+            }
 
             let config = self.config_hash(pool.as_ptr())?;
 
@@ -205,6 +247,69 @@ impl LibSvnBackend {
             )?;
         }
         Ok(config)
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe fn auth_baton(&self, pool: *mut AprPoolT) -> Result<*mut SvnAuthBatonT, String> {
+        let provider_size = std::mem::size_of::<*mut SvnAuthProviderObjectT>()
+            .try_into()
+            .expect("pointer size should fit APR int");
+        let providers = unsafe { apr_array_make(pool, 2, provider_size) };
+        if providers.is_null() {
+            return Err("APR returned a null auth provider array".to_string());
+        }
+
+        let mut simple_provider = ptr::null_mut();
+        unsafe {
+            svn_auth_get_simple_provider2(&mut simple_provider, None, ptr::null_mut(), pool);
+        }
+        if !simple_provider.is_null() {
+            unsafe { push_auth_provider(providers, simple_provider) };
+        }
+
+        let mut username_provider = ptr::null_mut();
+        unsafe { svn_auth_get_username_provider(&mut username_provider, pool) };
+        if !username_provider.is_null() {
+            unsafe { push_auth_provider(providers, username_provider) };
+        }
+
+        let mut auth_baton = ptr::null_mut();
+        unsafe { svn_auth_open(&mut auth_baton, providers, pool) };
+        if auth_baton.is_null() {
+            return Err("libsvn returned a null auth baton".to_string());
+        }
+
+        if let Some(username) = &self.username {
+            let username = pool_c_string(pool, username, "SVN username")?;
+            unsafe {
+                svn_auth_set_parameter(
+                    auth_baton,
+                    SVN_AUTH_PARAM_DEFAULT_USERNAME.as_ptr().cast::<c_char>(),
+                    username.cast::<c_void>(),
+                );
+            }
+        }
+        if let Some(password) = &self.password {
+            let password = pool_c_string(pool, password, "SVN password")?;
+            unsafe {
+                svn_auth_set_parameter(
+                    auth_baton,
+                    SVN_AUTH_PARAM_DEFAULT_PASSWORD.as_ptr().cast::<c_char>(),
+                    password.cast::<c_void>(),
+                );
+            }
+        }
+        if self.no_auth_cache {
+            unsafe {
+                svn_auth_set_parameter(
+                    auth_baton,
+                    SVN_AUTH_PARAM_NO_AUTH_CACHE.as_ptr().cast::<c_char>(),
+                    SVN_AUTH_PRESENT_VALUE.as_ptr().cast::<c_void>(),
+                );
+            }
+        }
+
+        Ok(auth_baton)
     }
 }
 
@@ -301,7 +406,17 @@ enum AprHashIndexT {}
 enum SvnStreamT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
-enum SvnRaCallbacks2T {}
+#[repr(C)]
+struct SvnRaCallbacks2T {
+    open_tmp_file: *mut c_void,
+    auth_baton: *mut SvnAuthBatonT,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+enum SvnAuthBatonT {}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+enum SvnAuthProviderObjectT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 enum SvnRaSessionT {}
@@ -360,6 +475,10 @@ impl Drop for AprPool {
 
 #[cfg(git_svn_rs_libsvn_linked)]
 type AprAbortFunc = Option<unsafe extern "C" fn(c_int) -> c_int>;
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnAuthPlaintextPromptFunc = Option<
+    unsafe extern "C" fn(*mut c_int, *const c_char, *mut c_void, *mut AprPoolT) -> *mut svn_error_t,
+>;
 
 #[cfg(git_svn_rs_libsvn_linked)]
 unsafe extern "C" fn receive_log_entry(
@@ -748,6 +867,27 @@ unsafe fn get_log(
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn push_auth_provider(
+    array: *mut apr_array_header_t,
+    provider: *mut SvnAuthProviderObjectT,
+) {
+    unsafe {
+        *(apr_array_push(array) as *mut *mut SvnAuthProviderObjectT) = provider;
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn pool_c_string(pool: *mut AprPoolT, value: &str, label: &str) -> Result<*const c_char, String> {
+    let value = CString::new(value).map_err(|_| format!("{label} contains NUL"))?;
+    let value = unsafe { apr_pstrdup(pool, value.as_ptr()) };
+    if value.is_null() {
+        Err(format!("APR failed to allocate {label}"))
+    } else {
+        Ok(value)
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 fn replay_revision(
     revision: &RevisionEvent,
     path: &str,
@@ -943,6 +1083,7 @@ unsafe extern "C" {
         allocator: *mut c_void,
     ) -> c_int;
     fn apr_pool_destroy(pool: *mut AprPoolT);
+    fn apr_pstrdup(pool: *mut AprPoolT, string: *const c_char) -> *const c_char;
     fn apr_array_make(
         pool: *mut AprPoolT,
         nelts: c_int,
@@ -970,6 +1111,26 @@ unsafe extern "C" {
         buffer_size: usize,
     ) -> *const c_char;
     fn svn_error_clear(error: *mut svn_error_t);
+    fn svn_auth_get_simple_provider2(
+        provider: *mut *mut SvnAuthProviderObjectT,
+        plaintext_prompt_func: SvnAuthPlaintextPromptFunc,
+        prompt_baton: *mut c_void,
+        pool: *mut AprPoolT,
+    );
+    fn svn_auth_get_username_provider(
+        provider: *mut *mut SvnAuthProviderObjectT,
+        pool: *mut AprPoolT,
+    );
+    fn svn_auth_open(
+        auth_baton: *mut *mut SvnAuthBatonT,
+        providers: *const apr_array_header_t,
+        pool: *mut AprPoolT,
+    );
+    fn svn_auth_set_parameter(
+        auth_baton: *mut SvnAuthBatonT,
+        name: *const c_char,
+        value: *const c_void,
+    );
     fn svn_config_get_config(
         config: *mut *mut AprHashT,
         config_dir: *const c_char,
