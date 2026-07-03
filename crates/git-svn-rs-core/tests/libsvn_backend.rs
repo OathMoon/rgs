@@ -11,7 +11,9 @@ use git_svn_rs_core::svn::{ChangeAction, NodeKind};
 #[path = "support/svn_fixture.rs"]
 mod svn_fixture;
 
-use svn_fixture::{StandardSvnFixture, SvnToolPolicy, require_svn_tools};
+use svn_fixture::{
+    StandardSvnFixture, SvnServe, SvnToolPolicy, require_svn_tools, require_svnserve,
+};
 
 #[test]
 fn reports_feature_enabled_link_probe_state() {
@@ -217,6 +219,49 @@ fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
         editor
             .events
             .contains(&"apply_textdelta:branches/main/src/lib.rs:29".to_string())
+    );
+    assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
+fn linked_backend_replays_local_svnserve_repository() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let session = LibSvnBackend::for_url(svnserve.repo_url());
+    let mut editor = RecordingFetchEditor::default();
+
+    assert_eq!(
+        SvnBackend::latest_revnum(&session).unwrap(),
+        fixture.latest_revision()
+    );
+    assert_eq!(SvnBackend::uuid(&session).unwrap(), fixture.uuid());
+
+    let trunk_log = session.get_log(&["trunk"], 1, 2).unwrap();
+    assert!(trunk_log.iter().any(|revision| revision.revision == 2));
+    assert!(!trunk_log.iter().any(|revision| revision.revision == 3));
+
+    session.do_update("trunk", 2, &mut editor).unwrap();
+    assert!(
+        editor
+            .events
+            .contains(&"add_file:trunk/src/lib.rs".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"apply_textdelta:trunk/src/lib.rs:29".to_string())
     );
     assert!(editor.events.contains(&"close_edit".to_string()));
 }

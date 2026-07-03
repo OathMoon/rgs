@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command};
+use std::time::Duration;
 
 use tempfile::TempDir;
 
@@ -28,6 +29,19 @@ pub fn missing_tools_policy(strict_compat: bool) -> SvnToolPolicy {
         SvnToolPolicy::Fail(MISSING_TOOLS.to_string())
     } else {
         SvnToolPolicy::Skip(format!("skipping: {MISSING_TOOLS}"))
+    }
+}
+
+#[allow(dead_code)]
+pub fn require_svnserve() -> Result<(), SvnToolPolicy> {
+    if command_succeeds("svnserve", &["--version"]) {
+        Ok(())
+    } else if strict_compat() {
+        Err(SvnToolPolicy::Fail("svnserve is required".to_string()))
+    } else {
+        Err(SvnToolPolicy::Skip(
+            "skipping: svnserve is required".to_string(),
+        ))
     }
 }
 
@@ -176,6 +190,66 @@ impl StandardSvnFixture {
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8_lossy(&output.stdout).trim().to_string()
+    }
+}
+
+#[allow(dead_code)]
+pub struct SvnServe {
+    child: Child,
+    port: u16,
+}
+
+#[allow(dead_code)]
+impl SvnServe {
+    pub fn start(root: &Path) -> Result<Self, String> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        drop(listener);
+
+        let child = Command::new("svnserve")
+            .args([
+                "--daemon",
+                "--foreground",
+                "--listen-host",
+                "127.0.0.1",
+                "--listen-port",
+                &port.to_string(),
+                "--root",
+                path_arg(root)?,
+            ])
+            .spawn()
+            .map_err(|e| format!("svnserve failed to start: {e}"))?;
+        let server = Self { child, port };
+        server.wait_until_ready()?;
+        Ok(server)
+    }
+
+    pub fn repo_url(&self) -> String {
+        format!("svn://127.0.0.1:{}/repo", self.port)
+    }
+
+    fn wait_until_ready(&self) -> Result<(), String> {
+        let url = self.repo_url();
+        let mut last_error = String::new();
+        for _ in 0..50 {
+            let output = Command::new("svn")
+                .args(["info", "--non-interactive", &url])
+                .output()
+                .map_err(|e| e.to_string())?;
+            if output.status.success() {
+                return Ok(());
+            }
+            last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Err(format!("svnserve did not become ready: {last_error}"))
+    }
+}
+
+impl Drop for SvnServe {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
