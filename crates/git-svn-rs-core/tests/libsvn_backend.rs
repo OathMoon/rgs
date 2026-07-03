@@ -154,27 +154,23 @@ fn linked_backend_do_update_drives_fetch_editor_callbacks() {
     assert!(
         editor
             .events
-            .contains(&"add_directory:/trunk/src".to_string())
+            .contains(&"add_directory:trunk/src".to_string())
     );
     assert!(
         editor
             .events
-            .contains(&"add_file:/trunk/src/lib.rs".to_string())
+            .contains(&"add_file:trunk/src/lib.rs".to_string())
+    );
+    assert!(editor.events.contains(&"add_file:trunk/run.sh".to_string()));
+    assert!(
+        editor
+            .events
+            .contains(&"change_file_prop:trunk/run.sh:svn:executable=*".to_string())
     );
     assert!(
         editor
             .events
-            .contains(&"add_file:/trunk/run.sh".to_string())
-    );
-    assert!(
-        editor
-            .events
-            .contains(&"change_file_prop:/trunk/run.sh:svn:executable=*".to_string())
-    );
-    assert!(
-        editor
-            .events
-            .contains(&"apply_textdelta:/trunk/run.sh:18".to_string())
+            .contains(&"apply_textdelta:trunk/run.sh:18".to_string())
     );
     assert!(editor.events.contains(&"close_edit".to_string()));
 }
@@ -210,17 +206,17 @@ fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
     assert!(
         editor
             .events
-            .contains(&"add_directory:/branches/main".to_string())
+            .contains(&"add_directory:branches/main<-trunk@1".to_string())
     );
     assert!(
         editor
             .events
-            .contains(&"add_file:/branches/main/src/lib.rs".to_string())
+            .contains(&"add_file:branches/main/src/lib.rs<-trunk/src/lib.rs@2".to_string())
     );
     assert!(
         editor
             .events
-            .contains(&"apply_textdelta:/branches/main/src/lib.rs:29".to_string())
+            .contains(&"apply_textdelta:branches/main/src/lib.rs:29".to_string())
     );
     assert!(editor.events.contains(&"close_edit".to_string()));
 }
@@ -329,13 +325,15 @@ impl FetchEditor for RecordingFetchEditor {
         Ok(())
     }
 
-    fn add_directory(&mut self, path: &str, _copy_from: Option<(&str, u32)>) -> Result<(), String> {
-        self.events.push(format!("add_directory:{path}"));
+    fn add_directory(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        self.events
+            .push(format!("add_directory:{path}{}", copy_suffix(copy_from)));
         Ok(())
     }
 
-    fn add_file(&mut self, path: &str, _copy_from: Option<(&str, u32)>) -> Result<(), String> {
-        self.events.push(format!("add_file:{path}"));
+    fn add_file(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        self.events
+            .push(format!("add_file:{path}{}", copy_suffix(copy_from)));
         Ok(())
     }
 
@@ -367,4 +365,10 @@ impl FetchEditor for RecordingFetchEditor {
         self.events.push("close_edit".to_string());
         Ok(())
     }
+}
+
+fn copy_suffix(copy_from: Option<(&str, u32)>) -> String {
+    copy_from
+        .map(|(path, revision)| format!("<-{path}@{revision}"))
+        .unwrap_or_default()
 }

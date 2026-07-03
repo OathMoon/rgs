@@ -721,26 +721,37 @@ fn replay_revision(
         if !path_matches(&changed_path.path, &normalized_path) {
             continue;
         }
+        let editor_path = editor_path(&changed_path.path);
         match changed_path.action {
             ChangeAction::Delete => {
-                editor.delete_entry(&changed_path.path, revision.revision.saturating_sub(1))?;
+                editor.delete_entry(&editor_path, revision.revision.saturating_sub(1))?;
             }
             ChangeAction::Add | ChangeAction::Replace => match changed_path.kind {
-                NodeKind::Directory => editor.add_directory(
-                    &changed_path.path,
-                    copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev),
-                )?,
+                NodeKind::Directory => {
+                    let copy_from =
+                        editor_copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev);
+                    editor.add_directory(
+                        &editor_path,
+                        copy_from
+                            .as_ref()
+                            .map(|(path, revision)| (path.as_str(), *revision)),
+                    )?
+                }
                 NodeKind::File | NodeKind::Symlink => {
+                    let copy_from =
+                        editor_copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev);
                     editor.add_file(
-                        &changed_path.path,
-                        copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev),
+                        &editor_path,
+                        copy_from
+                            .as_ref()
+                            .map(|(path, revision)| (path.as_str(), *revision)),
                     )?;
-                    replay_file_details(changed_path, editor)?;
+                    replay_file_details(&editor_path, changed_path, editor)?;
                 }
             },
             ChangeAction::Modify => {
                 if matches!(changed_path.kind, NodeKind::File | NodeKind::Symlink) {
-                    replay_file_details(changed_path, editor)?;
+                    replay_file_details(&editor_path, changed_path, editor)?;
                 }
             }
         }
@@ -750,26 +761,34 @@ fn replay_revision(
 
 #[cfg(git_svn_rs_libsvn_linked)]
 fn replay_file_details(
+    editor_path: &str,
     changed_path: &ChangedPath,
     editor: &mut dyn FetchEditor,
 ) -> Result<(), String> {
     for (name, value) in &changed_path.properties {
-        editor.change_file_prop(&changed_path.path, name, Some(value))?;
+        editor.change_file_prop(editor_path, name, Some(value))?;
     }
     if let Some(content) = &changed_path.content {
-        editor.apply_textdelta(&changed_path.path, content)?;
+        editor.apply_textdelta(editor_path, content)?;
     }
     Ok(())
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
-fn copy_from(path: &Option<String>, revision: Option<u32>) -> Option<(&str, u32)> {
-    path.as_deref().zip(revision)
+fn editor_copy_from(path: &Option<String>, revision: Option<u32>) -> Option<(String, u32)> {
+    path.as_ref()
+        .zip(revision)
+        .map(|(path, revision)| (editor_path(path), revision))
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
 fn normalize_ra_path(path: &str) -> String {
     path.trim_matches('/').to_string()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn editor_path(path: &str) -> String {
+    path.trim_start_matches('/').to_string()
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1173,9 +1192,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backend_type_is_constructible_without_ffi() {
+    fn backend_without_url_reports_expected_error() {
         let backend = LibSvnBackend::new();
 
+        #[cfg(git_svn_rs_libsvn_linked)]
+        assert_eq!(
+            SvnBackend::uuid(&backend).unwrap_err(),
+            "libsvn backend requires an SVN repository URL"
+        );
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
         assert_eq!(
             SvnBackend::uuid(&backend).unwrap_err(),
             LibSvnBackend::unavailable_message()
