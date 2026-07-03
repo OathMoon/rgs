@@ -1,12 +1,12 @@
 use assert_cmd::Command;
-use std::process::{Child, Command as StdCommand};
-use std::time::Duration;
 
 #[allow(dead_code)]
 #[path = "../../git-svn-rs-core/tests/support/svn_fixture.rs"]
 mod svn_fixture;
 
-use svn_fixture::{StandardSvnFixture, SvnToolPolicy, require_svn_tools};
+use svn_fixture::{
+    StandardSvnFixture, SvnServe, SvnToolPolicy, require_svn_tools, require_svnserve,
+};
 
 #[test]
 fn clone_stdlayout_file_url_imports_trunk_history() {
@@ -1093,80 +1093,4 @@ fn svn_stdout(args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8_lossy(&output.stdout).to_string()
-}
-
-fn require_svnserve() -> Result<(), SvnToolPolicy> {
-    if StdCommand::new("svnserve")
-        .arg("--version")
-        .output()
-        .map(|output| output.status.success())
-        .unwrap_or(false)
-    {
-        Ok(())
-    } else if std::env::var("GIT_SVN_RS_STRICT_COMPAT").as_deref() == Ok("1") {
-        Err(SvnToolPolicy::Fail("svnserve is required".to_string()))
-    } else {
-        Err(SvnToolPolicy::Skip(
-            "skipping: svnserve is required".to_string(),
-        ))
-    }
-}
-
-struct SvnServe {
-    child: Child,
-    port: u16,
-}
-
-impl SvnServe {
-    fn start(root: &std::path::Path) -> Result<Self, String> {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
-        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
-        drop(listener);
-
-        let child = StdCommand::new("svnserve")
-            .args([
-                "--daemon",
-                "--foreground",
-                "--listen-host",
-                "127.0.0.1",
-                "--listen-port",
-                &port.to_string(),
-                "--root",
-                root.to_str()
-                    .ok_or_else(|| format!("path is not valid UTF-8: {}", root.display()))?,
-            ])
-            .spawn()
-            .map_err(|e| format!("svnserve failed to start: {e}"))?;
-        let server = Self { child, port };
-        server.wait_until_ready()?;
-        Ok(server)
-    }
-
-    fn repo_url(&self) -> String {
-        format!("svn://127.0.0.1:{}/repo", self.port)
-    }
-
-    fn wait_until_ready(&self) -> Result<(), String> {
-        let url = self.repo_url();
-        let mut last_error = String::new();
-        for _ in 0..50 {
-            let output = StdCommand::new("svn")
-                .args(["info", "--non-interactive", &url])
-                .output()
-                .map_err(|e| e.to_string())?;
-            if output.status.success() {
-                return Ok(());
-            }
-            last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        Err(format!("svnserve did not become ready: {last_error}"))
-    }
-}
-
-impl Drop for SvnServe {
-    fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-    }
 }
