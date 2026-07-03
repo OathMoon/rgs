@@ -47,12 +47,73 @@ fn fetch_remote(git: &GitCli, remote: &str, revision: Option<&str>) -> Result<()
         return Ok(());
     }
 
-    let backend = SvnCliBackend::from_config(&config)?;
+    let backend = configured_backend(&config)?;
     let uuid = backend.uuid()?;
     let start_revision = next_revision(git, &config, &uuid)?;
     let import_options = import_options(start_revision, revision)?;
     import_mock_revisions(&backend, git, &config, import_options)?;
     Ok(())
+}
+
+enum ConfiguredBackend {
+    #[cfg_attr(
+        all(feature = "svn-libsvn", git_svn_rs_libsvn_linked),
+        allow(dead_code)
+    )]
+    Cli(SvnCliBackend),
+    #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+    LibSvn(crate::svn::libsvn::LibSvnBackend),
+}
+
+impl ConfiguredBackend {
+    #[cfg(test)]
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Cli(_) => "svn-cli",
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(_) => "libsvn",
+        }
+    }
+}
+
+impl SvnBackend for ConfiguredBackend {
+    fn uuid(&self) -> Result<String, String> {
+        match self {
+            Self::Cli(backend) => backend.uuid(),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => SvnBackend::uuid(backend),
+        }
+    }
+
+    fn latest_revnum(&self) -> Result<u32, String> {
+        match self {
+            Self::Cli(backend) => backend.latest_revnum(),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => SvnBackend::latest_revnum(backend),
+        }
+    }
+
+    fn log(&self, start: u32, end: u32) -> Result<Vec<crate::svn::RevisionEvent>, String> {
+        match self {
+            Self::Cli(backend) => backend.log(start, end),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => backend.log(start, end),
+        }
+    }
+}
+
+fn configured_backend(config: &SvnRemoteConfig) -> Result<ConfiguredBackend, String> {
+    #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+    {
+        Ok(ConfiguredBackend::LibSvn(
+            crate::svn::libsvn::LibSvnBackend::from_config(config),
+        ))
+    }
+
+    #[cfg(not(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)))]
+    {
+        Ok(ConfiguredBackend::Cli(SvnCliBackend::from_config(config)?))
+    }
 }
 
 fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
@@ -224,5 +285,24 @@ impl crate::svn::SvnBackend for MockBackendFromSession<'_> {
 
     fn log(&self, start: u32, end: u32) -> Result<Vec<crate::svn::RevisionEvent>, String> {
         self.0.get_log(&[], start, end)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mapping::build_single_path;
+
+    #[test]
+    fn configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        let backend = configured_backend(&config).unwrap();
+        let expected = if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+            "libsvn"
+        } else {
+            "svn-cli"
+        };
+
+        assert_eq!(backend.kind(), expected);
     }
 }
