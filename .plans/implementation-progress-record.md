@@ -34,6 +34,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `c1240484`: linked `LibSvnBackend` implements the read-only `RaSession` surface for `url`, `repos_root`, `check_path`, `get_dir`, and path-filtered `get_log`.
 - `9f1aa8b7`: linked `LibSvnBackend` implements initial native `do_update`/`do_switch` replay by translating native RA log events into `FetchEditor` callbacks.
 - `9f65b6fc`: linked `LibSvnBackend` normalizes replay callback paths and copy-from paths before passing native log-backed update/switch events to `FetchEditor`, matching existing editor/mock path conventions.
+- `d4ad78b0`: linked `LibSvnBackend` test coverage validates native RA metadata, path-filtered log, and update replay over a local `svn://` repository served by `svnserve`.
 
 ## Completed Capabilities
 
@@ -57,6 +58,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Added SVN domain types, mock backend, RA session/fetch editor traits, auth prompt mock, `svn-libsvn` feature shell with a vcpkg Subversion link probe, native libsvn version call, native RA metadata reads for latest revision/UUID, native RA log metadata/changed-path reads, native RA file content/property reads for changed files, native copied-directory file materialization, a read-only native `RaSession` implementation, initial native `do_update`/`do_switch` replay into `FetchEditor` with normalized callback/copy-from paths, fast-import writer, and `git-svn-rs init`.
 - Added fixture builders and mock import/fetch planning for content, executable mode, symlink mode, copy, and delete.
 - SVN CLI replay supports `file://`, local `svn://`, `svn+ssh://`, `http://`, and `https://` URL schemes, with strongest coverage around local fixtures.
+- Linked libsvn coverage now includes local `file://` and local `svn://` fixture access for native RA metadata, path-filtered log, and log-backed update/switch replay.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
 - `fetch --fetch-all` enumerates configured `svn-remote.*.url` entries.
 
@@ -119,6 +121,7 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_drives_fetch_editor_callbacks -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_switch_drives_fetch_editor_callbacks -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_ -- --nocapture` (covers normalized replay callback paths and copy-from paths)
+- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_replays_local_svnserve_repository -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_log_metadata_and_changed_paths -- --nocapture` (covers changed-path metadata, file content, `svn:executable`/`svn:special` file properties, and copied-directory file materialization)
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo clippy -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- -D warnings`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
