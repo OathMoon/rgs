@@ -58,6 +58,7 @@ pub fn run_in_work_tree(
                 tracked.config.username.as_deref(),
                 tracked.config.config_dir.as_deref(),
                 tracked.config.no_auth_cache,
+                None,
                 &args.shared,
             );
             return dcommit_file_svn(
@@ -559,6 +560,7 @@ fn svn_checkout_url(root_url: &str, svn_path: &str) -> String {
 struct DcommitSvnOptions {
     config_dir: Option<String>,
     username: Option<String>,
+    password: Option<String>,
     no_auth_cache: bool,
 }
 
@@ -573,6 +575,10 @@ impl DcommitSvnOptions {
             command_args.push("--username".to_string());
             command_args.push(username.clone());
         }
+        if let Some(password) = &self.password {
+            command_args.push("--password".to_string());
+            command_args.push(password.clone());
+        }
         if self.no_auth_cache {
             command_args.push("--no-auth-cache".to_string());
         }
@@ -585,6 +591,7 @@ fn dcommit_svn_options(
     persisted_username: Option<&str>,
     persisted_config_dir: Option<&str>,
     persisted_no_auth_cache: bool,
+    persisted_password: Option<&str>,
     shared: &crate::cli::SharedFetchArgs,
 ) -> DcommitSvnOptions {
     DcommitSvnOptions {
@@ -596,6 +603,10 @@ fn dcommit_svn_options(
             .username
             .clone()
             .or_else(|| persisted_username.map(|value| value.to_string())),
+        password: shared
+            .password
+            .clone()
+            .or_else(|| persisted_password.map(|value| value.to_string())),
         no_auth_cache: persisted_no_auth_cache || shared.no_auth_cache,
     }
 }
@@ -755,6 +766,7 @@ fn default_shared_args() -> crate::cli::SharedFetchArgs {
         rewrite_root: None,
         rewrite_uuid: None,
         username: None,
+        password: None,
         config_dir: None,
         no_auth_cache: false,
         preserve_empty_dirs: false,
@@ -829,6 +841,7 @@ mod tests {
     fn dcommit_svn_options_apply_command_line_auth_overrides() {
         let mut shared = default_shared_args();
         shared.username = Some("cli-user".to_string());
+        shared.password = Some("cli-secret".to_string());
         shared.config_dir = Some("cli-config".to_string());
         shared.no_auth_cache = true;
 
@@ -836,6 +849,7 @@ mod tests {
             Some("persisted-user"),
             Some("persisted-config"),
             false,
+            Some("persisted-secret"),
             &shared,
         );
 
@@ -846,6 +860,8 @@ mod tests {
                 "cli-config",
                 "--username",
                 "cli-user",
+                "--password",
+                "cli-secret",
                 "--no-auth-cache",
                 "checkout",
                 "url",

@@ -9,6 +9,7 @@ use crate::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent, SvnBackend}
 pub struct SvnCliBackend {
     url: String,
     username: Option<String>,
+    password: Option<String>,
     config_dir: Option<String>,
     no_auth_cache: bool,
 }
@@ -24,6 +25,7 @@ impl SvnCliBackend {
         Ok(Self {
             url,
             username: None,
+            password: None,
             config_dir: None,
             no_auth_cache: false,
         })
@@ -39,6 +41,11 @@ impl SvnCliBackend {
 
     pub fn with_username(mut self, username: impl Into<String>) -> Self {
         self.username = Some(username.into());
+        self
+    }
+
+    pub fn with_password(mut self, password: impl Into<String>) -> Self {
+        self.password = Some(password.into());
         self
     }
 
@@ -61,6 +68,10 @@ impl SvnCliBackend {
         if let Some(username) = &self.username {
             command_args.push("--username".to_string());
             command_args.push(username.clone());
+        }
+        if let Some(password) = &self.password {
+            command_args.push("--password".to_string());
+            command_args.push(password.clone());
         }
         if self.no_auth_cache {
             command_args.push("--no-auth-cache".to_string());
@@ -367,6 +378,7 @@ mod tests {
         let backend = SvnCliBackend::new("file:///repo")
             .unwrap()
             .with_username("alice")
+            .with_password("secret")
             .with_config_dir("svn-config")
             .without_auth_cache();
 
@@ -377,6 +389,8 @@ mod tests {
                 "svn-config",
                 "--username",
                 "alice",
+                "--password",
+                "secret",
                 "--no-auth-cache",
                 "info",
                 "file:///repo",

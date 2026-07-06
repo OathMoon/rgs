@@ -1703,6 +1703,7 @@ fn default_shared_fetch_args() -> SharedFetchArgs {
         rewrite_root: None,
         rewrite_uuid: None,
         username: None,
+        password: None,
         config_dir: None,
         no_auth_cache: false,
         preserve_empty_dirs: true,

@@ -66,6 +66,28 @@ fn parses_dcommit_explicit_mergeinfo() {
 }
 
 #[test]
+fn parses_dcommit_auth_options() {
+    let cli = Cli::parse_from([
+        "git-svn-rs",
+        "dcommit",
+        "--username",
+        "alice",
+        "--password",
+        "secret",
+        "--no-auth-cache",
+    ]);
+
+    match cli.command {
+        Command::Dcommit(args) => {
+            assert_eq!(args.shared.username.as_deref(), Some("alice"));
+            assert_eq!(args.shared.password.as_deref(), Some("secret"));
+            assert!(args.shared.no_auth_cache);
+        }
+        other => panic!("expected dcommit, got {other:?}"),
+    }
+}
+
+#[test]
 fn parses_known_unsupported_command() {
     let cli = Cli::parse_from(["git-svn-rs", "branch", "feature"]);
     assert!(matches!(cli.command, Command::Branch(_)));

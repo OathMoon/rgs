@@ -86,6 +86,8 @@ pub struct SharedFetchArgs {
     pub rewrite_uuid: Option<String>,
     #[arg(long)]
     pub username: Option<String>,
+    #[arg(long)]
+    pub password: Option<String>,
     #[arg(long = "config-dir")]
     pub config_dir: Option<String>,
     #[arg(long = "no-auth-cache")]
