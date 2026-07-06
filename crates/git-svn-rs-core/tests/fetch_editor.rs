@@ -12,6 +12,7 @@ fn plan() -> FetchCommitPlan {
         timestamp: 1_704_067_200,
         message: "import r3".to_string(),
         parent_mark: Some(2),
+        parent_ref: None,
     }
 }
 
@@ -62,6 +63,29 @@ fn configured_path_prefix_is_stripped_from_fast_import_paths() {
             mode: "100644".to_string(),
             content: b"fn main() {}\n".to_vec(),
         }]
+    );
+}
+
+#[test]
+fn commit_plan_can_carry_parent_ref_for_incremental_editor_import() {
+    let mut plan = plan();
+    plan.parent_mark = None;
+    plan.parent_ref = Some("refs/remotes/origin/trunk".to_string());
+    let mut editor = SvnFetchEditor::new(plan);
+
+    editor.open_root(4).unwrap();
+    editor.add_file("trunk/new.rs", None).unwrap();
+    editor
+        .apply_textdelta("trunk/new.rs", b"pub fn new() {}\n")
+        .unwrap();
+    editor.close_edit().unwrap();
+
+    let commit = editor.into_commit().unwrap();
+
+    assert_eq!(commit.parent_mark, None);
+    assert_eq!(
+        commit.parent_ref.as_deref(),
+        Some("refs/remotes/origin/trunk")
     );
 }
 

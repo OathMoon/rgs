@@ -13,6 +13,7 @@ pub struct FetchCommitPlan {
     pub timestamp: i64,
     pub message: String,
     pub parent_mark: Option<u32>,
+    pub parent_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,7 +93,7 @@ impl SvnFetchEditor {
             timestamp: self.plan.timestamp,
             message: self.plan.message,
             parent_mark: self.plan.parent_mark,
-            parent_ref: None,
+            parent_ref: self.plan.parent_ref,
             changes: self
                 .changes
                 .into_iter()
