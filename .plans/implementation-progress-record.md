@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `771a734e feat: pass svn auth options during dcommit`
+- Latest implementation commit: `be9e8dd8 feat: support svn password for dcommit`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -48,6 +48,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `5e20caed`: RA editor-backed import now applies configured path filters before/after editor replay and preserves empty-directory placeholders, bringing the full linked `clone_fetch_real_svn` suite green in the configured vcpkg/libsvn environment.
 - `2456bfc5`: dcommit SVN CLI write-back now supports local `svn://` repositories served by `svnserve`, with regression coverage in default and linked `svn-libsvn` builds.
 - `771a734e`: dcommit SVN CLI write-back now applies persisted and command-line SVN auth/config options (`--username`, `--config-dir`, `--no-auth-cache`) to checkout, working-copy edits, property changes, and commit.
+- `be9e8dd8`: `dcommit` accepts command-line `--password`, passes it to SVN CLI write-back commands without persisting it to git config, and has end-to-end coverage for an `svnserve` repository with anonymous reads and authenticated writes.
 
 ## Completed Capabilities
 
@@ -97,7 +98,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Added dcommit diff planning, commit editor, path ensurer, property mapper, mock commit backend extensions, and tests.
 - Local `file://` dcommit writes linear commits, adds, deletes, type changes, executable/symlink property changes, renames, copies, explicit `--commit-url`, explicit `--mergeinfo`, and selected SVN properties from `.gitattributes`.
 - Local `svn://` dcommit writes a linear commit through an `svnserve` fixture by reusing the SVN CLI working-copy write-back path, then fetches the resulting SVN revision back into Git/rev_map. The dcommit temporary checkout uses a relative checkout target to avoid vcpkg SVN path-case resolution failures in Windows temp directories.
-- Dcommit SVN CLI write-back now merges persisted `svn-remote.*` auth/config values with command-line `dcommit` overrides, passes `--username`, `--config-dir`, and `--no-auth-cache` through all SVN working-copy commands, and has real auto-props coverage for command-line `--config-dir`.
+- Dcommit SVN CLI write-back now merges persisted `svn-remote.*` auth/config values with command-line `dcommit` overrides, passes `--username`, `--password`, `--config-dir`, and `--no-auth-cache` through all SVN working-copy commands, and has real auto-props coverage for command-line `--config-dir` plus authenticated local `svn://` write-back coverage.
 - Upstream-style `svn-properties=name=value[;name=value...]` attributes are parsed, later rules override earlier ones, malformed/empty entries are ignored, and `-svn-properties`/`!svn-properties` clear prior container values without suppressing direct SVN attributes.
 - Direct `.gitattributes` SVN property mapping now includes valued and boolean `svn:executable`, valued and boolean `svn:special`, valued and boolean `svn:needs-lock`, plus later-rule clearing for direct SVN attributes in local `file://` dcommit write-back.
 - Local `file://` dcommit honors configured `svn-remote.svn.config-dir` for SVN write-back commands, including SVN auto-props applied during file adds.
@@ -123,7 +124,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://`, especially remote auth/service scenarios and full RA editor integration.
 - Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` behavior against non-local SVN servers.
 - Complete the remaining planned `Log.pm` compatibility modes and more complex multi-ref/rev_map resolver cases.
-- Implement broader production remote SVN/libsvn dcommit write-back; current supported non-dry-run paths are mock, local `file://`, and local `svn://`, with SVN CLI auth/config option plumbing in place, while http(s) write-back, password prompt/cache integration, and richer remote/auth flows remain guarded or unvalidated.
+- Implement broader production remote SVN/libsvn dcommit write-back; current supported non-dry-run paths are mock, local `file://`, and local `svn://`, with SVN CLI username/password/config option plumbing in place, while http(s) write-back, prompt/cache integration beyond explicit command-line credentials, and richer remote/auth flows remain guarded or unvalidated.
 - Expand SVN property/autoprops support and add automatic mergeinfo generation if it remains in v1 scope.
 - Run and harden strict Rust-vs-Perl artifact comparisons where Perl git-svn, SVN CLI, and `svnserve` are available.
 - Add more golden scenarios for remote layouts, refs/config metadata, rev_map records, command output, properties, copies, deletes, symlinks, modes, empty dirs, and `git-svn-id` footers.
@@ -166,7 +167,10 @@ Latest full gates recorded as passing:
 - `cargo clippy -p git-svn-rs-core -- -D warnings`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo clippy -p git-svn-rs-core --features svn-libsvn -- -D warnings`
 - `cargo test -p git-svn-rs-core commands::dcommit::tests::dcommit_svn_options_apply_command_line_auth_overrides -- --nocapture`
+- `cargo test -p git-svn-rs-core svn::cli::tests::backend_command_args_include_auth_and_config_options -- --nocapture`
+- `cargo test -p git-svn-rs-core --test cli_parse parses_dcommit_auth_options -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn commands::dcommit::tests::dcommit_svn_options_apply_command_line_auth_overrides -- --nocapture`
+- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn svn::cli::tests::backend_command_args_include_auth_and_config_options -- --nocapture`
 - `cargo test -p git-svn-rs --no-default-features --test clone_fetch_real_svn -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
@@ -194,6 +198,7 @@ Important targeted suites recorded as passing during this work:
 - `cargo test -p git-svn-rs --test readonly_commands log_revision_reverse_range_filters_to_requested_svn_revisions -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_linear_commit_to_svnserve_when_tools_exist -- --nocapture`
+- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_to_authenticated_svnserve_with_password_when_tools_exist -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs --features svn-libsvn --test dcommit_linear dcommit_writes_linear_commit_to_svnserve_when_tools_exist -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear dcommit_without_dry_run_is_guarded_for_non_mock_urls -- --nocapture`
 - `cargo test -p git-svn-rs --test dcommit_linear dcommit_honors_command_line_svn_config_auto_props_when_tools_exist -- --nocapture`
