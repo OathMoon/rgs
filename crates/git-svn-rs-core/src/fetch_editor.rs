@@ -32,6 +32,7 @@ impl TreeEntry {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SvnFetchEditor {
     plan: FetchCommitPlan,
+    path_prefix: String,
     base_tree: BTreeMap<String, PlannedFile>,
     changes: BTreeMap<String, PlannedChange>,
     closed: bool,
@@ -45,6 +46,7 @@ impl SvnFetchEditor {
     pub fn with_base_tree(plan: FetchCommitPlan, entries: Vec<TreeEntry>) -> Self {
         Self {
             plan,
+            path_prefix: String::new(),
             base_tree: entries
                 .into_iter()
                 .map(|entry| (entry.path, entry.file))
@@ -52,6 +54,11 @@ impl SvnFetchEditor {
             changes: BTreeMap::new(),
             closed: false,
         }
+    }
+
+    pub fn with_path_prefix(mut self, prefix: impl AsRef<str>) -> Self {
+        self.path_prefix = normalize_path(prefix);
+        self
     }
 
     pub fn into_commit(self) -> Result<FastImportCommit, String> {
@@ -84,7 +91,7 @@ impl SvnFetchEditor {
     }
 
     fn modify_file(&mut self, path: &str) -> &mut PlannedFile {
-        let path = normalize_path(path);
+        let path = self.git_path(path);
         if !matches!(self.changes.get(&path), Some(PlannedChange::Modify(_))) {
             let file = self
                 .base_tree
@@ -102,18 +109,18 @@ impl SvnFetchEditor {
     }
 
     fn copy_file(&mut self, destination: &str, source: &str) -> Result<(), String> {
-        let source = normalize_path(source);
+        let source = self.git_path(source);
         let file = self
             .file_at(&source)
             .ok_or_else(|| format!("copy source file not found: {source}"))?;
         self.changes
-            .insert(normalize_path(destination), PlannedChange::Modify(file));
+            .insert(self.git_path(destination), PlannedChange::Modify(file));
         Ok(())
     }
 
     fn copy_directory(&mut self, destination: &str, source: &str) {
-        let destination = normalize_path(destination);
-        let source = normalize_path(source);
+        let destination = self.git_path(destination);
+        let source = self.git_path(source);
         let source_prefix = child_prefix(&source);
         let copies: Vec<_> = self
             .visible_files()
@@ -155,6 +162,16 @@ impl SvnFetchEditor {
         }
         files
     }
+
+    fn git_path(&self, path: &str) -> String {
+        let path = normalize_path(path);
+        if self.path_prefix.is_empty() {
+            return path;
+        }
+        path.strip_prefix(&self.path_prefix)
+            .map(|relative| relative.trim_start_matches('/').to_string())
+            .unwrap_or(path)
+    }
 }
 
 impl FetchEditor for SvnFetchEditor {
@@ -180,7 +197,7 @@ impl FetchEditor for SvnFetchEditor {
     }
 
     fn delete_entry(&mut self, path: &str, _revision: u32) -> Result<(), String> {
-        let path = normalize_path(path);
+        let path = self.git_path(path);
         remove_path_and_children(&mut self.changes, &path);
         self.changes.insert(path, PlannedChange::Delete);
         Ok(())

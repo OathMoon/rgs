@@ -41,6 +41,30 @@ fn added_file_with_textdelta_becomes_fast_import_modify() {
 }
 
 #[test]
+fn configured_path_prefix_is_stripped_from_fast_import_paths() {
+    let mut editor = SvnFetchEditor::new(plan()).with_path_prefix("trunk");
+
+    editor.open_root(3).unwrap();
+    editor.add_directory("trunk/src", None).unwrap();
+    editor.add_file("trunk/src/main.rs", None).unwrap();
+    editor
+        .apply_textdelta("trunk/src/main.rs", b"fn main() {}\n")
+        .unwrap();
+    editor.close_edit().unwrap();
+
+    let commit = editor.into_commit().unwrap();
+
+    assert_eq!(
+        commit.changes,
+        vec![FileChange::Modify {
+            path: "src/main.rs".to_string(),
+            mode: "100644".to_string(),
+            content: b"fn main() {}\n".to_vec(),
+        }]
+    );
+}
+
+#[test]
 fn executable_property_changes_file_mode() {
     let mut editor = SvnFetchEditor::new(plan());
 
