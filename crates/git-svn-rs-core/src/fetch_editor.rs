@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::fast_import::{FastImportCommit, FileChange};
-use crate::git::GitTreeFile;
+use crate::git::{GitCli, GitTreeFile};
 use crate::svn::editor::FetchEditor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -59,6 +59,19 @@ impl SvnFetchEditor {
             changes: BTreeMap::new(),
             closed: false,
         }
+    }
+
+    pub fn from_git_ref(
+        git: &GitCli,
+        plan: FetchCommitPlan,
+        refname: &str,
+    ) -> Result<Self, String> {
+        let entries = git
+            .tree_files(refname)?
+            .into_iter()
+            .map(TreeEntry::from_git_file)
+            .collect();
+        Ok(Self::with_base_tree(plan, entries))
     }
 
     pub fn with_path_prefix(mut self, prefix: impl AsRef<str>) -> Self {

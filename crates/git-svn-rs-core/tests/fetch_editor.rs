@@ -1,6 +1,6 @@
 use git_svn_rs_core::fast_import::FileChange;
 use git_svn_rs_core::fetch_editor::{FetchCommitPlan, SvnFetchEditor, TreeEntry};
-use git_svn_rs_core::git::GitTreeFile;
+use git_svn_rs_core::git::{GitCli, GitTreeFile};
 use git_svn_rs_core::svn::editor::FetchEditor;
 
 fn plan() -> FetchCommitPlan {
@@ -175,6 +175,42 @@ fn tree_entry_can_be_built_from_git_tree_file() {
             path: "branches/topic/run".to_string(),
             mode: "100755".to_string(),
             content: b"#!/bin/sh\n".to_vec(),
+        }]
+    );
+}
+
+#[test]
+fn editor_can_load_base_tree_from_git_ref() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    git.run_for_test(["config", "user.name", "Test User"])
+        .unwrap();
+    git.run_for_test(["config", "user.email", "test@example.com"])
+        .unwrap();
+    std::fs::create_dir_all(dir.path().join("trunk/src")).unwrap();
+    std::fs::write(dir.path().join("trunk/src/lib.rs"), "pub fn old() {}\n").unwrap();
+    git.run_for_test(["add", "trunk/src/lib.rs"]).unwrap();
+    git.run_for_test(["commit", "-m", "base"]).unwrap();
+    git.run_for_test(["update-ref", "refs/remotes/origin/trunk", "HEAD"])
+        .unwrap();
+    let mut editor =
+        SvnFetchEditor::from_git_ref(&git, plan(), "refs/remotes/origin/trunk").unwrap();
+
+    editor.open_root(3).unwrap();
+    editor
+        .add_file("branches/topic/src/lib.rs", Some(("trunk/src/lib.rs", 2)))
+        .unwrap();
+    editor.close_edit().unwrap();
+
+    let commit = editor.into_commit().unwrap();
+
+    assert_eq!(
+        commit.changes,
+        vec![FileChange::Modify {
+            path: "branches/topic/src/lib.rs".to_string(),
+            mode: "100644".to_string(),
+            content: b"pub fn old() {}\n".to_vec(),
         }]
     );
 }
