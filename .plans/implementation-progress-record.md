@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `2fb35a8 feat: route linked fetch through ra editor`
+- Latest implementation commit: `5e20caed feat: apply ra fetch filters and empty dirs`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -45,6 +45,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `dd3ab38`: `FetchCommitPlan` can carry an existing Git parent ref through `SvnFetchEditor::into_commit()`, preparing editor-backed incremental fetch to parent its first fast-import commit to the current remote ref.
 - `6dd17f5`: `import_ra_revisions()` can drive `SvnFetchEditor` from a `RaSession::do_update()` callback stream, write the resulting fast-import commits, and update rev_maps for a standard-layout mapping.
 - `2fb35a8`: linked `svn-libsvn` command fetch now routes real SVN imports through `RaSession::do_update()` and `SvnFetchEditor`, with per-mapping revision filtering and branch-copy source trees loaded from source rev_map commits.
+- `5e20caed`: RA editor-backed import now applies configured path filters before/after editor replay and preserves empty-directory placeholders, bringing the full linked `clone_fetch_real_svn` suite green in the configured vcpkg/libsvn environment.
 
 ## Completed Capabilities
 
@@ -77,6 +78,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `FetchCommitPlan` can now pass a parent Git ref into the resulting fast-import commit when no parent mark is available, matching the existing log-backed incremental import parent behavior.
 - `import_ra_revisions()` now provides the first import path that consumes `RaSession::do_update()` editor callbacks directly, converts them through `SvnFetchEditor`, writes fast-import data, and records rev_map entries.
 - RA editor-backed import now filters revisions per mapping before replay and can seed branch-copy editors from the copied source ref tree, allowing linked libsvn stdlayout file:// fetch to import trunk/branch history through `SvnFetchEditor`.
+- RA editor-backed import applies persisted include/ignore path filters to editor callbacks and resulting fast-import changes, and it emits configured empty-directory placeholders from SVN directory change metadata.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
 - `fetch --fetch-all` enumerates configured `svn-remote.*.url` entries.
 
@@ -147,6 +149,8 @@ Latest full gates recorded as passing:
 - `cargo test -p git-svn-rs-core commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
 - `cargo test -p git-svn-rs-core --test import_mock imports_ra_session_update_into_git_and_rev_map`
 - `cargo test -p git-svn-rs-core --test import_mock ra_import_filters_revisions_per_mapping_before_replay`
+- `cargo test -p git-svn-rs-core --test import_mock ra_import_applies_path_filters_to_editor_changes`
+- `cargo test -p git-svn-rs-core --test import_mock ra_import_preserves_empty_directories_with_placeholder`
 - `cargo test -p git-svn-rs-core --test import_mock`
 - `cargo test -p git-svn-rs-core --test fetch_editor`
 - `cargo test -p git-svn-rs-core --test fetch_editor commit_plan_can_carry_parent_ref_for_incremental_editor_import`
@@ -160,6 +164,11 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_file_url_imports_trunk_history_after_init -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_svn_url_imports_branch_tag_and_copy_contents_after_init -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_file_url_applies_ignore_paths_filter -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_file_url_applies_include_paths_filter -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_stdlayout_file_url_preserves_empty_dirs_when_requested -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_file_url_preserves_empty_dirs_from_persisted_config -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo clippy -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- -D warnings`
