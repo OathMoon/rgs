@@ -83,3 +83,32 @@ fn failed_git_command_returns_stderr_context() {
     let err = git.run_for_test(["rev-parse", "--git-dir"]).unwrap_err();
     assert!(err.contains("not a git repository") || err.contains("rev-parse"));
 }
+
+#[test]
+fn tree_files_reads_modes_paths_and_content_from_commit() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    git.run_for_test(["config", "user.name", "Test User"])
+        .unwrap();
+    git.run_for_test(["config", "user.email", "test@example.com"])
+        .unwrap();
+    std::fs::create_dir_all(dir.path().join("src")).unwrap();
+    std::fs::write(dir.path().join("README.md"), "hello\n").unwrap();
+    std::fs::write(dir.path().join("src/run.sh"), "#!/bin/sh\n").unwrap();
+    git.run_for_test(["add", "README.md", "src/run.sh"])
+        .unwrap();
+    git.run_for_test(["update-index", "--chmod=+x", "src/run.sh"])
+        .unwrap();
+    git.run_for_test(["commit", "-m", "base"]).unwrap();
+
+    let files = git.tree_files("HEAD").unwrap();
+
+    assert_eq!(files.len(), 2);
+    assert_eq!(files[0].path, "README.md");
+    assert_eq!(files[0].mode, "100644");
+    assert_eq!(files[0].content, b"hello\n");
+    assert_eq!(files[1].path, "src/run.sh");
+    assert_eq!(files[1].mode, "100755");
+    assert_eq!(files[1].content, b"#!/bin/sh\n");
+}

@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::fast_import::{FastImportCommit, FileChange};
+use crate::git::GitTreeFile;
 use crate::svn::editor::FetchEditor;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +27,10 @@ impl TreeEntry {
             path: normalize_path(path.into()),
             file: PlannedFile::from_mode(mode.as_ref(), content.as_ref().to_vec()),
         }
+    }
+
+    pub fn from_git_file(file: GitTreeFile) -> Self {
+        Self::file(file.path, file.mode, file.content)
     }
 }
 

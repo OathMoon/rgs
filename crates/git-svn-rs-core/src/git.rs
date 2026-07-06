@@ -36,6 +36,13 @@ pub struct GitTreeEntry {
     pub mode: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitTreeFile {
+    pub path: String,
+    pub mode: String,
+    pub content: Vec<u8>,
+}
+
 impl GitCli {
     pub fn new(work_tree: impl Into<PathBuf>) -> Self {
         Self {
@@ -224,6 +231,22 @@ impl GitCli {
     pub fn ls_tree_file(&self, commit: &str, path: &str) -> Result<GitTreeEntry, String> {
         let raw = self.run_bytes(["ls-tree", "-z", commit, "--", path])?;
         parse_ls_tree_file(&raw, path)
+    }
+
+    pub fn tree_files(&self, commit: &str) -> Result<Vec<GitTreeFile>, String> {
+        let raw = self.run_bytes(["ls-tree", "-r", "-z", commit])?;
+        let entries = parse_ls_tree_files(&raw)?;
+        entries
+            .into_iter()
+            .map(|(path, mode)| {
+                let content = self.show_file(commit, &path)?;
+                Ok(GitTreeFile {
+                    path,
+                    mode,
+                    content,
+                })
+            })
+            .collect()
     }
 
     pub fn rebase(
@@ -420,4 +443,21 @@ fn parse_ls_tree_file(raw: &[u8], path: &str) -> Result<GitTreeEntry, String> {
     Ok(GitTreeEntry {
         mode: mode.to_string(),
     })
+}
+
+fn parse_ls_tree_files(raw: &[u8]) -> Result<Vec<(String, String)>, String> {
+    raw.split(|byte| *byte == 0)
+        .filter(|entry| !entry.is_empty())
+        .map(|entry| {
+            let text = String::from_utf8(entry.to_vec()).map_err(|e| e.to_string())?;
+            let (metadata, path) = text
+                .split_once('\t')
+                .ok_or_else(|| format!("unexpected git ls-tree entry: {text}"))?;
+            let mode = metadata
+                .split_whitespace()
+                .next()
+                .ok_or_else(|| format!("unexpected git ls-tree metadata: {metadata}"))?;
+            Ok((path.to_string(), mode.to_string()))
+        })
+        .collect()
 }

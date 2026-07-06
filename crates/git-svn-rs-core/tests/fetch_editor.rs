@@ -1,5 +1,6 @@
 use git_svn_rs_core::fast_import::FileChange;
 use git_svn_rs_core::fetch_editor::{FetchCommitPlan, SvnFetchEditor, TreeEntry};
+use git_svn_rs_core::git::GitTreeFile;
 use git_svn_rs_core::svn::editor::FetchEditor;
 
 fn plan() -> FetchCommitPlan {
@@ -148,6 +149,33 @@ fn copied_directory_materializes_existing_subtree_at_destination() {
                 content: b"#!/bin/sh\n".to_vec(),
             },
         ]
+    );
+}
+
+#[test]
+fn tree_entry_can_be_built_from_git_tree_file() {
+    let entry = TreeEntry::from_git_file(GitTreeFile {
+        path: "trunk/bin/run".to_string(),
+        mode: "100755".to_string(),
+        content: b"#!/bin/sh\n".to_vec(),
+    });
+    let mut editor = SvnFetchEditor::with_base_tree(plan(), vec![entry]);
+
+    editor.open_root(3).unwrap();
+    editor
+        .add_file("branches/topic/run", Some(("trunk/bin/run", 2)))
+        .unwrap();
+    editor.close_edit().unwrap();
+
+    let commit = editor.into_commit().unwrap();
+
+    assert_eq!(
+        commit.changes,
+        vec![FileChange::Modify {
+            path: "branches/topic/run".to_string(),
+            mode: "100755".to_string(),
+            content: b"#!/bin/sh\n".to_vec(),
+        }]
     );
 }
 
