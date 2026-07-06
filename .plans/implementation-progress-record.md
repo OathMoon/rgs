@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `68ec947 feat: build fetch editor from git refs`
+- Latest implementation commit: `dd3ab38 feat: carry fetch editor parent refs`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock and local `file://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -42,6 +42,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `9bfc284`: `SvnFetchEditor` can strip a configured SVN mapping prefix from editor callback paths before producing fast-import paths, preparing command fetch to consume RA editor callbacks directly.
 - `55eb840`: `GitCli` can read a commit/ref tree as file path/mode/content records, and `TreeEntry` can convert those records into a `SvnFetchEditor` base tree for future RA editor-backed incremental fetch.
 - `68ec947`: `SvnFetchEditor::from_git_ref()` can initialize an editor base tree directly from an existing Git ref, reducing remaining command-fetch glue for RA editor-backed incremental replay.
+- `dd3ab38`: `FetchCommitPlan` can carry an existing Git parent ref through `SvnFetchEditor::into_commit()`, preparing editor-backed incremental fetch to parent its first fast-import commit to the current remote ref.
 
 ## Completed Capabilities
 
@@ -71,6 +72,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `SvnFetchEditor` can now map full SVN callback paths such as `trunk/src/lib.rs` to Git-relative paths such as `src/lib.rs` via a configured path prefix.
 - `GitCli::tree_files` exposes ref tree files with modes and bytes, and `TreeEntry::from_git_file` bridges those records into `SvnFetchEditor` base trees for copy/incremental replay.
 - `SvnFetchEditor::from_git_ref()` now builds base-tree state directly from an existing Git ref, ready for command-level editor replay integration.
+- `FetchCommitPlan` can now pass a parent Git ref into the resulting fast-import commit when no parent mark is available, matching the existing log-backed incremental import parent behavior.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
 - `fetch --fetch-all` enumerates configured `svn-remote.*.url` entries.
 
@@ -139,6 +141,7 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_log_metadata_and_changed_paths -- --nocapture` (covers changed-path metadata, file content, `svn:executable`/`svn:special` file properties, and copied-directory file materialization)
 - `cargo test -p git-svn-rs-core commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
 - `cargo test -p git-svn-rs-core --test fetch_editor`
+- `cargo test -p git-svn-rs-core --test fetch_editor commit_plan_can_carry_parent_ref_for_incremental_editor_import`
 - `cargo test -p git-svn-rs-core --test fetch_editor editor_can_load_base_tree_from_git_ref`
 - `cargo test -p git-svn-rs-core --test git_backend --test fetch_editor`
 - `cargo clippy -p git-svn-rs-core --test fetch_editor -- -D warnings`
@@ -150,6 +153,7 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo clippy -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- -D warnings`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test fetch_editor`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`
 
