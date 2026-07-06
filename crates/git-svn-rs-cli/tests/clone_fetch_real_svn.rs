@@ -97,6 +97,48 @@ fn clone_stdlayout_svn_url_imports_trunk_history() {
 }
 
 #[test]
+fn clone_stdlayout_authenticated_svn_url_imports_with_password() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+}
+
+#[test]
 fn clone_stdlayout_svn_url_imports_branch_tag_and_copy_contents() {
     match require_svn_tools() {
         Ok(()) => {}

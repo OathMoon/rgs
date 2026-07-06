@@ -1,4 +1,4 @@
-use crate::cli::FetchArgs;
+use crate::cli::{FetchArgs, SharedFetchArgs};
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
 #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
@@ -28,18 +28,18 @@ pub fn run_in_work_tree(
     };
 
     for remote in remotes {
-        fetch_remote(&git, &remote, args.shared.revision.as_deref())?;
+        fetch_remote(&git, &remote, &args.shared)?;
     }
     Ok(())
 }
 
-fn fetch_remote(git: &GitCli, remote: &str, revision: Option<&str>) -> Result<(), String> {
+fn fetch_remote(git: &GitCli, remote: &str, shared: &SharedFetchArgs) -> Result<(), String> {
     let config = read_remote_config(git, remote)?;
 
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
         let start_revision = next_revision(git, &config, "mock-uuid")?;
-        let import_options = import_options(start_revision, revision)?;
+        let import_options = import_options(start_revision, shared.revision.as_deref())?;
         import_mock_revisions(
             &MockBackendFromSession(&session),
             git,
@@ -49,10 +49,10 @@ fn fetch_remote(git: &GitCli, remote: &str, revision: Option<&str>) -> Result<()
         return Ok(());
     }
 
-    let backend = configured_backend(&config)?;
+    let backend = configured_backend(&config, shared)?;
     let uuid = backend.uuid()?;
     let start_revision = next_revision(git, &config, &uuid)?;
-    let import_options = import_options(start_revision, revision)?;
+    let import_options = import_options(start_revision, shared.revision.as_deref())?;
     backend.import_revisions(git, &config, import_options)?;
     Ok(())
 }
@@ -131,17 +131,40 @@ impl SvnBackend for ConfiguredBackend {
     }
 }
 
-fn configured_backend(config: &SvnRemoteConfig) -> Result<ConfiguredBackend, String> {
+fn configured_backend(
+    config: &SvnRemoteConfig,
+    shared: &SharedFetchArgs,
+) -> Result<ConfiguredBackend, String> {
     #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     {
-        Ok(ConfiguredBackend::LibSvn(
-            crate::svn::libsvn::LibSvnBackend::from_config(config),
-        ))
+        let mut backend = crate::svn::libsvn::LibSvnBackend::from_config(config);
+        if let Some(password) = &shared.password
+            && let Some(username) = shared.username.as_ref().or(config.username.as_ref())
+        {
+            backend = backend.with_credentials(username, password);
+        }
+        if shared.no_auth_cache {
+            backend = backend.without_auth_cache();
+        }
+        Ok(ConfiguredBackend::LibSvn(backend))
     }
 
     #[cfg(not(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)))]
     {
-        Ok(ConfiguredBackend::Cli(SvnCliBackend::from_config(config)?))
+        let mut backend = SvnCliBackend::from_config(config)?;
+        if let Some(username) = &shared.username {
+            backend = backend.with_username(username);
+        }
+        if let Some(password) = &shared.password {
+            backend = backend.with_password(password);
+        }
+        if let Some(config_dir) = &shared.config_dir {
+            backend = backend.with_config_dir(config_dir);
+        }
+        if shared.no_auth_cache {
+            backend = backend.without_auth_cache();
+        }
+        Ok(ConfiguredBackend::Cli(backend))
     }
 }
 
@@ -325,7 +348,7 @@ mod tests {
     #[test]
     fn configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli() {
         let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
-        let backend = configured_backend(&config).unwrap();
+        let backend = configured_backend(&config, &default_shared_args()).unwrap();
         let expected = if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
             "libsvn"
         } else {
@@ -338,7 +361,7 @@ mod tests {
     #[test]
     fn configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available() {
         let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
-        let backend = configured_backend(&config).unwrap();
+        let backend = configured_backend(&config, &default_shared_args()).unwrap();
         let expected = if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
             "ra-editor"
         } else {
@@ -346,5 +369,27 @@ mod tests {
         };
 
         assert_eq!(backend.import_mode(), expected);
+    }
+
+    fn default_shared_args() -> SharedFetchArgs {
+        SharedFetchArgs {
+            authors_file: None,
+            authors_prog: None,
+            ignore_paths: None,
+            include_paths: None,
+            ignore_refs: None,
+            revision: None,
+            log_window_size: None,
+            localtime: false,
+            no_metadata: false,
+            rewrite_root: None,
+            rewrite_uuid: None,
+            username: None,
+            password: None,
+            config_dir: None,
+            no_auth_cache: false,
+            preserve_empty_dirs: false,
+            placeholder_filename: ".gitignore".to_string(),
+        }
     }
 }

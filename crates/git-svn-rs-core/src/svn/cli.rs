@@ -60,7 +60,7 @@ impl SvnCliBackend {
     }
 
     fn command_args(&self, args: &[&str]) -> Vec<String> {
-        let mut command_args = Vec::new();
+        let mut command_args = vec!["--non-interactive".to_string()];
         if let Some(config_dir) = &self.config_dir {
             command_args.push("--config-dir".to_string());
             command_args.push(config_dir.clone());
@@ -385,6 +385,7 @@ mod tests {
         assert_eq!(
             backend.command_args(&["info", "file:///repo"]),
             vec![
+                "--non-interactive",
                 "--config-dir",
                 "svn-config",
                 "--username",
