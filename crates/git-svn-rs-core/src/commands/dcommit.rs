@@ -48,7 +48,7 @@ pub fn run_in_work_tree(
                 args.no_rebase,
             );
         }
-        if target_url.starts_with("file://") && tracked.config.url.starts_with("file://") {
+        if is_svn_cli_write_back_url(target_url) && is_svn_cli_write_back_url(&tracked.config.url) {
             let commit_svn_path = if args.commit_url.is_some() {
                 ""
             } else {
@@ -69,7 +69,7 @@ pub fn run_in_work_tree(
         }
         {
             return Err(
-                "dcommit write-back is only implemented for mock:// and file:// URLs; production remote SVN write-back is not implemented"
+                "dcommit write-back is only implemented for mock://, file://, and svn:// URLs; http(s) SVN write-back is not implemented"
                     .to_string(),
             );
         }
@@ -100,6 +100,10 @@ pub fn run_in_work_tree(
     Ok(out)
 }
 
+fn is_svn_cli_write_back_url(url: &str) -> bool {
+    url.starts_with("file://") || url.starts_with("svn://")
+}
+
 struct FileSvnDcommit<'a> {
     git: &'a GitCli,
     svn_root_url: &'a str,
@@ -127,13 +131,13 @@ fn dcommit_file_svn(
     let temp = TempCheckout::new()?;
     let checkout_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
     run_svn(
-        None,
+        Some(&temp.root),
         ctx.config_dir,
         &[
             "checkout".to_string(),
             "--quiet".to_string(),
             checkout_url,
-            temp.wc.display().to_string(),
+            "wc".to_string(),
         ],
     )?;
 
@@ -582,8 +586,9 @@ impl TempCheckout {
             std::process::id(),
             unique_suffix()
         ));
+        std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
+        let root = strip_windows_verbatim_prefix(root.canonicalize().map_err(|e| e.to_string())?);
         let wc = root.join("wc");
-        std::fs::create_dir_all(&wc).map_err(|e| e.to_string())?;
         Ok(Self { root, wc })
     }
 }
@@ -599,6 +604,15 @@ fn unique_suffix() -> u128 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default()
+}
+
+fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if let Some(path) = raw.strip_prefix(r"\\?\") {
+        PathBuf::from(path)
+    } else {
+        path
+    }
 }
 
 fn dcommit_mock(

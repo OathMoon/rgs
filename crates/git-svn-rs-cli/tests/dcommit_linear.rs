@@ -5,7 +5,9 @@ use predicates::prelude::*;
 #[path = "../../git-svn-rs-core/tests/support/svn_fixture.rs"]
 mod svn_fixture;
 
-use svn_fixture::{StandardSvnFixture, SvnToolPolicy, require_svn_tools};
+use svn_fixture::{
+    StandardSvnFixture, SvnServe, SvnToolPolicy, require_svn_tools, require_svnserve,
+};
 
 #[test]
 fn dcommit_dry_run_lists_local_commits_after_tracked_svn_ref() {
@@ -133,6 +135,62 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(String::from_utf8_lossy(&output.stdout).contains("change answer"));
+}
+
+#[test]
+fn dcommit_writes_linear_commit_to_svnserve_when_tools_exist() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.allow_anonymous_write().unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let work = parent.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args(["clone", &server.repo_url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 47 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "remote answer",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("remote answer"));
+
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/src/lib.rs", server.repo_url())]),
+        "pub fn answer() -> u8 { 47 }\n"
+    );
 }
 
 #[test]

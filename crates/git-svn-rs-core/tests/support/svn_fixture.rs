@@ -206,6 +206,15 @@ impl StandardSvnFixture {
         )
         .map_err(|e| e.to_string())
     }
+
+    #[allow(dead_code)]
+    pub fn allow_anonymous_write(&self) -> Result<(), String> {
+        std::fs::write(
+            self.repo.join("conf").join("svnserve.conf"),
+            "[general]\nanon-access = write\n",
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 #[allow(dead_code)]
