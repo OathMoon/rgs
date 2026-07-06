@@ -11,6 +11,7 @@ use crate::git_svn_id::GitSvnId;
 use crate::glob_spec::GlobSpec;
 use crate::mapping::RefMapping;
 use crate::rev_map::RevMap;
+use crate::svn::editor::FetchEditor;
 use crate::svn::ra::RaSession;
 use crate::svn::{ChangeAction, NodeKind, RevisionEvent, SvnBackend};
 use fancy_regex::Regex;
@@ -234,8 +235,14 @@ fn import_ra_revisions_for_mapping(
         }
         .with_path_prefix(&mapping.svn_path);
 
-        session.do_update(&mapping.svn_path, revision.revision, &mut editor)?;
-        let commit = editor.into_commit()?;
+        let filters = PathFilters::new(config.include_paths.clone(), config.ignore_paths.clone())?;
+        let mut filtered_editor = FilteredFetchEditor {
+            inner: &mut editor,
+            filters: &filters,
+        };
+        session.do_update(&mapping.svn_path, revision.revision, &mut filtered_editor)?;
+        let mut commit = editor.into_commit()?;
+        commit.changes = finalize_ra_changes(commit.changes, revision, &strip_prefix, config)?;
         if commit.changes.is_empty() {
             continue;
         }
@@ -252,6 +259,162 @@ fn import_ra_revisions_for_mapping(
     write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
+}
+
+struct FilteredFetchEditor<'a> {
+    inner: &'a mut dyn FetchEditor,
+    filters: &'a PathFilters,
+}
+
+impl FilteredFetchEditor<'_> {
+    fn path_is_included(&self, path: &str) -> Result<bool, String> {
+        path_is_included(self.filters, path)
+    }
+
+    fn copy_is_included(&self, copy_from: Option<(&str, u32)>) -> Result<bool, String> {
+        match copy_from {
+            Some((source, _revision)) => self.path_is_included(source),
+            None => Ok(true),
+        }
+    }
+}
+
+impl FetchEditor for FilteredFetchEditor<'_> {
+    fn open_root(&mut self, revision: u32) -> Result<(), String> {
+        self.inner.open_root(revision)
+    }
+
+    fn add_directory(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        if !self.path_is_included(path)? || !self.copy_is_included(copy_from)? {
+            return Ok(());
+        }
+        self.inner.add_directory(path, copy_from)
+    }
+
+    fn add_file(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        if !self.path_is_included(path)? || !self.copy_is_included(copy_from)? {
+            return Ok(());
+        }
+        self.inner.add_file(path, copy_from)
+    }
+
+    fn delete_entry(&mut self, path: &str, revision: u32) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.delete_entry(path, revision)
+    }
+
+    fn change_file_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.change_file_prop(path, name, value)
+    }
+
+    fn apply_textdelta(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.apply_textdelta(path, content)
+    }
+
+    fn close_edit(&mut self) -> Result<(), String> {
+        self.inner.close_edit()
+    }
+}
+
+fn finalize_ra_changes(
+    changes: Vec<FileChange>,
+    revision: &RevisionEvent,
+    strip_prefix: &str,
+    config: &SvnRemoteConfig,
+) -> Result<Vec<FileChange>, String> {
+    let filters = PathFilters::new(config.include_paths.clone(), config.ignore_paths.clone())?;
+    let mut filtered = Vec::new();
+    for change in changes {
+        let git_path = match &change {
+            FileChange::Modify { path, .. } | FileChange::Delete { path } => path,
+        };
+        let svn_path = svn_path_for_git_path(strip_prefix, git_path);
+        if path_is_included(&filters, &svn_path)? {
+            filtered.push(change);
+        }
+    }
+
+    if config.preserve_empty_dirs {
+        add_empty_directory_placeholders(&mut filtered, revision, strip_prefix, config, &filters)?;
+    }
+
+    Ok(filtered)
+}
+
+fn add_empty_directory_placeholders(
+    changes: &mut Vec<FileChange>,
+    revision: &RevisionEvent,
+    strip_prefix: &str,
+    config: &SvnRemoteConfig,
+    filters: &PathFilters,
+) -> Result<(), String> {
+    let file_paths = changes
+        .iter()
+        .filter_map(|change| match change {
+            FileChange::Modify { path, .. } => Some(path.clone()),
+            FileChange::Delete { .. } => None,
+        })
+        .collect::<Vec<_>>();
+
+    for changed_path in &revision.changed_paths {
+        if changed_path.kind != NodeKind::Directory {
+            continue;
+        }
+        let Some(path) = import_path(&changed_path.path, strip_prefix) else {
+            continue;
+        };
+        let svn_path = svn_path_for_git_path(strip_prefix, &path);
+        if !path_is_included(filters, &svn_path)? {
+            continue;
+        }
+
+        match changed_path.action {
+            ChangeAction::Delete => changes.push(FileChange::Delete {
+                path: placeholder_path(&path, config),
+            }),
+            ChangeAction::Add | ChangeAction::Replace | ChangeAction::Modify => {
+                let child_prefix = format!("{}/", path.trim_end_matches('/'));
+                if file_paths
+                    .iter()
+                    .any(|file_path| file_path == &path || file_path.starts_with(&child_prefix))
+                {
+                    continue;
+                }
+                changes.push(FileChange::Modify {
+                    path: placeholder_path(&path, config),
+                    mode: "100644".to_string(),
+                    content: Vec::new(),
+                });
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn svn_path_for_git_path(strip_prefix: &str, git_path: &str) -> String {
+    let strip_prefix = strip_prefix.trim_matches('/');
+    let git_path = git_path.trim_matches('/');
+    if strip_prefix.is_empty() {
+        git_path.to_string()
+    } else if git_path.is_empty() {
+        strip_prefix.to_string()
+    } else {
+        format!("{strip_prefix}/{git_path}")
+    }
 }
 
 struct CopyParentSource {

@@ -184,6 +184,60 @@ fn ra_import_filters_revisions_per_mapping_before_replay() {
     );
 }
 
+#[test]
+fn ra_import_applies_path_filters_to_editor_changes() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let session = PathFilteringRaSession::new();
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""))
+        .with_ignore_paths("^trunk/run\\.sh$");
+
+    import_ra_revisions(
+        &session,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    let trunk_tree = git
+        .run_for_test(["ls-tree", "-r", "--name-only", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert!(trunk_tree.lines().any(|line| line == "src/lib.rs"));
+    assert!(!trunk_tree.lines().any(|line| line == "run.sh"));
+}
+
+#[test]
+fn ra_import_preserves_empty_directories_with_placeholder() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let session = PathFilteringRaSession::new();
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""))
+        .with_preserve_empty_dirs(".gitkeep");
+
+    import_ra_revisions(
+        &session,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:empty-dir/.gitkeep"])
+            .unwrap(),
+        String::new()
+    );
+}
+
 fn revisions() -> Vec<RevisionEvent> {
     vec![
         RevisionEvent {
@@ -233,15 +287,35 @@ impl PathFilteringRaSession {
                     author: "alice".to_string(),
                     message: "update trunk".to_string(),
                     timestamp: "2026-01-02T00:00:00Z".to_string(),
-                    changed_paths: vec![ChangedPath {
-                        path: "/trunk/src/lib.rs".to_string(),
-                        action: ChangeAction::Modify,
-                        copy_from_path: None,
-                        copy_from_rev: None,
-                        kind: NodeKind::File,
-                        properties: BTreeMap::new(),
-                        content: Some(b"pub fn trunk() {}\n".to_vec()),
-                    }],
+                    changed_paths: vec![
+                        ChangedPath {
+                            path: "/trunk/src/lib.rs".to_string(),
+                            action: ChangeAction::Modify,
+                            copy_from_path: None,
+                            copy_from_rev: None,
+                            kind: NodeKind::File,
+                            properties: BTreeMap::new(),
+                            content: Some(b"pub fn trunk() {}\n".to_vec()),
+                        },
+                        ChangedPath {
+                            path: "/trunk/run.sh".to_string(),
+                            action: ChangeAction::Add,
+                            copy_from_path: None,
+                            copy_from_rev: None,
+                            kind: NodeKind::File,
+                            properties: BTreeMap::new(),
+                            content: Some(b"#!/bin/sh\n".to_vec()),
+                        },
+                        ChangedPath {
+                            path: "/trunk/empty-dir".to_string(),
+                            action: ChangeAction::Add,
+                            copy_from_path: None,
+                            copy_from_rev: None,
+                            kind: NodeKind::Directory,
+                            properties: BTreeMap::new(),
+                            content: None,
+                        },
+                    ],
                 },
                 RevisionEvent {
                     revision: 3,
@@ -355,8 +429,11 @@ fn drive_update(
 ) -> Result<(), String> {
     editor.open_root(revision)?;
     editor.add_directory(path, None)?;
+    editor.add_directory(&format!("{path}/empty-dir"), None)?;
     editor.add_file(&format!("{path}/src/lib.rs"), None)?;
     editor.apply_textdelta(&format!("{path}/src/lib.rs"), content)?;
+    editor.add_file(&format!("{path}/run.sh"), None)?;
+    editor.apply_textdelta(&format!("{path}/run.sh"), b"#!/bin/sh\n")?;
     editor.close_edit()
 }
 
