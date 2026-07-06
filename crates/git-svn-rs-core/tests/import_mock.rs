@@ -2,10 +2,10 @@ use std::collections::BTreeMap;
 
 use git_svn_rs_core::config::SvnRemoteConfig;
 use git_svn_rs_core::git::GitCli;
-use git_svn_rs_core::import::{ImportOptions, import_mock_revisions};
+use git_svn_rs_core::import::{ImportOptions, import_mock_revisions, import_ra_revisions};
 use git_svn_rs_core::mapping::{build_single_path, build_standard_layout};
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
-use git_svn_rs_core::svn::mock::MockSvnBackend;
+use git_svn_rs_core::svn::mock::{MockRaSession, MockSvnBackend};
 use git_svn_rs_core::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent};
 use tempfile::tempdir;
 
@@ -106,6 +106,40 @@ fn branch_copy_import_uses_source_revision_as_parent() {
         .unwrap();
 
     assert_eq!(branch_parent.trim(), trunk_commit.trim());
+}
+
+#[test]
+fn imports_ra_session_update_into_git_and_rev_map() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let session = MockRaSession::standard_fixture("mock-uuid");
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+
+    let summary = import_ra_revisions(
+        &session,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(summary.imported_revisions, vec![2]);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+
+    let rev_map = RevMap::open(
+        dir.path().join(".git/svn/origin.trunk/.rev_map.mock-uuid"),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    assert!(rev_map.get(2).unwrap().is_some());
 }
 
 fn revisions() -> Vec<RevisionEvent> {

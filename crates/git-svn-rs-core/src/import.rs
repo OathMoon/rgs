@@ -4,12 +4,14 @@ use std::process::Command;
 use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::config::SvnRemoteConfig;
 use crate::fast_import::{FastImportCommit, FastImportStream, FileChange};
+use crate::fetch_editor::{FetchCommitPlan, SvnFetchEditor};
 use crate::filters::{FilterDecision, PathFilters};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::glob_spec::GlobSpec;
 use crate::mapping::RefMapping;
 use crate::rev_map::RevMap;
+use crate::svn::ra::RaSession;
 use crate::svn::{ChangeAction, NodeKind, RevisionEvent, SvnBackend};
 use fancy_regex::Regex;
 
@@ -56,6 +58,42 @@ pub fn import_mock_revisions(
     for mapping in &mappings {
         let summary =
             import_revisions_for_mapping(git, config, &uuid, mapping, &mappings, &revisions)?;
+        all_imported_revisions.extend(summary.imported_revisions);
+    }
+
+    all_imported_revisions.sort_unstable();
+    all_imported_revisions.dedup();
+    Ok(ImportSummary {
+        imported_revisions: all_imported_revisions,
+    })
+}
+
+pub fn import_ra_revisions(
+    session: &impl RaSession,
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    options: ImportOptions,
+) -> Result<ImportSummary, String> {
+    let end = options.end_revision.unwrap_or(session.latest_revnum()?);
+    if options.start_revision > end {
+        return Ok(ImportSummary {
+            imported_revisions: Vec::new(),
+        });
+    }
+
+    let revisions = session.get_log(&[], options.start_revision, end)?;
+    if revisions.is_empty() {
+        return Ok(ImportSummary {
+            imported_revisions: Vec::new(),
+        });
+    }
+
+    let uuid = session.uuid()?;
+    let mappings = concrete_mappings(config, &revisions)?;
+    let mut all_imported_revisions = Vec::new();
+    for mapping in &mappings {
+        let summary =
+            import_ra_revisions_for_mapping(git, config, &uuid, mapping, &revisions, session)?;
         all_imported_revisions.extend(summary.imported_revisions);
     }
 
@@ -115,6 +153,71 @@ fn import_revisions_for_mapping(
             parent_ref: first_parent_ref,
             changes,
         });
+    }
+
+    if imported_revisions.is_empty() {
+        return Ok(ImportSummary { imported_revisions });
+    }
+
+    git.fast_import(&stream.finish())?;
+    write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
+
+    Ok(ImportSummary { imported_revisions })
+}
+
+fn import_ra_revisions_for_mapping(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    uuid: &str,
+    mapping: &RefMapping,
+    revisions: &[RevisionEvent],
+    session: &impl RaSession,
+) -> Result<ImportSummary, String> {
+    let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
+    let mut stream = FastImportStream::new();
+    let mut imported_revisions = Vec::new();
+    let max_imported_revision = max_imported_revision(git, &mapping.git_ref, uuid)?;
+    let existing_parent_ref = git
+        .rev_parse(&mapping.git_ref)
+        .ok()
+        .map(|commit| commit.trim().to_string());
+    let authors = author_mapper(config)?;
+
+    for (index, revision) in revisions.iter().enumerate() {
+        if revision.revision <= max_imported_revision {
+            continue;
+        }
+
+        let parent_mark =
+            (!imported_revisions.is_empty()).then_some(imported_revisions.len() as u32);
+        let parent_ref = (imported_revisions.is_empty())
+            .then(|| existing_parent_ref.clone())
+            .flatten();
+        let plan = FetchCommitPlan {
+            mark: imported_revisions.len() as u32 + 1,
+            refname: mapping.git_ref.clone(),
+            author: author_ident(&revision.author, Some(&authors))?,
+            committer: author_ident(&revision.author, Some(&authors))?,
+            timestamp: index as i64,
+            message: commit_message(config, revision, uuid, &strip_prefix),
+            parent_mark,
+            parent_ref,
+        };
+        let mut editor = if existing_parent_ref.is_some() && imported_revisions.is_empty() {
+            SvnFetchEditor::from_git_ref(git, plan, &mapping.git_ref)?
+        } else {
+            SvnFetchEditor::new(plan)
+        }
+        .with_path_prefix(&mapping.svn_path);
+
+        session.do_update(&mapping.svn_path, revision.revision, &mut editor)?;
+        let commit = editor.into_commit()?;
+        if commit.changes.is_empty() {
+            continue;
+        }
+
+        imported_revisions.push(revision.revision);
+        stream = stream.commit(&commit);
     }
 
     if imported_revisions.is_empty() {
