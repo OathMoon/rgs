@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `be9e8dd8 feat: support svn password for dcommit`
+- Latest implementation commit: `b0573e7 feat: pass svn password during fetch`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -49,6 +49,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `2456bfc5`: dcommit SVN CLI write-back now supports local `svn://` repositories served by `svnserve`, with regression coverage in default and linked `svn-libsvn` builds.
 - `771a734e`: dcommit SVN CLI write-back now applies persisted and command-line SVN auth/config options (`--username`, `--config-dir`, `--no-auth-cache`) to checkout, working-copy edits, property changes, and commit.
 - `be9e8dd8`: `dcommit` accepts command-line `--password`, passes it to SVN CLI write-back commands without persisting it to git config, and has end-to-end coverage for an `svnserve` repository with anonymous reads and authenticated writes.
+- `b0573e7`: `clone`/`fetch` pass command-line SVN auth/config overrides, including non-persisted `--password`, through SVN CLI and linked libsvn backends; SVN CLI backend commands now run non-interactively to avoid auth hangs.
 
 ## Completed Capabilities
 
@@ -73,6 +74,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Added fixture builders and mock import/fetch planning for content, executable mode, symlink mode, copy, and delete.
 - SVN CLI replay supports `file://`, local `svn://`, `svn+ssh://`, `http://`, and `https://` URL schemes, with strongest coverage around local fixtures.
 - Linked libsvn coverage now includes local `file://` and local `svn://` fixture access for native RA metadata, path-filtered log, and log-backed update/switch replay.
+- `clone`/`fetch` now propagate command-line SVN auth/config overrides (`--username`, `--password`, `--config-dir`, `--no-auth-cache`) to the selected SVN CLI or linked libsvn backend without persisting passwords to git config; authenticated local `svn://` clone coverage exercises both default and linked `svn-libsvn` builds.
 - Feature-gated command fetch now routes real SVN remotes through linked `LibSvnBackend` and the RA editor-backed import path when available, falling back to the SVN CLI/log-backed path for default and unlinked feature builds.
 - CLI real-SVN replay tests share the same `SvnServe` fixture helper as core libsvn tests, reducing duplicate remote-service setup and keeping readiness behavior consistent.
 - `SvnFetchEditor` can now map full SVN callback paths such as `trunk/src/lib.rs` to Git-relative paths such as `src/lib.rs` via a configured path prefix.
@@ -121,7 +123,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Continue the real `svn-libsvn` backend beyond native version, RA repository metadata, read-only `RaSession` methods, RA log metadata, changed-file content/property reads, copied-directory file materialization, config-dir propagation, basic auth baton support, and initial path-compatible log-backed `do_update`/`do_switch` replay; remaining backend work includes true libsvn delta editor integration, richer auth prompt/provider flows, remote service validation, and deeper libsvn error/session handling.
 - Current `svn-libsvn` feature builds and runs a vcpkg Subversion link probe; this environment links when `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and the vcpkg `installed\x64-windows\bin` directory is on `PATH`.
-- Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and local `svn://`, especially remote auth/service scenarios and full RA editor integration.
+- Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and authenticated local `svn://`, especially non-local remote auth/service scenarios and full RA editor integration.
 - Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` behavior against non-local SVN servers.
 - Complete the remaining planned `Log.pm` compatibility modes and more complex multi-ref/rev_map resolver cases.
 - Implement broader production remote SVN/libsvn dcommit write-back; current supported non-dry-run paths are mock, local `file://`, and local `svn://`, with SVN CLI username/password/config option plumbing in place, while http(s) write-back, prompt/cache integration beyond explicit command-line credentials, and richer remote/auth flows remain guarded or unvalidated.
@@ -152,6 +154,7 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_log_metadata_and_changed_paths -- --nocapture` (covers changed-path metadata, file content, `svn:executable`/`svn:special` file properties, and copied-directory file materialization)
 - `cargo test -p git-svn-rs-core commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
 - `cargo test -p git-svn-rs-core commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
+- `cargo test -p git-svn-rs-core svn::cli::tests::backend_command_args_include_auth_and_config_options -- --nocapture`
 - `cargo test -p git-svn-rs-core --test import_mock imports_ra_session_update_into_git_and_rev_map`
 - `cargo test -p git-svn-rs-core --test import_mock ra_import_filters_revisions_per_mapping_before_replay`
 - `cargo test -p git-svn-rs-core --test import_mock ra_import_applies_path_filters_to_editor_changes`
@@ -174,6 +177,7 @@ Latest full gates recorded as passing:
 - `cargo test -p git-svn-rs --no-default-features --test clone_fetch_real_svn -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
+- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_stdlayout_authenticated_svn_url_imports_with_password -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_file_url_imports_trunk_history_after_init -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_svn_url_imports_branch_tag_and_copy_contents_after_init -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_file_url_applies_ignore_paths_filter -- --nocapture`
@@ -192,6 +196,7 @@ Latest full gates recorded as passing:
 Important targeted suites recorded as passing during this work:
 
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`
+- `cargo test -p git-svn-rs --test clone_fetch_real_svn clone_stdlayout_authenticated_svn_url_imports_with_password -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands info_url_resolves_branch_from_branches_mapping -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands log_short_limit_returns_latest_svn_revisions -- --nocapture`
