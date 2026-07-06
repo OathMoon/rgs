@@ -54,6 +54,12 @@ pub fn run_in_work_tree(
             } else {
                 &tracked.svn_path
             };
+            let svn_options = dcommit_svn_options(
+                tracked.config.username.as_deref(),
+                tracked.config.config_dir.as_deref(),
+                tracked.config.no_auth_cache,
+                &args.shared,
+            );
             return dcommit_file_svn(
                 FileSvnDcommit {
                     git: &tracked.git,
@@ -62,7 +68,7 @@ pub fn run_in_work_tree(
                     refname: &tracked.refname,
                     no_rebase: args.no_rebase,
                     mergeinfo: args.mergeinfo.as_deref(),
-                    config_dir: tracked.config.config_dir.as_deref(),
+                    svn_options,
                 },
                 commits,
             );
@@ -111,13 +117,13 @@ struct FileSvnDcommit<'a> {
     refname: &'a str,
     no_rebase: bool,
     mergeinfo: Option<&'a str>,
-    config_dir: Option<&'a str>,
+    svn_options: DcommitSvnOptions,
 }
 
 struct FileSvnWorkingCopy<'a> {
     git: &'a GitCli,
     wc: &'a Path,
-    config_dir: Option<&'a str>,
+    svn_options: &'a DcommitSvnOptions,
 }
 
 fn dcommit_file_svn(
@@ -132,7 +138,7 @@ fn dcommit_file_svn(
     let checkout_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
     run_svn(
         Some(&temp.root),
-        ctx.config_dir,
+        &ctx.svn_options,
         &[
             "checkout".to_string(),
             "--quiet".to_string(),
@@ -146,7 +152,7 @@ fn dcommit_file_svn(
     let wc = FileSvnWorkingCopy {
         git: ctx.git,
         wc: &temp.wc,
-        config_dir: ctx.config_dir,
+        svn_options: &ctx.svn_options,
     };
     for commit in &commits {
         let changes = ctx.git.diff_name_status(&diff_base, &commit.id)?;
@@ -161,9 +167,9 @@ fn dcommit_file_svn(
             )?;
         }
         if let Some(mergeinfo) = ctx.mergeinfo {
-            apply_mergeinfo(&temp.wc, mergeinfo, ctx.config_dir)?;
+            apply_mergeinfo(&temp.wc, mergeinfo, &ctx.svn_options)?;
         }
-        let revision = svn_commit(&temp.wc, &commit.subject, ctx.config_dir)?;
+        let revision = svn_commit(&temp.wc, &commit.subject, &ctx.svn_options)?;
         fetch::run_in_work_tree(ctx.git.work_tree().to_path_buf(), default_fetch_args())?;
         diff_base = commit.id.clone();
         out.push_str(&format!(
@@ -207,34 +213,34 @@ fn apply_file_svn_change(
                 .map_err(|e| e.to_string())?;
             run_svn(
                 Some(wc.wc),
-                wc.config_dir,
+                wc.svn_options,
                 &[
                     "add".to_string(),
                     "--parents".to_string(),
                     path.replace('\\', "/"),
                 ],
             )?;
-            apply_file_props(wc.git, wc.wc, commit, path, "000000", wc.config_dir)?;
+            apply_file_props(wc.git, wc.wc, commit, path, "000000", wc.svn_options)?;
         }
         "M" | "T" => {
             std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             let old_mode = wc.git.ls_tree_file(base, path)?.mode;
-            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.config_dir)?;
+            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.svn_options)?;
         }
         "D" => {
             run_svn(
                 Some(wc.wc),
-                wc.config_dir,
+                wc.svn_options,
                 &["delete".to_string(), path.replace('\\', "/")],
             )?;
         }
         status if status.starts_with('R') => {
             let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
-            ensure_svn_parent_dirs(wc.wc, path, wc.config_dir)?;
+            ensure_svn_parent_dirs(wc.wc, path, wc.svn_options)?;
             run_svn(
                 Some(wc.wc),
-                wc.config_dir,
+                wc.svn_options,
                 &[
                     "move".to_string(),
                     old_path.replace('\\', "/"),
@@ -244,14 +250,14 @@ fn apply_file_svn_change(
             std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.config_dir)?;
+            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.svn_options)?;
         }
         status if status.starts_with('C') => {
             let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
-            ensure_svn_parent_dirs(wc.wc, path, wc.config_dir)?;
+            ensure_svn_parent_dirs(wc.wc, path, wc.svn_options)?;
             run_svn(
                 Some(wc.wc),
-                wc.config_dir,
+                wc.svn_options,
                 &[
                     "copy".to_string(),
                     old_path.replace('\\', "/"),
@@ -261,7 +267,7 @@ fn apply_file_svn_change(
             std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.config_dir)?;
+            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.svn_options)?;
         }
         other => {
             return Err(format!(
@@ -272,7 +278,11 @@ fn apply_file_svn_change(
     Ok(())
 }
 
-fn ensure_svn_parent_dirs(wc: &Path, path: &str, config_dir: Option<&str>) -> Result<(), String> {
+fn ensure_svn_parent_dirs(
+    wc: &Path,
+    path: &str,
+    svn_options: &DcommitSvnOptions,
+) -> Result<(), String> {
     let Some(parent) = Path::new(path).parent() else {
         return Ok(());
     };
@@ -288,7 +298,7 @@ fn ensure_svn_parent_dirs(wc: &Path, path: &str, config_dir: Option<&str>) -> Re
     std::fs::create_dir_all(&parent_path).map_err(|e| e.to_string())?;
     run_svn(
         Some(wc),
-        config_dir,
+        svn_options,
         &[
             "add".to_string(),
             "--parents".to_string(),
@@ -309,10 +319,14 @@ fn svn_file_content(git: &GitCli, commit: &str, path: &str) -> Result<Vec<u8>, S
     }
 }
 
-fn apply_mergeinfo(wc: &Path, mergeinfo: &str, config_dir: Option<&str>) -> Result<(), String> {
+fn apply_mergeinfo(
+    wc: &Path,
+    mergeinfo: &str,
+    svn_options: &DcommitSvnOptions,
+) -> Result<(), String> {
     run_svn(
         Some(wc),
-        config_dir,
+        svn_options,
         &[
             "propset".to_string(),
             "--non-interactive".to_string(),
@@ -329,13 +343,13 @@ fn apply_file_props(
     commit: &str,
     path: &str,
     old_mode: &str,
-    config_dir: Option<&str>,
+    svn_options: &DcommitSvnOptions,
 ) -> Result<(), String> {
     let new_mode = git.ls_tree_file(commit, path)?.mode;
     if new_mode == "100755" {
         run_svn(
             Some(wc),
-            config_dir,
+            svn_options,
             &[
                 "propset".to_string(),
                 "--non-interactive".to_string(),
@@ -347,7 +361,7 @@ fn apply_file_props(
     } else if old_mode == "100755" {
         run_svn(
             Some(wc),
-            config_dir,
+            svn_options,
             &[
                 "propdel".to_string(),
                 "--non-interactive".to_string(),
@@ -359,7 +373,7 @@ fn apply_file_props(
     if new_mode == "120000" {
         run_svn(
             Some(wc),
-            config_dir,
+            svn_options,
             &[
                 "propset".to_string(),
                 "--non-interactive".to_string(),
@@ -371,7 +385,7 @@ fn apply_file_props(
     } else if old_mode == "120000" {
         run_svn(
             Some(wc),
-            config_dir,
+            svn_options,
             &[
                 "propdel".to_string(),
                 "--non-interactive".to_string(),
@@ -383,7 +397,7 @@ fn apply_file_props(
     for (property, value) in svn_file_attributes_for_path(git, commit, path)? {
         run_svn(
             Some(wc),
-            config_dir,
+            svn_options,
             &[
                 "propset".to_string(),
                 "--non-interactive".to_string(),
@@ -511,10 +525,10 @@ fn attribute_pattern_matches(pattern: &str, path: &str) -> bool {
     false
 }
 
-fn svn_commit(wc: &Path, message: &str, config_dir: Option<&str>) -> Result<u32, String> {
+fn svn_commit(wc: &Path, message: &str, svn_options: &DcommitSvnOptions) -> Result<u32, String> {
     let output = run_svn_output(
         Some(wc),
-        config_dir,
+        svn_options,
         &["commit".to_string(), "-m".to_string(), message.to_string()],
     )?;
     parse_committed_revision(&output)
@@ -541,24 +555,67 @@ fn svn_checkout_url(root_url: &str, svn_path: &str) -> String {
     }
 }
 
-fn run_svn(cwd: Option<&Path>, config_dir: Option<&str>, args: &[String]) -> Result<(), String> {
-    run_svn_output(cwd, config_dir, args).map(|_| ())
+#[derive(Debug, Clone, Default)]
+struct DcommitSvnOptions {
+    config_dir: Option<String>,
+    username: Option<String>,
+    no_auth_cache: bool,
+}
+
+impl DcommitSvnOptions {
+    fn command_args(&self, args: &[String]) -> Vec<String> {
+        let mut command_args = Vec::new();
+        if let Some(config_dir) = &self.config_dir {
+            command_args.push("--config-dir".to_string());
+            command_args.push(config_dir.clone());
+        }
+        if let Some(username) = &self.username {
+            command_args.push("--username".to_string());
+            command_args.push(username.clone());
+        }
+        if self.no_auth_cache {
+            command_args.push("--no-auth-cache".to_string());
+        }
+        command_args.extend(args.iter().cloned());
+        command_args
+    }
+}
+
+fn dcommit_svn_options(
+    persisted_username: Option<&str>,
+    persisted_config_dir: Option<&str>,
+    persisted_no_auth_cache: bool,
+    shared: &crate::cli::SharedFetchArgs,
+) -> DcommitSvnOptions {
+    DcommitSvnOptions {
+        config_dir: shared
+            .config_dir
+            .clone()
+            .or_else(|| persisted_config_dir.map(|value| value.to_string())),
+        username: shared
+            .username
+            .clone()
+            .or_else(|| persisted_username.map(|value| value.to_string())),
+        no_auth_cache: persisted_no_auth_cache || shared.no_auth_cache,
+    }
+}
+
+fn run_svn(cwd: Option<&Path>, options: &DcommitSvnOptions, args: &[String]) -> Result<(), String> {
+    run_svn_output(cwd, options, args).map(|_| ())
 }
 
 fn run_svn_output(
     cwd: Option<&Path>,
-    config_dir: Option<&str>,
+    options: &DcommitSvnOptions,
     args: &[String],
 ) -> Result<String, String> {
     let mut command = Command::new("svn");
     if let Some(cwd) = cwd {
         command.current_dir(cwd);
     }
-    if let Some(config_dir) = config_dir {
-        command.args(["--config-dir", config_dir]);
-    }
+    let command_args = options.command_args(args);
     let output = command
-        .args(args)
+        .args(command_args)
         .output()
         .map_err(|e| format!("svn failed to start: {e}"))?;
     if output.status.success() {
@@ -762,4 +819,37 @@ fn git_changes_for_commit(
         }
     }
     Ok(changes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dcommit_svn_options_apply_command_line_auth_overrides() {
+        let mut shared = default_shared_args();
+        shared.username = Some("cli-user".to_string());
+        shared.config_dir = Some("cli-config".to_string());
+        shared.no_auth_cache = true;
+
+        let options = dcommit_svn_options(
+            Some("persisted-user"),
+            Some("persisted-config"),
+            false,
+            &shared,
+        );
+
+        assert_eq!(
+            options.command_args(&["checkout".to_string(), "url".to_string()]),
+            vec![
+                "--config-dir",
+                "cli-config",
+                "--username",
+                "cli-user",
+                "--no-auth-cache",
+                "checkout",
+                "url",
+            ]
+        );
+    }
 }
