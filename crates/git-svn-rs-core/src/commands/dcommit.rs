@@ -70,6 +70,7 @@ pub fn run_in_work_tree(
                     no_rebase: args.no_rebase,
                     mergeinfo: args.mergeinfo.as_deref(),
                     svn_options,
+                    post_commit_fetch_shared: args.shared.clone(),
                 },
                 commits,
             );
@@ -119,6 +120,7 @@ struct FileSvnDcommit<'a> {
     no_rebase: bool,
     mergeinfo: Option<&'a str>,
     svn_options: DcommitSvnOptions,
+    post_commit_fetch_shared: crate::cli::SharedFetchArgs,
 }
 
 struct FileSvnWorkingCopy<'a> {
@@ -171,7 +173,10 @@ fn dcommit_file_svn(
             apply_mergeinfo(&temp.wc, mergeinfo, &ctx.svn_options)?;
         }
         let revision = svn_commit(&temp.wc, &commit.subject, &ctx.svn_options)?;
-        fetch::run_in_work_tree(ctx.git.work_tree().to_path_buf(), default_fetch_args())?;
+        fetch::run_in_work_tree(
+            ctx.git.work_tree().to_path_buf(),
+            fetch_args(ctx.post_commit_fetch_shared.clone()),
+        )?;
         diff_base = commit.id.clone();
         out.push_str(&format!(
             "Committed {} {} as r{revision}\n",
@@ -743,10 +748,10 @@ fn dcommit_mock(
     Ok(out)
 }
 
-fn default_fetch_args() -> crate::cli::FetchArgs {
+fn fetch_args(shared: crate::cli::SharedFetchArgs) -> crate::cli::FetchArgs {
     crate::cli::FetchArgs {
         remote: None,
-        shared: default_shared_args(),
+        shared,
         fetch_all: false,
         parent: false,
     }

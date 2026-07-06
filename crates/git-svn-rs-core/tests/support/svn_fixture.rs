@@ -230,6 +230,21 @@ impl StandardSvnFixture {
         )
         .map_err(|e| e.to_string())
     }
+
+    #[allow(dead_code)]
+    pub fn require_read_write_auth(&self, username: &str, password: &str) -> Result<(), String> {
+        let conf = self.repo.join("conf");
+        std::fs::write(
+            conf.join("svnserve.conf"),
+            "[general]\nanon-access = none\nauth-access = write\npassword-db = passwd\n",
+        )
+        .map_err(|e| e.to_string())?;
+        std::fs::write(
+            conf.join("passwd"),
+            format!("[users]\n{username} = {password}\n"),
+        )
+        .map_err(|e| e.to_string())
+    }
 }
 
 #[allow(dead_code)]

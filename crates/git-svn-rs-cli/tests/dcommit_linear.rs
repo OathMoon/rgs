@@ -258,6 +258,80 @@ fn dcommit_writes_to_authenticated_svnserve_with_password_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_fetches_after_authenticated_svnserve_write_when_reads_require_auth() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_read_write_auth("alice", "secret").unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let work = parent.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 49 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "authenticated readback answer",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("authenticated readback answer"));
+
+    assert_eq!(
+        git_stdout(&work, &["show", "refs/remotes/origin/trunk:src/lib.rs"]),
+        "pub fn answer() -> u8 { 49 }"
+    );
+}
+
+#[test]
 fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
