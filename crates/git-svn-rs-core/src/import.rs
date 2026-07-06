@@ -4,7 +4,7 @@ use std::process::Command;
 use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::config::SvnRemoteConfig;
 use crate::fast_import::{FastImportCommit, FastImportStream, FileChange};
-use crate::fetch_editor::{FetchCommitPlan, SvnFetchEditor};
+use crate::fetch_editor::{FetchCommitPlan, SvnFetchEditor, TreeEntry};
 use crate::filters::{FilterDecision, PathFilters};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
@@ -92,8 +92,19 @@ pub fn import_ra_revisions(
     let mappings = concrete_mappings(config, &revisions)?;
     let mut all_imported_revisions = Vec::new();
     for mapping in &mappings {
-        let summary =
-            import_ra_revisions_for_mapping(git, config, &uuid, mapping, &revisions, session)?;
+        let mapping_revisions = revisions_for_mapping(&revisions, &mapping.svn_path);
+        if mapping_revisions.is_empty() {
+            continue;
+        }
+        let summary = import_ra_revisions_for_mapping(
+            git,
+            config,
+            &uuid,
+            mapping,
+            &mappings,
+            &mapping_revisions,
+            session,
+        )?;
         all_imported_revisions.extend(summary.imported_revisions);
     }
 
@@ -170,6 +181,7 @@ fn import_ra_revisions_for_mapping(
     config: &SvnRemoteConfig,
     uuid: &str,
     mapping: &RefMapping,
+    all_mappings: &[RefMapping],
     revisions: &[RevisionEvent],
     session: &impl RaSession,
 ) -> Result<ImportSummary, String> {
@@ -190,9 +202,18 @@ fn import_ra_revisions_for_mapping(
 
         let parent_mark =
             (!imported_revisions.is_empty()).then_some(imported_revisions.len() as u32);
-        let parent_ref = (imported_revisions.is_empty())
-            .then(|| existing_parent_ref.clone())
-            .flatten();
+        let copy_parent = if imported_revisions.is_empty() && existing_parent_ref.is_none() {
+            copy_parent_source(git, uuid, mapping, all_mappings, revision)?
+        } else {
+            None
+        };
+        let parent_ref = if imported_revisions.is_empty() {
+            existing_parent_ref
+                .clone()
+                .or_else(|| copy_parent.as_ref().map(|parent| parent.commit.clone()))
+        } else {
+            None
+        };
         let plan = FetchCommitPlan {
             mark: imported_revisions.len() as u32 + 1,
             refname: mapping.git_ref.clone(),
@@ -203,7 +224,10 @@ fn import_ra_revisions_for_mapping(
             parent_mark,
             parent_ref,
         };
-        let mut editor = if existing_parent_ref.is_some() && imported_revisions.is_empty() {
+        let mut editor = if let Some(copy_parent) = copy_parent {
+            let entries = prefixed_tree_entries(git, &copy_parent.commit, &copy_parent.svn_path)?;
+            SvnFetchEditor::with_base_tree(plan, entries)
+        } else if existing_parent_ref.is_some() && imported_revisions.is_empty() {
             SvnFetchEditor::from_git_ref(git, plan, &mapping.git_ref)?
         } else {
             SvnFetchEditor::new(plan)
@@ -228,6 +252,83 @@ fn import_ra_revisions_for_mapping(
     write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
+}
+
+struct CopyParentSource {
+    commit: String,
+    svn_path: String,
+}
+
+fn copy_parent_source(
+    git: &GitCli,
+    uuid: &str,
+    mapping: &RefMapping,
+    all_mappings: &[RefMapping],
+    revision: &RevisionEvent,
+) -> Result<Option<CopyParentSource>, String> {
+    let mapping_path = mapping.svn_path.trim_matches('/');
+    let Some((copy_source_path, copy_source_revision)) = revision
+        .changed_paths
+        .iter()
+        .filter(|changed_path| {
+            let changed_path_text = changed_path.path.trim_matches('/');
+            matches!(
+                changed_path.action,
+                ChangeAction::Add | ChangeAction::Replace
+            ) && (changed_path_text == mapping_path
+                || changed_path_text.starts_with(&format!("{mapping_path}/")))
+        })
+        .filter_map(|changed_path| {
+            Some((
+                changed_path.copy_from_path.as_deref()?.trim_matches('/'),
+                changed_path.copy_from_rev?,
+            ))
+        })
+        .next()
+    else {
+        return Ok(None);
+    };
+
+    let Some(source_mapping) = all_mappings.iter().find(|candidate| {
+        let candidate_path = candidate.svn_path.trim_matches('/');
+        copy_source_path == candidate_path
+            || copy_source_path.starts_with(&format!("{candidate_path}/"))
+    }) else {
+        return Ok(None);
+    };
+    let path = rev_map_path(git, &source_mapping.git_ref, uuid)?;
+    if !path.exists() {
+        return Ok(None);
+    };
+    let Some(commit) = RevMap::open(path, git.object_format()?)?.get(copy_source_revision)? else {
+        return Ok(None);
+    };
+
+    Ok(Some(CopyParentSource {
+        commit,
+        svn_path: source_mapping.svn_path.trim_matches('/').to_string(),
+    }))
+}
+
+fn prefixed_tree_entries(
+    git: &GitCli,
+    commit: &str,
+    svn_path: &str,
+) -> Result<Vec<TreeEntry>, String> {
+    let svn_path = svn_path.trim_matches('/');
+    let entries = git
+        .tree_files(commit)?
+        .into_iter()
+        .map(|file| {
+            let path = if svn_path.is_empty() {
+                file.path
+            } else {
+                format!("{svn_path}/{}", file.path)
+            };
+            TreeEntry::file(path, file.mode, file.content)
+        })
+        .collect::<Vec<_>>();
+    Ok(entries)
 }
 
 fn copy_from_parent_ref(
@@ -375,6 +476,22 @@ fn wildcard_for_path(spec: &GlobSpec, path: &str) -> Option<String> {
     }
     let full_path = spec.full_path(&wildcard);
     (path == full_path || path.starts_with(&format!("{full_path}/"))).then_some(wildcard)
+}
+
+fn revisions_for_mapping(revisions: &[RevisionEvent], svn_path: &str) -> Vec<RevisionEvent> {
+    let svn_path = svn_path.trim_matches('/');
+    revisions
+        .iter()
+        .filter(|revision| {
+            svn_path.is_empty()
+                || revision.changed_paths.is_empty()
+                || revision.changed_paths.iter().any(|changed_path| {
+                    let changed_path = changed_path.path.trim_matches('/');
+                    changed_path == svn_path || changed_path.starts_with(&format!("{svn_path}/"))
+                })
+        })
+        .cloned()
+        .collect()
 }
 
 fn wildcard_from_exact_match(spec: &GlobSpec, path: &str) -> Option<String> {

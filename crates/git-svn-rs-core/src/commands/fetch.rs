@@ -1,6 +1,8 @@
 use crate::cli::FetchArgs;
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
+#[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+use crate::import::import_ra_revisions;
 use crate::import::{ImportOptions, import_mock_revisions};
 use crate::mapping::{MappingKind, RefMapping};
 use crate::rev_map::RevMap;
@@ -51,7 +53,7 @@ fn fetch_remote(git: &GitCli, remote: &str, revision: Option<&str>) -> Result<()
     let uuid = backend.uuid()?;
     let start_revision = next_revision(git, &config, &uuid)?;
     let import_options = import_options(start_revision, revision)?;
-    import_mock_revisions(&backend, git, &config, import_options)?;
+    backend.import_revisions(git, &config, import_options)?;
     Ok(())
 }
 
@@ -73,6 +75,33 @@ impl ConfiguredBackend {
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(_) => "libsvn",
         }
+    }
+
+    #[cfg(test)]
+    fn import_mode(&self) -> &'static str {
+        match self {
+            Self::Cli(_) => "log-replay",
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(_) => "ra-editor",
+        }
+    }
+
+    fn import_revisions(
+        &self,
+        git: &GitCli,
+        config: &SvnRemoteConfig,
+        options: ImportOptions,
+    ) -> Result<(), String> {
+        match self {
+            Self::Cli(backend) => {
+                import_mock_revisions(backend, git, config, options)?;
+            }
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => {
+                import_ra_revisions(backend, git, config, options)?;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -304,5 +333,18 @@ mod tests {
         };
 
         assert_eq!(backend.kind(), expected);
+    }
+
+    #[test]
+    fn configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        let backend = configured_backend(&config).unwrap();
+        let expected = if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+            "ra-editor"
+        } else {
+            "log-replay"
+        };
+
+        assert_eq!(backend.import_mode(), expected);
     }
 }

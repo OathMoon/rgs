@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 
 use git_svn_rs_core::config::SvnRemoteConfig;
@@ -5,7 +6,9 @@ use git_svn_rs_core::git::GitCli;
 use git_svn_rs_core::import::{ImportOptions, import_mock_revisions, import_ra_revisions};
 use git_svn_rs_core::mapping::{build_single_path, build_standard_layout};
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
+use git_svn_rs_core::svn::editor::FetchEditor;
 use git_svn_rs_core::svn::mock::{MockRaSession, MockSvnBackend};
+use git_svn_rs_core::svn::ra::{DirListing, RaSession, SvnNodeKind};
 use git_svn_rs_core::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent};
 use tempfile::tempdir;
 
@@ -142,6 +145,45 @@ fn imports_ra_session_update_into_git_and_rev_map() {
     assert!(rev_map.get(2).unwrap().is_some());
 }
 
+#[test]
+fn ra_import_filters_revisions_per_mapping_before_replay() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let session = PathFilteringRaSession::new();
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+
+    let summary = import_ra_revisions(
+        &session,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(3),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(summary.imported_revisions, vec![2, 3]);
+    assert_eq!(
+        session.update_calls.borrow().as_slice(),
+        [("trunk".to_string(), 2), ("branches/main".to_string(), 3)]
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/main:src/lib.rs"])
+            .unwrap(),
+        "pub fn branch() {}\n".to_string()
+    );
+    assert_eq!(
+        git.run_for_test(["rev-parse", "refs/remotes/origin/main^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+            .unwrap()
+            .trim()
+    );
+}
+
 fn revisions() -> Vec<RevisionEvent> {
     vec![
         RevisionEvent {
@@ -175,6 +217,160 @@ fn revisions() -> Vec<RevisionEvent> {
             }],
         },
     ]
+}
+
+struct PathFilteringRaSession {
+    revisions: Vec<RevisionEvent>,
+    update_calls: RefCell<Vec<(String, u32)>>,
+}
+
+impl PathFilteringRaSession {
+    fn new() -> Self {
+        Self {
+            revisions: vec![
+                RevisionEvent {
+                    revision: 2,
+                    author: "alice".to_string(),
+                    message: "update trunk".to_string(),
+                    timestamp: "2026-01-02T00:00:00Z".to_string(),
+                    changed_paths: vec![ChangedPath {
+                        path: "/trunk/src/lib.rs".to_string(),
+                        action: ChangeAction::Modify,
+                        copy_from_path: None,
+                        copy_from_rev: None,
+                        kind: NodeKind::File,
+                        properties: BTreeMap::new(),
+                        content: Some(b"pub fn trunk() {}\n".to_vec()),
+                    }],
+                },
+                RevisionEvent {
+                    revision: 3,
+                    author: "bob".to_string(),
+                    message: "add branch".to_string(),
+                    timestamp: "2026-01-03T00:00:00Z".to_string(),
+                    changed_paths: vec![ChangedPath {
+                        path: "/branches/main/src/lib.rs".to_string(),
+                        action: ChangeAction::Add,
+                        copy_from_path: Some("/trunk/src/lib.rs".to_string()),
+                        copy_from_rev: Some(2),
+                        kind: NodeKind::File,
+                        properties: BTreeMap::new(),
+                        content: Some(b"pub fn branch() {}\n".to_vec()),
+                    }],
+                },
+            ],
+            update_calls: RefCell::new(Vec::new()),
+        }
+    }
+}
+
+impl RaSession for PathFilteringRaSession {
+    fn url(&self) -> &str {
+        "mock://repo"
+    }
+
+    fn repos_root(&self) -> &str {
+        "mock://repo"
+    }
+
+    fn uuid(&self) -> Result<String, String> {
+        Ok("mock-uuid".to_string())
+    }
+
+    fn latest_revnum(&self) -> Result<u32, String> {
+        Ok(3)
+    }
+
+    fn check_path(&self, _path: &str, _revision: u32) -> Result<Option<SvnNodeKind>, String> {
+        Ok(None)
+    }
+
+    fn get_dir(&self, path: &str, revision: u32) -> Result<DirListing, String> {
+        Err(format!("unexpected get_dir {path}@{revision}"))
+    }
+
+    fn get_log(&self, paths: &[&str], start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
+        if paths == ["branches/main"] && start < 3 {
+            return Err("branch path did not exist at requested start revision".to_string());
+        }
+
+        Ok(self
+            .revisions
+            .iter()
+            .filter(|revision| revision.revision >= start && revision.revision <= end)
+            .filter(|revision| {
+                paths.is_empty()
+                    || revision.changed_paths.iter().any(|changed_path| {
+                        paths.iter().any(|path| {
+                            changed_path
+                                .path
+                                .trim_matches('/')
+                                .starts_with(path.trim_matches('/'))
+                        })
+                    })
+            })
+            .cloned()
+            .collect())
+    }
+
+    fn do_update(
+        &self,
+        path: &str,
+        revision: u32,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        match (path, revision) {
+            ("trunk", 2) => {
+                self.update_calls
+                    .borrow_mut()
+                    .push((path.to_string(), revision));
+                drive_update(editor, "trunk", revision, b"pub fn trunk() {}\n")
+            }
+            ("branches/main", 3) => {
+                self.update_calls
+                    .borrow_mut()
+                    .push((path.to_string(), revision));
+                drive_copy_update(editor, "branches/main", revision, b"pub fn branch() {}\n")
+            }
+            _ => Err(format!("unexpected update {path}@{revision}")),
+        }
+    }
+
+    fn do_switch(
+        &self,
+        path: &str,
+        revision: u32,
+        _switch_url: &str,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        self.do_update(path, revision, editor)
+    }
+}
+
+fn drive_update(
+    editor: &mut dyn FetchEditor,
+    path: &str,
+    revision: u32,
+    content: &[u8],
+) -> Result<(), String> {
+    editor.open_root(revision)?;
+    editor.add_directory(path, None)?;
+    editor.add_file(&format!("{path}/src/lib.rs"), None)?;
+    editor.apply_textdelta(&format!("{path}/src/lib.rs"), content)?;
+    editor.close_edit()
+}
+
+fn drive_copy_update(
+    editor: &mut dyn FetchEditor,
+    path: &str,
+    revision: u32,
+    content: &[u8],
+) -> Result<(), String> {
+    editor.open_root(revision)?;
+    editor.add_directory(path, Some(("trunk", 2)))?;
+    editor.add_file(&format!("{path}/src/lib.rs"), Some(("trunk/src/lib.rs", 2)))?;
+    editor.apply_textdelta(&format!("{path}/src/lib.rs"), content)?;
+    editor.close_edit()
 }
 
 fn branch_copy_revisions() -> Vec<RevisionEvent> {
