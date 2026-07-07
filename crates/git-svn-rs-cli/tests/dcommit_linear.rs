@@ -138,6 +138,60 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_revision_option_does_not_limit_post_commit_fetch_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 44 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "revision-limited dcommit answer",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase", "--revision", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("revision-limited dcommit answer"));
+
+    assert_eq!(
+        git_stdout(&work, &["show", "refs/remotes/origin/trunk:src/lib.rs"]),
+        "pub fn answer() -> u8 { 44 }"
+    );
+}
+
+#[test]
 fn dcommit_writes_linear_commit_to_svnserve_when_tools_exist() {
     match require_svn_tools().and_then(|()| require_svnserve()) {
         Ok(()) => {}

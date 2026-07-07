@@ -749,6 +749,8 @@ fn dcommit_mock(
 }
 
 fn fetch_args(shared: crate::cli::SharedFetchArgs) -> crate::cli::FetchArgs {
+    let mut shared = shared;
+    shared.revision = None;
     crate::cli::FetchArgs {
         remote: None,
         shared,
