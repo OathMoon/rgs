@@ -151,6 +151,26 @@ impl GoldenFixture {
                     name: "svn:special",
                     value: "x",
                 },
+                GoldenFixtureStep::SetProperty {
+                    path: "trunk/src/lib.rs",
+                    name: "svn:eol-style",
+                    value: "LF",
+                },
+                GoldenFixtureStep::SetProperty {
+                    path: "trunk/src/lib.rs",
+                    name: "svn:mime-type",
+                    value: "text/plain",
+                },
+                GoldenFixtureStep::SetProperty {
+                    path: "trunk/src/lib.rs",
+                    name: "svn:keywords",
+                    value: "Id",
+                },
+                GoldenFixtureStep::SetProperty {
+                    path: "trunk/src/lib.rs",
+                    name: "svn:needs-lock",
+                    value: "x",
+                },
                 GoldenFixtureStep::AddEmptyDir {
                     path: "trunk/empty-dir",
                 },
@@ -723,6 +743,24 @@ impl MaterializedSvnFixture {
                 "trunk/link-to-lib",
             ],
         )?;
+        for (name, value) in [
+            ("svn:eol-style", "LF"),
+            ("svn:mime-type", "text/plain"),
+            ("svn:keywords", "Id"),
+            ("svn:needs-lock", "x"),
+        ] {
+            run(
+                &wc,
+                "svn",
+                &[
+                    "propset",
+                    "--non-interactive",
+                    name,
+                    value,
+                    "trunk/src/lib.rs",
+                ],
+            )?;
+        }
         run(
             &wc,
             "svn",

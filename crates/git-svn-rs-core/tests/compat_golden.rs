@@ -64,6 +64,26 @@ fn standard_fixture_manifest_is_deterministic() {
                 name: "svn:special",
                 value: "x",
             },
+            GoldenFixtureStep::SetProperty {
+                path: "trunk/src/lib.rs",
+                name: "svn:eol-style",
+                value: "LF",
+            },
+            GoldenFixtureStep::SetProperty {
+                path: "trunk/src/lib.rs",
+                name: "svn:mime-type",
+                value: "text/plain",
+            },
+            GoldenFixtureStep::SetProperty {
+                path: "trunk/src/lib.rs",
+                name: "svn:keywords",
+                value: "Id",
+            },
+            GoldenFixtureStep::SetProperty {
+                path: "trunk/src/lib.rs",
+                name: "svn:needs-lock",
+                value: "x",
+            },
             GoldenFixtureStep::AddEmptyDir {
                 path: "trunk/empty-dir",
             },
@@ -94,6 +114,26 @@ fn standard_fixture_manifest_records_svn_properties() {
     assert!(fixture.steps().contains(&GoldenFixtureStep::SetProperty {
         path: "trunk/link-to-lib",
         name: "svn:special",
+        value: "x",
+    }));
+    assert!(fixture.steps().contains(&GoldenFixtureStep::SetProperty {
+        path: "trunk/src/lib.rs",
+        name: "svn:eol-style",
+        value: "LF",
+    }));
+    assert!(fixture.steps().contains(&GoldenFixtureStep::SetProperty {
+        path: "trunk/src/lib.rs",
+        name: "svn:mime-type",
+        value: "text/plain",
+    }));
+    assert!(fixture.steps().contains(&GoldenFixtureStep::SetProperty {
+        path: "trunk/src/lib.rs",
+        name: "svn:keywords",
+        value: "Id",
+    }));
+    assert!(fixture.steps().contains(&GoldenFixtureStep::SetProperty {
+        path: "trunk/src/lib.rs",
+        name: "svn:needs-lock",
         value: "x",
     }));
 }
