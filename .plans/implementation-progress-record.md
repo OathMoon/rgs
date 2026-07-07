@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `315f72c feat: clear supported libsvn file props`
+- Latest implementation commit: `4e597f6 test: expand golden config metadata coverage`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -61,6 +61,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `a4c508a`: SVN CLI and linked libsvn log reads now preserve textual SVN file properties (`svn:eol-style`, `svn:mime-type`, `svn:keywords`) in `ChangedPath.properties`.
 - `ed49baa`: readonly `gc` compresses `unhandled.log`, removes stale `index` files, and preserves rev_map lock cleanup; `log --verbose` renders SVN-style changed paths with leading repository paths and rename source paths.
 - `315f72c`: linked libsvn log-backed replay emits removal callbacks for all supported file properties (`svn:executable`, `svn:special`, `svn:eol-style`, `svn:mime-type`, `svn:keywords`, `svn:needs-lock`) so editor-backed fetch can clear stale metadata.
+- `4e597f6`: Phase 8 golden config artifacts now include optional metadata/auth/config keys while continuing to exclude passwords, and refspec normalization strips only one force-update `+`.
 
 ## Completed Capabilities
 
@@ -136,7 +137,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Standard fixture now includes explicit executable and special-link property intent plus an empty directory before branch/tag copies.
 - Rev_map capture reads all `.rev_map.*` files under `.git/svn`, preserves zero-commit records, records raw byte lengths, keeps canonical logical source refs, and rejects unmatched or ambiguous metadata paths.
 - Golden rev_map capture accepts SHA-1 and SHA-256 record widths, preferring the repository object format when available.
-- Golden config artifact capture includes optional stdlayout branch and tag refspecs when present, with leading `+` normalized like fetch mappings.
+- Golden config artifact capture includes optional stdlayout branch/tag refspecs plus metadata/auth/config keys when present, with a single leading force-update `+` normalized for refspec mappings and passwords excluded from artifacts.
 - Golden optional config lookup reports unexpected `git config` failures instead of treating every nonzero optional-key lookup as a missing key.
 - Rust-only stdlayout coverage validates trunk, branch, and tag ref tips against matching `git-svn-id` values and rev_map revisions.
 - Perl git-svn detection avoids mistaking the `git-svn-rs` shim for a Perl comparison backend.
@@ -258,6 +259,7 @@ Important targeted suites recorded as passing during this work:
 - `cargo test -p git-svn-rs-core --test compat_golden supported_rev_map_reads_sha256_records -- --nocapture`
 - `cargo test -p git-svn-rs-core --test compat_golden supported_config_includes_optional_branch_and_tag_mappings -- --nocapture`
 - `cargo test -p git-svn-rs-core --test compat_golden optional_config_values -- --nocapture`
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (23 tests; includes optional config metadata/auth coverage and one-`+` refspec normalization)
 - `cargo test -p git-svn-rs-core --test import_mock -- --nocapture`
 - `cargo test -p git-svn-rs-core --test dcommit_diff_planner -- --nocapture`
 - `cargo test -p git-svn-rs-core --test git_backend -- --nocapture`
