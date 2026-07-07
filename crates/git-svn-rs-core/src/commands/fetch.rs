@@ -86,6 +86,15 @@ impl ConfiguredBackend {
         }
     }
 
+    #[cfg(test)]
+    fn configured_username(&self) -> Option<&str> {
+        match self {
+            Self::Cli(backend) => backend.configured_username(),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => backend.configured_username(),
+        }
+    }
+
     fn import_revisions(
         &self,
         git: &GitCli,
@@ -138,6 +147,9 @@ fn configured_backend(
     #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     {
         let mut backend = crate::svn::libsvn::LibSvnBackend::from_config(config);
+        if let Some(username) = &shared.username {
+            backend = backend.with_username(username);
+        }
         if let Some(password) = &shared.password
             && let Some(username) = shared.username.as_ref().or(config.username.as_ref())
         {
@@ -369,6 +381,18 @@ mod tests {
         };
 
         assert_eq!(backend.import_mode(), expected);
+    }
+
+    #[test]
+    fn configured_backend_applies_command_line_username_without_password() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""))
+            .with_username("persisted");
+        let mut shared = default_shared_args();
+        shared.username = Some("cli-user".to_string());
+
+        let backend = configured_backend(&config, &shared).unwrap();
+
+        assert_eq!(backend.configured_username(), Some("cli-user"));
     }
 
     fn default_shared_args() -> SharedFetchArgs {

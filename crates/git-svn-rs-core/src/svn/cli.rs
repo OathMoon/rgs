@@ -44,6 +44,11 @@ impl SvnCliBackend {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn configured_username(&self) -> Option<&str> {
+        self.username.as_deref()
+    }
+
     pub fn with_password(mut self, password: impl Into<String>) -> Self {
         self.password = Some(password.into());
         self

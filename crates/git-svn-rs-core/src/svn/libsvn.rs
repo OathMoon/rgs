@@ -108,6 +108,11 @@ impl LibSvnBackend {
         self
     }
 
+    pub fn with_username(mut self, username: impl Into<String>) -> Self {
+        self.username = Some(username.into());
+        self
+    }
+
     pub fn with_credentials(
         mut self,
         username: impl Into<String>,
@@ -116,6 +121,11 @@ impl LibSvnBackend {
         self.username = Some(username.into());
         self.password = Some(password.into());
         self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn configured_username(&self) -> Option<&str> {
+        self.username.as_deref()
     }
 
     pub fn without_auth_cache(mut self) -> Self {
