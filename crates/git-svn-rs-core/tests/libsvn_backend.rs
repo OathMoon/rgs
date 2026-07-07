@@ -192,6 +192,37 @@ fn linked_backend_get_dir_reads_directory_properties() {
 }
 
 #[test]
+fn linked_backend_log_reads_needs_lock_file_property() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture
+        .set_run_script_property("svn:needs-lock", "x")
+        .unwrap();
+    let backend = LibSvnBackend::for_url(fixture.url());
+
+    let revisions = backend.log(revision, revision).unwrap();
+
+    assert!(revisions.iter().any(|event| {
+        event.revision == revision
+            && event.changed_paths.iter().any(|path| {
+                path.path == "/trunk/run.sh"
+                    && path.properties.get("svn:needs-lock").map(String::as_str) == Some("*")
+            })
+    }));
+}
+
+#[test]
 fn linked_backend_do_update_drives_fetch_editor_callbacks() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

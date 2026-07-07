@@ -246,6 +246,37 @@ impl StandardSvnFixture {
     }
 
     #[allow(dead_code)]
+    pub fn set_run_script_property(&self, name: &str, value: &str) -> Result<u32, String> {
+        let wc = self._tmp.path().join("set-run-script-property-wc");
+        run(
+            self._tmp.path(),
+            "svn",
+            &[
+                "checkout",
+                "--non-interactive",
+                self.url().as_str(),
+                path_arg(&wc)?,
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &["propset", "--non-interactive", name, value, "trunk/run.sh"],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "commit",
+                "--non-interactive",
+                "-m",
+                "set run script property",
+            ],
+        )?;
+        Ok(self.latest_revision())
+    }
+
+    #[allow(dead_code)]
     pub fn uuid(&self) -> String {
         let output = Command::new("svn")
             .args(["info", "--show-item", "repos-uuid", self.url().as_str()])

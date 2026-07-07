@@ -135,7 +135,7 @@ impl SvnCliBackend {
     ) -> Result<BTreeMap<String, String>, String> {
         let mut properties = BTreeMap::new();
         let url = self.versioned_url(path, revision);
-        for name in ["svn:executable", "svn:special"] {
+        for name in ["svn:executable", "svn:special", "svn:needs-lock"] {
             let value = match self.run_text(&[
                 "propget",
                 "--strict",
