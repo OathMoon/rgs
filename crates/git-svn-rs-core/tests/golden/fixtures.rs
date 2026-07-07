@@ -75,6 +75,7 @@ pub struct RustStdlayoutRefArtifact {
     pub revision: u32,
     pub uuid: String,
     pub max_valid_rev_map_revision: u32,
+    pub tree_contents: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -354,6 +355,8 @@ pub fn run_rust_stdlayout_ref_artifacts(
                 .map(|record| record.revision)
                 .max()
                 .ok_or_else(|| format!("missing populated rev-map record for {source_ref}"))?;
+            let file_modes = supported_file_modes(&rust_path, &source_ref)?;
+            let tree_contents = supported_tree_contents(&rust_path, &source_ref, &file_modes)?;
 
             Ok(RustStdlayoutRefArtifact {
                 source_ref,
@@ -361,6 +364,7 @@ pub fn run_rust_stdlayout_ref_artifacts(
                 revision: id.revision,
                 uuid: id.uuid,
                 max_valid_rev_map_revision,
+                tree_contents,
             })
         })
         .collect()

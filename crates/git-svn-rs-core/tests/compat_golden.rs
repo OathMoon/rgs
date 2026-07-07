@@ -331,7 +331,49 @@ fn rust_stdlayout_golden_correlates_ref_tips_and_rev_maps() {
         assert!(artifact.url.ends_with(url_suffix), "{}", artifact.url);
         assert_eq!(artifact.revision, revision);
         assert_eq!(artifact.max_valid_rev_map_revision, revision);
+        assert!(
+            artifact
+                .tree_contents
+                .iter()
+                .any(|entry| entry == "src/lib.rs\tpub fn answer() -> u8 { 42 }\\n"),
+            "{source_ref} tree contents: {:?}",
+            artifact.tree_contents
+        );
     }
+    let main = artifacts
+        .iter()
+        .find(|artifact| artifact.source_ref == "refs/remotes/origin/main")
+        .unwrap();
+    let tag = artifacts
+        .iter()
+        .find(|artifact| artifact.source_ref == "refs/remotes/origin/tags/v1")
+        .unwrap();
+    let trunk = artifacts
+        .iter()
+        .find(|artifact| artifact.source_ref == "refs/remotes/origin/trunk")
+        .unwrap();
+    assert!(
+        main.tree_contents
+            .iter()
+            .any(|entry| entry == "deleted.txt\ttemporary\\n"),
+        "{:?}",
+        main.tree_contents
+    );
+    assert!(
+        tag.tree_contents
+            .iter()
+            .any(|entry| entry == "deleted.txt\ttemporary\\n"),
+        "{:?}",
+        tag.tree_contents
+    );
+    assert!(
+        !trunk
+            .tree_contents
+            .iter()
+            .any(|entry| entry.starts_with("deleted.txt\t")),
+        "{:?}",
+        trunk.tree_contents
+    );
     assert!(!artifacts[0].uuid.is_empty());
     assert!(
         artifacts
