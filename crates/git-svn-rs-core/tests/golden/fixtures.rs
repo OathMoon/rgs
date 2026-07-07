@@ -1472,7 +1472,25 @@ fn supported_config(work_tree: &Path) -> Result<Vec<(String, String)>, String> {
         "svn-remote.svn.fetch",
         "svn-remote.svn.uuid",
     ];
-    let optional_keys = ["svn-remote.svn.branches", "svn-remote.svn.tags"];
+    let optional_keys = [
+        "svn-remote.svn.branches",
+        "svn-remote.svn.tags",
+        "svn-remote.svn.ignore-paths",
+        "svn-remote.svn.include-paths",
+        "svn-remote.svn.ignore-refs",
+        "svn-remote.svn.authors-file",
+        "svn-remote.svn.authors-prog",
+        "svn-remote.svn.log-window-size",
+        "svn-remote.svn.localtime",
+        "svn-remote.svn.username",
+        "svn-remote.svn.config-dir",
+        "svn-remote.svn.no-auth-cache",
+        "svn-remote.svn.noMetadata",
+        "svn-remote.svn.rewriteRoot",
+        "svn-remote.svn.rewriteUUID",
+        "svn-remote.svn.preserve-empty-dirs",
+        "svn-remote.svn.placeholder-filename",
+    ];
     let mut config = Vec::new();
     for key in required_keys {
         let values = run_text(work_tree, "git", &["config", "--get-all", key])?;
@@ -1522,7 +1540,7 @@ fn normalize_config_value<'a>(key: &str, value: &'a str) -> &'a str {
         key,
         "svn-remote.svn.fetch" | "svn-remote.svn.branches" | "svn-remote.svn.tags"
     ) {
-        value.trim_start_matches('+')
+        value.strip_prefix('+').unwrap_or(value)
     } else {
         value
     }
@@ -2107,6 +2125,108 @@ mod tests {
                     "fixture-uuid".to_string()
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn supported_config_includes_optional_metadata_keys() {
+        let tmp = tempfile::tempdir().unwrap();
+        run(tmp.path(), "git", &["init"]).unwrap();
+        let entries = [
+            ("svn-remote.svn.url", "file:///repo"),
+            ("svn-remote.svn.fetch", "+trunk:refs/remotes/origin/trunk"),
+            ("svn-remote.svn.uuid", "fixture-uuid"),
+            ("svn-remote.svn.ignore-paths", "^docs/"),
+            ("svn-remote.svn.include-paths", "^trunk/"),
+            ("svn-remote.svn.ignore-refs", "^refs/remotes/origin/tmp"),
+            ("svn-remote.svn.authors-file", "authors.txt"),
+            ("svn-remote.svn.authors-prog", "authors-prog"),
+            ("svn-remote.svn.log-window-size", "42"),
+            ("svn-remote.svn.localtime", "true"),
+            ("svn-remote.svn.noMetadata", "true"),
+            ("svn-remote.svn.rewriteRoot", "https://mirror.example/repo"),
+            ("svn-remote.svn.rewriteUUID", "mirror-uuid"),
+            ("svn-remote.svn.preserve-empty-dirs", "true"),
+            ("svn-remote.svn.placeholder-filename", ".empty"),
+        ];
+        for (key, value) in entries {
+            run(tmp.path(), "git", &["config", key, value]).unwrap();
+        }
+
+        let config = supported_config(tmp.path()).unwrap();
+
+        for (key, value) in [
+            ("svn-remote.svn.ignore-paths", "^docs/"),
+            ("svn-remote.svn.include-paths", "^trunk/"),
+            ("svn-remote.svn.ignore-refs", "^refs/remotes/origin/tmp"),
+            ("svn-remote.svn.authors-file", "authors.txt"),
+            ("svn-remote.svn.authors-prog", "authors-prog"),
+            ("svn-remote.svn.log-window-size", "42"),
+            ("svn-remote.svn.localtime", "true"),
+            ("svn-remote.svn.noMetadata", "true"),
+            ("svn-remote.svn.rewriteRoot", "https://mirror.example/repo"),
+            ("svn-remote.svn.rewriteUUID", "mirror-uuid"),
+            ("svn-remote.svn.preserve-empty-dirs", "true"),
+            ("svn-remote.svn.placeholder-filename", ".empty"),
+        ] {
+            assert!(
+                config.contains(&(key.to_string(), value.to_string())),
+                "missing {key} in {config:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn supported_config_includes_optional_auth_keys_without_password() {
+        let tmp = tempfile::tempdir().unwrap();
+        run(tmp.path(), "git", &["init"]).unwrap();
+        for (key, value) in [
+            ("svn-remote.svn.url", "file:///repo"),
+            ("svn-remote.svn.fetch", "+trunk:refs/remotes/origin/trunk"),
+            ("svn-remote.svn.uuid", "fixture-uuid"),
+            ("svn-remote.svn.username", "alice"),
+            ("svn-remote.svn.password", "secret"),
+            ("svn-remote.svn.config-dir", "svn-config"),
+            ("svn-remote.svn.no-auth-cache", "true"),
+        ] {
+            run(tmp.path(), "git", &["config", key, value]).unwrap();
+        }
+
+        let config = supported_config(tmp.path()).unwrap();
+
+        assert!(config.contains(&("svn-remote.svn.username".to_string(), "alice".to_string())));
+        assert!(config.contains(&(
+            "svn-remote.svn.config-dir".to_string(),
+            "svn-config".to_string()
+        )));
+        assert!(config.contains(&(
+            "svn-remote.svn.no-auth-cache".to_string(),
+            "true".to_string()
+        )));
+        assert!(
+            config
+                .iter()
+                .all(|(key, _)| key != "svn-remote.svn.password"),
+            "password must not be captured in golden config artifacts: {config:?}"
+        );
+    }
+
+    #[test]
+    fn supported_config_strips_only_one_refspec_force_prefix() {
+        assert_eq!(
+            normalize_config_value("svn-remote.svn.fetch", "++trunk:refs/remotes/git-svn"),
+            "+trunk:refs/remotes/git-svn"
+        );
+        assert_eq!(
+            normalize_config_value(
+                "svn-remote.svn.branches",
+                "++branches/*:refs/remotes/origin/*"
+            ),
+            "+branches/*:refs/remotes/origin/*"
+        );
+        assert_eq!(
+            normalize_config_value("svn-remote.svn.url", "++not-a-refspec"),
+            "++not-a-refspec"
         );
     }
 
