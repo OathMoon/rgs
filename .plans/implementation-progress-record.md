@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `ed49baa feat: harden readonly gc and verbose log`
+- Latest implementation commit: `315f72c feat: clear supported libsvn file props`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -60,6 +60,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `5dabd83`: SVN CLI and linked libsvn log reads now preserve `svn:needs-lock` file properties in `ChangedPath.properties`.
 - `a4c508a`: SVN CLI and linked libsvn log reads now preserve textual SVN file properties (`svn:eol-style`, `svn:mime-type`, `svn:keywords`) in `ChangedPath.properties`.
 - `ed49baa`: readonly `gc` compresses `unhandled.log`, removes stale `index` files, and preserves rev_map lock cleanup; `log --verbose` renders SVN-style changed paths with leading repository paths and rename source paths.
+- `315f72c`: linked libsvn log-backed replay emits removal callbacks for all supported file properties (`svn:executable`, `svn:special`, `svn:eol-style`, `svn:mime-type`, `svn:keywords`, `svn:needs-lock`) so editor-backed fetch can clear stale metadata.
 
 ## Completed Capabilities
 
@@ -98,6 +99,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - RA editor-backed import now filters revisions per mapping before replay and can seed branch-copy editors from the copied source ref tree, allowing linked libsvn stdlayout file:// fetch to import trunk/branch history through `SvnFetchEditor`.
 - RA editor-backed import applies persisted include/ignore path filters to editor callbacks and resulting fast-import changes, and it emits configured empty-directory placeholders from SVN directory change metadata.
 - Linked libsvn log-backed replay now mirrors selected file property removal callbacks for `svn:executable` and `svn:special`, so incremental editor import can clear stale executable/symlink modes from the Git tree.
+- Linked libsvn log-backed replay now mirrors removal callbacks for all supported file properties, including `svn:needs-lock` and textual properties, so incremental editor import can clear stale file metadata.
 - Linked libsvn `RaSession::get_dir()` now exposes real user directory properties returned by native `svn_ra_get_dir2()` and filters internal `svn:entry:*` metadata out of the public listing.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
@@ -170,6 +172,7 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_ -- --nocapture` (covers normalized replay callback paths and copy-from paths)
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_replays_local_svnserve_repository -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_clears_removed_file_properties -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_clears_removed_needs_lock_property -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_get_dir_reads_directory_properties -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_log_reads_needs_lock_file_property -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_log_reads_textual_file_properties -- --nocapture`
