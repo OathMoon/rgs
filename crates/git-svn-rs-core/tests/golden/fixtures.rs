@@ -112,6 +112,7 @@ pub struct GoldenComparisonArtifacts {
     pub info_url: String,
     pub info_summary: String,
     pub log_revision_oneline: String,
+    pub log_revision_range_oneline: String,
     pub find_rev_nearest: String,
     pub find_rev_commit: String,
     pub rebase_dry_run: String,
@@ -434,6 +435,10 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/info-url.txt", &perl.info_url)?;
     capture.write_text("perl/info-summary.txt", &perl.info_summary)?;
     capture.write_text("perl/log-revision-oneline.txt", &perl.log_revision_oneline)?;
+    capture.write_text(
+        "perl/log-revision-range-oneline.txt",
+        &perl.log_revision_range_oneline,
+    )?;
     capture.write_text("perl/find-rev-nearest.txt", &perl.find_rev_nearest)?;
     capture.write_text("perl/find-rev-commit.txt", &perl.find_rev_commit)?;
     capture.write_text("perl/rebase-dry-run.txt", &perl.rebase_dry_run)?;
@@ -491,6 +496,10 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/info-url.txt", &rust.info_url)?;
     capture.write_text("rust/info-summary.txt", &rust.info_summary)?;
     capture.write_text("rust/log-revision-oneline.txt", &rust.log_revision_oneline)?;
+    capture.write_text(
+        "rust/log-revision-range-oneline.txt",
+        &rust.log_revision_range_oneline,
+    )?;
     capture.write_text("rust/find-rev-nearest.txt", &rust.find_rev_nearest)?;
     capture.write_text("rust/find-rev-commit.txt", &rust.find_rev_commit)?;
     capture.write_text("rust/rebase-dry-run.txt", &rust.rebase_dry_run)?;
@@ -618,6 +627,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "log --revision output differs\nperl: {:?}\nrust: {:?}",
             perl.log_revision_oneline, rust.log_revision_oneline
+        ));
+    }
+    if perl.log_revision_range_oneline != rust.log_revision_range_oneline {
+        mismatches.push(format!(
+            "log --revision range output differs\nperl: {:?}\nrust: {:?}",
+            perl.log_revision_range_oneline, rust.log_revision_range_oneline
         ));
     }
     if perl.find_rev_nearest != rust.find_rev_nearest {
@@ -869,6 +884,8 @@ fn collect_supported_artifacts(
     let file_properties = supported_file_properties(work_tree, &info_url, &file_modes)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
     let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
+    let log_revision_range_oneline =
+        supported_log_revision_range_oneline(work_tree, tool, first_revision, first_revision + 1)?;
     let find_rev_nearest = supported_find_rev_nearest(work_tree, tool, first_revision + 1)?;
     let find_rev_commit = supported_find_rev_commit(work_tree, tool, rev, first_revision)?;
     let rebase_dry_run = supported_rebase_dry_run(work_tree, tool)?;
@@ -895,6 +912,7 @@ fn collect_supported_artifacts(
         info_url,
         info_summary,
         log_revision_oneline,
+        log_revision_range_oneline,
         find_rev_nearest,
         find_rev_commit,
         rebase_dry_run,
@@ -1097,6 +1115,35 @@ fn supported_log_revision_oneline(
     revision: u32,
 ) -> Result<String, String> {
     let revision_arg = format!("r{revision}");
+    let output = match tool {
+        GoldenTool::Perl => run_text(
+            work_tree,
+            "git",
+            &["svn", "log", "--revision", &revision_arg, "--oneline"],
+        )?,
+        GoldenTool::Rust => commands::log::run_in_work_tree(
+            work_tree,
+            LogArgs {
+                revision: Some(revision_arg),
+                limit: None,
+                verbose: false,
+                incremental: false,
+                oneline: true,
+                show_commit: false,
+                git_log_args: Vec::new(),
+            },
+        )?,
+    };
+    Ok(normalize_log_oneline(&output))
+}
+
+fn supported_log_revision_range_oneline(
+    work_tree: &Path,
+    tool: GoldenTool,
+    start_revision: u32,
+    end_revision: u32,
+) -> Result<String, String> {
+    let revision_arg = format!("r{start_revision}:r{end_revision}");
     let output = match tool {
         GoldenTool::Perl => run_text(
             work_tree,

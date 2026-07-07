@@ -198,6 +198,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         info_url: "file:///repo/trunk\n".to_string(),
         info_summary: "URL: file:///repo/trunk\nRevision: 2".to_string(),
         log_revision_oneline: "r2 | add files".to_string(),
+        log_revision_range_oneline: "r2 | add files\nr1 | layout".to_string(),
         find_rev_nearest: "before r3 -> <commit>\nafter r3 -> <commit>".to_string(),
         find_rev_commit: "<commit> -> r2".to_string(),
         rebase_dry_run: "would fetch\nwould rebase <ref>".to_string(),
@@ -244,6 +245,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         info_url: "file:///repo\n".to_string(),
         info_summary: "URL: file:///repo\nRevision: 1".to_string(),
         log_revision_oneline: "r3 | branch main".to_string(),
+        log_revision_range_oneline: "r3 | branch main\nr2 | add trunk file".to_string(),
         find_rev_nearest: "before r3 -> <commit>\nafter r3 -> ".to_string(),
         find_rev_commit: "<commit> -> r3".to_string(),
         rebase_dry_run: "would fetch\nwould rebase refs/remotes/git-svn".to_string(),
@@ -273,6 +275,7 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
     assert!(err.contains("info --url output differs"));
     assert!(err.contains("info output differs"));
     assert!(err.contains("log --revision output differs"));
+    assert!(err.contains("log --revision range output differs"));
     assert!(err.contains("find-rev nearest output differs"));
     assert!(err.contains("find-rev commit output differs"));
     assert!(err.contains("rebase --dry-run output differs"));
