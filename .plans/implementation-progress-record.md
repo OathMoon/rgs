@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `917309c test: cover textual svn properties in golden fixture`
+- Latest implementation commit: `0ec6461 test: assert stdlayout golden tree contents`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -64,6 +64,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `4e597f6`: Phase 8 golden config artifacts now include optional metadata/auth/config keys while continuing to exclude passwords, and refspec normalization strips only one force-update `+`.
 - `a5f99cc`: Phase 8 golden rev_map artifacts now include the UUID from `.rev_map.<uuid>` filenames in record and byte-length snapshots.
 - `917309c`: Phase 8 standard golden fixture now exercises textual SVN file properties (`svn:eol-style`, `svn:mime-type`, `svn:keywords`) plus `svn:needs-lock`.
+- `0ec6461`: Rust-only stdlayout golden artifacts now capture ref-tip tree contents and assert branch/tag copies retain deleted files while trunk reflects later deletes.
 
 ## Completed Capabilities
 
@@ -142,6 +143,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Golden config artifact capture includes optional stdlayout branch/tag refspecs plus metadata/auth/config keys when present, with a single leading force-update `+` normalized for refspec mappings and passwords excluded from artifacts.
 - Golden optional config lookup reports unexpected `git config` failures instead of treating every nonzero optional-key lookup as a missing key.
 - Rust-only stdlayout coverage validates trunk, branch, and tag ref tips against matching `git-svn-id` values and rev_map revisions.
+- Rust-only stdlayout coverage also validates ref-tip tree contents across branch/tag copies and later trunk deletes.
 - Perl git-svn detection avoids mistaking the `git-svn-rs` shim for a Perl comparison backend.
 
 ## Remaining Work
@@ -266,6 +268,8 @@ Important targeted suites recorded as passing during this work:
 - `cargo clippy -p git-svn-rs-core --test compat_golden -- -D warnings`
 - `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; includes textual SVN property fixture coverage)
 - `cargo fmt --check`
+- `cargo clippy -p git-svn-rs-core --test compat_golden -- -D warnings`
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; includes stdlayout ref-tip tree content checks)
 - `cargo clippy -p git-svn-rs-core --test compat_golden -- -D warnings`
 - `cargo test -p git-svn-rs-core --test import_mock -- --nocapture`
 - `cargo test -p git-svn-rs-core --test dcommit_diff_planner -- --nocapture`
