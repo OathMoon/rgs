@@ -1018,7 +1018,7 @@ fn replay_file_details(
     changed_path: &ChangedPath,
     editor: &mut dyn FetchEditor,
 ) -> Result<(), String> {
-    for name in ["svn:executable", "svn:special"] {
+    for &name in SUPPORTED_FILE_PROPS_WITH_REMOVALS {
         editor.change_file_prop(
             editor_path,
             name,
@@ -1026,7 +1026,7 @@ fn replay_file_details(
         )?;
     }
     for (name, value) in &changed_path.properties {
-        if !matches!(name.as_str(), "svn:executable" | "svn:special") {
+        if !SUPPORTED_FILE_PROPS_WITH_REMOVALS.contains(&name.as_str()) {
             editor.change_file_prop(editor_path, name, Some(value))?;
         }
     }
@@ -1035,6 +1035,16 @@ fn replay_file_details(
     }
     Ok(())
 }
+
+#[cfg(git_svn_rs_libsvn_linked)]
+const SUPPORTED_FILE_PROPS_WITH_REMOVALS: &[&str] = &[
+    "svn:executable",
+    "svn:special",
+    "svn:eol-style",
+    "svn:mime-type",
+    "svn:keywords",
+    "svn:needs-lock",
+];
 
 #[cfg(git_svn_rs_libsvn_linked)]
 fn editor_copy_from(path: &Option<String>, revision: Option<u32>) -> Option<(String, u32)> {

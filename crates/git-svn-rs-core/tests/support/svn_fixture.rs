@@ -180,6 +180,11 @@ impl StandardSvnFixture {
 
     #[allow(dead_code)]
     pub fn remove_executable_from_run_script(&self) -> Result<u32, String> {
+        self.remove_run_script_property("svn:executable", "remove executable property")
+    }
+
+    #[allow(dead_code)]
+    pub fn remove_run_script_property(&self, name: &str, message: &str) -> Result<u32, String> {
         let wc = self._tmp.path().join("remove-executable-wc");
         run(
             self._tmp.path(),
@@ -194,23 +199,9 @@ impl StandardSvnFixture {
         run(
             &wc,
             "svn",
-            &[
-                "propdel",
-                "--non-interactive",
-                "svn:executable",
-                "trunk/run.sh",
-            ],
+            &["propdel", "--non-interactive", name, "trunk/run.sh"],
         )?;
-        run(
-            &wc,
-            "svn",
-            &[
-                "commit",
-                "--non-interactive",
-                "-m",
-                "remove executable property",
-            ],
-        )?;
+        run(&wc, "svn", &["commit", "--non-interactive", "-m", message])?;
         Ok(self.latest_revision())
     }
 

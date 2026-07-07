@@ -422,6 +422,39 @@ fn linked_backend_do_update_clears_removed_file_properties() {
 }
 
 #[test]
+fn linked_backend_do_update_clears_removed_needs_lock_property() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture
+        .set_run_script_property("svn:needs-lock", "x")
+        .unwrap();
+    let revision = fixture
+        .remove_run_script_property("svn:needs-lock", "remove needs-lock property")
+        .unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session.do_update("trunk", revision, &mut editor).unwrap();
+
+    assert!(
+        editor
+            .events
+            .contains(&"change_file_prop:trunk/run.sh:svn:needs-lock=".to_string())
+    );
+}
+
+#[test]
 fn linked_backend_replays_local_svnserve_repository() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
