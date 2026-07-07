@@ -104,6 +104,15 @@ impl ConfiguredBackend {
         }
     }
 
+    #[cfg(test)]
+    fn configured_password(&self) -> Option<&str> {
+        match self {
+            Self::Cli(backend) => backend.configured_password(),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => backend.configured_password(),
+        }
+    }
+
     fn import_revisions(
         &self,
         git: &GitCli,
@@ -162,10 +171,13 @@ fn configured_backend(
         if let Some(username) = &shared.username {
             backend = backend.with_username(username);
         }
-        if let Some(password) = &shared.password
-            && let Some(username) = shared.username.as_ref().or(config.username.as_ref())
-        {
-            backend = backend.with_credentials(username, password);
+        if let Some(password) = &shared.password {
+            backend = if let Some(username) = shared.username.as_ref().or(config.username.as_ref())
+            {
+                backend.with_credentials(username, password)
+            } else {
+                backend.with_password(password)
+            };
         }
         if shared.no_auth_cache {
             backend = backend.without_auth_cache();
@@ -417,6 +429,17 @@ mod tests {
         let backend = configured_backend(&config, &shared).unwrap();
 
         assert_eq!(backend.configured_config_dir(), Some("cli-config"));
+    }
+
+    #[test]
+    fn configured_backend_applies_command_line_password_without_username() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        let mut shared = default_shared_args();
+        shared.password = Some("secret".to_string());
+
+        let backend = configured_backend(&config, &shared).unwrap();
+
+        assert_eq!(backend.configured_password(), Some("secret"));
     }
 
     fn default_shared_args() -> SharedFetchArgs {
