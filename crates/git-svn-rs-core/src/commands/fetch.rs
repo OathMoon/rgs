@@ -95,6 +95,15 @@ impl ConfiguredBackend {
         }
     }
 
+    #[cfg(test)]
+    fn configured_config_dir(&self) -> Option<&str> {
+        match self {
+            Self::Cli(backend) => backend.configured_config_dir(),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => backend.configured_config_dir(),
+        }
+    }
+
     fn import_revisions(
         &self,
         git: &GitCli,
@@ -147,6 +156,9 @@ fn configured_backend(
     #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     {
         let mut backend = crate::svn::libsvn::LibSvnBackend::from_config(config);
+        if let Some(config_dir) = &shared.config_dir {
+            backend = backend.with_config_dir(config_dir);
+        }
         if let Some(username) = &shared.username {
             backend = backend.with_username(username);
         }
@@ -393,6 +405,18 @@ mod tests {
         let backend = configured_backend(&config, &shared).unwrap();
 
         assert_eq!(backend.configured_username(), Some("cli-user"));
+    }
+
+    #[test]
+    fn configured_backend_applies_command_line_config_dir_override() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""))
+            .with_config_dir("persisted-config");
+        let mut shared = default_shared_args();
+        shared.config_dir = Some("cli-config".to_string());
+
+        let backend = configured_backend(&config, &shared).unwrap();
+
+        assert_eq!(backend.configured_config_dir(), Some("cli-config"));
     }
 
     fn default_shared_args() -> SharedFetchArgs {

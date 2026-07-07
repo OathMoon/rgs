@@ -128,6 +128,11 @@ impl LibSvnBackend {
         self.username.as_deref()
     }
 
+    #[cfg(test)]
+    pub(crate) fn configured_config_dir(&self) -> Option<&str> {
+        self.config_dir.as_deref()
+    }
+
     pub fn without_auth_cache(mut self) -> Self {
         self.no_auth_cache = true;
         self
