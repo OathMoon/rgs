@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `67bc4c8 feat: apply fetch config-dir override to libsvn`
+- Latest implementation commit: `d53164c feat: apply fetch password override to libsvn`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -49,6 +49,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `6777536`: linked libsvn log-backed replay now emits explicit `svn:executable`/`svn:special` removals when current file properties no longer contain them, preventing stale Git modes while the true delta editor integration is still pending.
 - `f3f814c`: linked libsvn fetch backend construction now applies command-line `--username` overrides even when no command-line `--password` is provided, matching the SVN CLI backend's auth option precedence.
 - `67bc4c8`: linked libsvn fetch backend construction now applies command-line `--config-dir` overrides over persisted config, matching the SVN CLI backend and ensuring native RA sessions use the requested runtime config directory.
+- `d53164c`: linked libsvn fetch backend construction now applies command-line `--password` even when no username override or persisted username is available, matching the SVN CLI backend's password option plumbing.
 - `2456bfc5`: dcommit SVN CLI write-back now supports local `svn://` repositories served by `svnserve`, with regression coverage in default and linked `svn-libsvn` builds.
 - `771a734e`: dcommit SVN CLI write-back now applies persisted and command-line SVN auth/config options (`--username`, `--config-dir`, `--no-auth-cache`) to checkout, working-copy edits, property changes, and commit.
 - `be9e8dd8`: `dcommit` accepts command-line `--password`, passes it to SVN CLI write-back commands without persisting it to git config, and has end-to-end coverage for an `svnserve` repository with anonymous reads and authenticated writes.
@@ -81,6 +82,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `clone`/`fetch` now propagate command-line SVN auth/config overrides (`--username`, `--password`, `--config-dir`, `--no-auth-cache`) to the selected SVN CLI or linked libsvn backend without persisting passwords to git config; authenticated local `svn://` clone coverage exercises both default and linked `svn-libsvn` builds.
 - Linked libsvn fetch backend construction now handles `--username` as an independent command-line override, not only as a companion to `--password`.
 - Linked libsvn fetch backend construction now applies command-line `--config-dir` over persisted `svn-remote.*.config-dir`, keeping native RA session config precedence aligned with the SVN CLI backend.
+- Linked libsvn fetch backend construction now handles `--password` as an independent command-line override, allowing native auth baton password defaults without requiring a paired username at construction time.
 - Feature-gated command fetch now routes real SVN remotes through linked `LibSvnBackend` and the RA editor-backed import path when available, falling back to the SVN CLI/log-backed path for default and unlinked feature builds.
 - CLI real-SVN replay tests share the same `SvnServe` fixture helper as core libsvn tests, reducing duplicate remote-service setup and keeping readiness behavior consistent.
 - `SvnFetchEditor` can now map full SVN callback paths such as `trunk/src/lib.rs` to Git-relative paths such as `src/lib.rs` via a configured path prefix.
@@ -188,6 +190,7 @@ Latest full gates recorded as passing:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_applies_command_line_username_without_password`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_applies_command_line_config_dir_override`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_applies_command_line_password_without_username`
 - With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_stdlayout_authenticated_svn_url_imports_with_password -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_file_url_imports_trunk_history_after_init -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_svn_url_imports_branch_tag_and_copy_contents_after_init -- --nocapture`
