@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `a4c508a feat: read textual svn file properties`
+- Latest implementation commit: `ed49baa feat: harden readonly gc and verbose log`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -59,6 +59,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `47b5e0d`: linked libsvn `RaSession::get_dir()` now returns user directory properties from native `svn_ra_get_dir2()` while filtering internal `svn:entry:*` metadata.
 - `5dabd83`: SVN CLI and linked libsvn log reads now preserve `svn:needs-lock` file properties in `ChangedPath.properties`.
 - `a4c508a`: SVN CLI and linked libsvn log reads now preserve textual SVN file properties (`svn:eol-style`, `svn:mime-type`, `svn:keywords`) in `ChangedPath.properties`.
+- `ed49baa`: readonly `gc` compresses `unhandled.log`, removes stale `index` files, and preserves rev_map lock cleanup; `log --verbose` renders SVN-style changed paths with leading repository paths and rename source paths.
 
 ## Completed Capabilities
 
@@ -109,7 +110,8 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Resolver behavior covers tracked SVN config, `.git/svn/<ref>/.rev_map.<uuid>`, multi-ref branch/tag layouts, current `HEAD`, and closest tracked ancestors.
 - Readonly resolver accepts Perl-style leading `+` in configured fetch refspecs when deriving tracked SVN URLs.
 - Readonly resolver expands configured `svn-remote.svn.branches`/`tags` wildcard mappings against existing remote refs when resolving the current tracked SVN URL.
-- Log output now handles pathspec pass-through, invalid revision rejection, reverse revision ranges, `-n`/`--limit`, mutually exclusive `find-rev --before/--after`, SVN-style separators, singular/plural line counts, `--show-commit`, final non-empty `git-svn-id` footer recognition, and message line-ending preservation.
+- Log output now handles pathspec pass-through, invalid revision rejection, reverse revision ranges, `-n`/`--limit`, mutually exclusive `find-rev --before/--after`, SVN-style separators, singular/plural line counts, `--show-commit`, final non-empty `git-svn-id` footer recognition, message line-ending preservation, and SVN-style verbose changed paths with leading paths plus rename sources.
+- `gc` now covers the documented git-svn cleanup surface by compressing `.git/svn/**/unhandled.log`, removing `.git/svn/**/index`, and deleting stale `.rev_map.*.lock` files.
 
 ### Phase 7: Dcommit, Shim, Windows Verification
 
@@ -226,7 +228,7 @@ Important targeted suites recorded as passing during this work:
 
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn clone_stdlayout_authenticated_svn_url_imports_with_password -- --nocapture`
-- `cargo test -p git-svn-rs --test readonly_commands -- --nocapture`
+- `cargo test -p git-svn-rs --test readonly_commands -- --nocapture` (39 tests; includes SVN-style verbose log paths and `gc` unhandled/index cleanup)
 - `cargo test -p git-svn-rs --test readonly_commands info_url_resolves_branch_from_branches_mapping -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands log_short_limit_returns_latest_svn_revisions -- --nocapture`
 - `cargo test -p git-svn-rs --test readonly_commands log_revision_reverse_range_filters_to_requested_svn_revisions -- --nocapture`
