@@ -31,6 +31,7 @@ pub fn run_in_work_tree(
         args.verbose,
         args.incremental,
     );
+    let verbose_path_prefix = verbose_path_prefix(&tracked.svn_path, &tracked.config.url);
     let mut out = String::new();
     let mut included = 0_u32;
     for record in raw.split('\x1e') {
@@ -59,7 +60,7 @@ pub fn run_in_work_tree(
                 .git
                 .commit_name_status(fields[0])?
                 .into_iter()
-                .map(|change| format!("{}\t{}", change.status, change.path))
+                .map(|change| format_verbose_change(&verbose_path_prefix, &change))
                 .collect()
         } else {
             Vec::new()
@@ -78,6 +79,40 @@ pub fn run_in_work_tree(
         out.push_str("------------------------------------------------------------------------\n");
     }
     Ok(out)
+}
+
+fn verbose_path_prefix(svn_path: &str, url: &str) -> String {
+    let svn_path = svn_path.trim_matches('/');
+    if !svn_path.is_empty() {
+        return svn_path.to_string();
+    }
+    url.trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .filter(|segment| !segment.contains("://"))
+        .unwrap_or("")
+        .to_string()
+}
+
+fn format_verbose_change(svn_path: &str, change: &crate::git::GitNameStatus) -> String {
+    let status = change.status.chars().next().unwrap_or('M');
+    let path = svn_log_path(svn_path, &change.path);
+    if let Some(old_path) = &change.old_path {
+        return format!(
+            "{status} {path} (from {})",
+            svn_log_path(svn_path, old_path)
+        );
+    }
+    format!("{status} {path}")
+}
+
+fn svn_log_path(prefix: &str, path: &str) -> String {
+    match (prefix.trim_matches('/'), path.trim_start_matches('/')) {
+        ("", "") => "/".to_string(),
+        ("", path) => format!("/{path}"),
+        (prefix, "") => format!("/{prefix}"),
+        (prefix, path) => format!("/{prefix}/{path}"),
+    }
 }
 
 fn split_git_svn_footer(message: &str) -> Option<(GitSvnId, String)> {

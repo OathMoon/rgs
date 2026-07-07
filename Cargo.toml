@@ -16,6 +16,7 @@ anyhow = "1"
 assert_cmd = "2"
 clap = { version = "4", features = ["derive", "env"] }
 fancy-regex = "0.14"
+flate2 = "1"
 hex = "0.4"
 predicates = "3"
 tempfile = "3"

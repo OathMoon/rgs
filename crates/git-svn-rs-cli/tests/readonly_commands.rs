@@ -539,7 +539,7 @@ fn log_verbose_prints_changed_paths() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Changed paths:"))
-        .stdout(predicate::str::contains("A\tsrc/lib.rs"));
+        .stdout(predicate::str::contains("   A /trunk/src/lib.rs"));
 }
 
 #[test]
@@ -572,7 +572,9 @@ fn log_verbose_detects_renamed_paths() {
         .args(["log", "--verbose", "--revision", "2"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("R100\tnew.txt"));
+        .stdout(predicate::str::contains(
+            "   R /trunk/new.txt (from /trunk/old.txt)",
+        ));
 }
 
 #[test]
@@ -900,6 +902,25 @@ fn gc_removes_stale_rev_map_lock_files() {
     cmd.current_dir(&work).arg("gc").assert().success();
 
     assert!(!lock.exists());
+}
+
+#[test]
+fn gc_compresses_unhandled_log_and_removes_index_files() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let svn_dir = work.join(".git/svn/git-svn");
+    let unhandled = svn_dir.join("unhandled.log");
+    let compressed = svn_dir.join("unhandled.log.gz");
+    let index = svn_dir.join("index");
+    std::fs::write(&unhandled, "property svn:ignore\n").unwrap();
+    std::fs::write(&index, "stale index\n").unwrap();
+
+    let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
+    cmd.current_dir(&work).arg("gc").assert().success();
+
+    assert!(!unhandled.exists());
+    assert!(compressed.exists());
+    assert!(!index.exists());
 }
 
 #[test]

@@ -12,6 +12,7 @@ svn-libsvn = []
 [dependencies]
 clap.workspace = true
 fancy-regex.workspace = true
+flate2.workspace = true
 hex.workspace = true
 thiserror.workspace = true
 url.workspace = true
