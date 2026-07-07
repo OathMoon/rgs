@@ -30,6 +30,8 @@ const APR_HASH_KEY_STRING: isize = -1;
 #[cfg(git_svn_rs_libsvn_linked)]
 const SVN_DIRENT_KIND: c_uint = 0x0000_0001;
 #[cfg(git_svn_rs_libsvn_linked)]
+type RawDirListing = (BTreeMap<String, NodeKind>, BTreeMap<String, String>);
+#[cfg(git_svn_rs_libsvn_linked)]
 const SVN_PROP_REVISION_AUTHOR: &[u8] = b"svn:author\0";
 #[cfg(git_svn_rs_libsvn_linked)]
 const SVN_PROP_REVISION_DATE: &[u8] = b"svn:date\0";
@@ -816,6 +818,54 @@ unsafe fn dir_entries(
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn dir_listing(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    path: &str,
+    revision: c_long,
+) -> Result<RawDirListing, String> {
+    let relative_path = CString::new(path.trim_start_matches('/'))
+        .map_err(|_| "SVN path contains NUL".to_string())?;
+    let mut dirents = ptr::null_mut();
+    let mut props = ptr::null_mut();
+    unsafe {
+        svn_call(
+            svn_ra_get_dir2(
+                session,
+                &mut dirents,
+                ptr::null_mut(),
+                &mut props,
+                relative_path.as_ptr(),
+                revision,
+                SVN_DIRENT_KIND,
+                pool,
+            ),
+            "svn_ra_get_dir2",
+        )?;
+    }
+
+    let mut entries = BTreeMap::new();
+    if !dirents.is_null() {
+        let mut index = unsafe { apr_hash_first(ptr::null_mut(), dirents) };
+        while !index.is_null() {
+            let mut key: *const c_void = ptr::null();
+            let mut key_len: isize = 0;
+            let mut value: *mut c_void = ptr::null_mut();
+            unsafe { apr_hash_this(index, &mut key, &mut key_len, &mut value) };
+            if let Some(name) = unsafe { hash_key_to_string(key, key_len) } {
+                let dirent = value as *const svn_dirent_t;
+                if !dirent.is_null() {
+                    entries.insert(name, node_kind_from_raw(unsafe { (*dirent).kind }));
+                }
+            }
+            index = unsafe { apr_hash_next(index) };
+        }
+    }
+
+    Ok((entries, unsafe { svn_properties(props) }))
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn get_log(
     session: *mut SvnRaSessionT,
     pool: *mut AprPoolT,
@@ -1089,6 +1139,32 @@ unsafe fn svn_file_properties(props: *mut AprHashT) -> BTreeMap<String, String> 
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn svn_properties(props: *mut AprHashT) -> BTreeMap<String, String> {
+    let mut properties = BTreeMap::new();
+    if props.is_null() {
+        return properties;
+    }
+
+    let mut index = unsafe { apr_hash_first(ptr::null_mut(), props) };
+    while !index.is_null() {
+        let mut key: *const c_void = ptr::null();
+        let mut key_len: isize = 0;
+        let mut value: *mut c_void = ptr::null_mut();
+        unsafe { apr_hash_this(index, &mut key, &mut key_len, &mut value) };
+        if let Some(name) = unsafe { hash_key_to_string(key, key_len) }
+            && !name.starts_with("svn:entry:")
+        {
+            properties.insert(name, unsafe {
+                svn_string_to_string(value as *const svn_string_t)
+            });
+        }
+        index = unsafe { apr_hash_next(index) };
+    }
+
+    properties
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn svn_call(error: *mut svn_error_t, context: &str) -> Result<(), String> {
     if error.is_null() {
         Ok(())
@@ -1350,7 +1426,8 @@ impl RaSession for LibSvnBackend {
                         path.trim_matches('/')
                     ));
                 }
-                let entries = dir_entries(session, pool, path, revision_number)?
+                let (entries, properties) = dir_listing(session, pool, path, revision_number)?;
+                let entries = entries
                     .into_iter()
                     .map(|(name, kind)| {
                         (
@@ -1363,7 +1440,7 @@ impl RaSession for LibSvnBackend {
                     .collect();
                 Ok(DirListing {
                     entries,
-                    properties: BTreeMap::new(),
+                    properties,
                 })
             })
         }

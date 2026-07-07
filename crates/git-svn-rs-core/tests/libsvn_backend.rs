@@ -164,6 +164,34 @@ fn linked_backend_implements_ra_session_read_methods() {
 }
 
 #[test]
+fn linked_backend_get_dir_reads_directory_properties() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture
+        .set_trunk_dir_property("custom:dir-prop", "dir-value")
+        .unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+
+    let trunk = session.get_dir("trunk", revision).unwrap();
+
+    assert_eq!(
+        trunk.properties.get("custom:dir-prop").map(String::as_str),
+        Some("dir-value")
+    );
+}
+
+#[test]
 fn linked_backend_do_update_drives_fetch_editor_callbacks() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
