@@ -128,11 +128,13 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         git_svn_id_footers: vec!["git-svn-id: file:///repo/trunk@2 uuid".to_string()],
         rev_map: vec![RevMapArtifactRecord {
             source_ref: "refs/remotes/origin/trunk".to_string(),
+            uuid: "uuid".to_string(),
             revision: 2,
             has_commit: true,
         }],
         rev_map_byte_lengths: vec![RevMapByteLengthArtifact {
             source_ref: "refs/remotes/origin/trunk".to_string(),
+            uuid: "uuid".to_string(),
             byte_len: 24,
         }],
         file_modes: vec![FileModeArtifact {
@@ -172,11 +174,13 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
         git_svn_id_footers: vec!["git-svn-id: file:///repo@2 uuid".to_string()],
         rev_map: vec![RevMapArtifactRecord {
             source_ref: "refs/remotes/git-svn".to_string(),
+            uuid: "other-uuid".to_string(),
             revision: 2,
             has_commit: false,
         }],
         rev_map_byte_lengths: vec![RevMapByteLengthArtifact {
             source_ref: "refs/remotes/git-svn".to_string(),
+            uuid: "other-uuid".to_string(),
             byte_len: 48,
         }],
         file_modes: vec![FileModeArtifact {

@@ -56,6 +56,7 @@ pub struct GoldenFixture {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevMapArtifactRecord {
     pub source_ref: String,
+    pub uuid: String,
     pub revision: u32,
     pub has_commit: bool,
 }
@@ -63,6 +64,7 @@ pub struct RevMapArtifactRecord {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RevMapByteLengthArtifact {
     pub source_ref: String,
+    pub uuid: String,
     pub byte_len: usize,
 }
 
@@ -1561,6 +1563,7 @@ fn supported_rev_map(
     let mut records = Vec::new();
     for path in paths {
         let source_ref = rev_map_source_ref(&svn_dir, &path, refs)?;
+        let uuid = rev_map_uuid(&path)?;
         let bytes = fs::read(&path).map_err(|e| e.to_string())?;
         let record_size = rev_map_record_size(work_tree, bytes.len()).ok_or_else(|| {
             format!(
@@ -1582,6 +1585,7 @@ fn supported_rev_map(
                 .chunks_exact(record_size)
                 .map(|record| RevMapArtifactRecord {
                     source_ref: source_ref.clone(),
+                    uuid: uuid.clone(),
                     revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
                     has_commit: record[4..].iter().any(|byte| *byte != 0),
                 }),
@@ -1590,6 +1594,7 @@ fn supported_rev_map(
     records.sort_by(|left, right| {
         left.source_ref
             .cmp(&right.source_ref)
+            .then(left.uuid.cmp(&right.uuid))
             .then(left.revision.cmp(&right.revision))
     });
     Ok(records)
@@ -1634,11 +1639,26 @@ fn supported_rev_map_byte_lengths(
     for path in paths {
         lengths.push(RevMapByteLengthArtifact {
             source_ref: rev_map_source_ref(&svn_dir, &path, refs)?,
+            uuid: rev_map_uuid(&path)?,
             byte_len: fs::metadata(&path).map_err(|e| e.to_string())?.len() as usize,
         });
     }
-    lengths.sort_by(|left, right| left.source_ref.cmp(&right.source_ref));
+    lengths.sort_by(|left, right| {
+        left.source_ref
+            .cmp(&right.source_ref)
+            .then(left.uuid.cmp(&right.uuid))
+    });
     Ok(lengths)
+}
+
+fn rev_map_uuid(rev_map: &Path) -> Result<String, String> {
+    rev_map
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_prefix(".rev_map."))
+        .filter(|uuid| !uuid.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| format!("unsupported rev-map filename: {}", rev_map.display()))
 }
 
 fn rev_map_source_ref(svn_dir: &Path, rev_map: &Path, refs: &[String]) -> Result<String, String> {
@@ -1742,8 +1762,8 @@ fn format_rev_map(records: &[RevMapArtifactRecord]) -> String {
         .iter()
         .map(|record| {
             format!(
-                "{} {} {}",
-                record.source_ref, record.revision, record.has_commit
+                "{} {} {} {}",
+                record.source_ref, record.uuid, record.revision, record.has_commit
             )
         })
         .collect::<Vec<_>>()
@@ -1753,7 +1773,7 @@ fn format_rev_map(records: &[RevMapArtifactRecord]) -> String {
 fn format_rev_map_byte_lengths(records: &[RevMapByteLengthArtifact]) -> String {
     records
         .iter()
-        .map(|record| format!("{} {}", record.source_ref, record.byte_len))
+        .map(|record| format!("{} {} {}", record.source_ref, record.uuid, record.byte_len))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -1900,11 +1920,13 @@ mod tests {
             vec![
                 RevMapArtifactRecord {
                     source_ref: "refs/remotes/origin/branches/main".to_string(),
+                    uuid: "uuid".to_string(),
                     revision: 1,
                     has_commit: true,
                 },
                 RevMapArtifactRecord {
                     source_ref: "refs/remotes/origin/trunk".to_string(),
+                    uuid: "uuid".to_string(),
                     revision: 1,
                     has_commit: true,
                 },
@@ -1927,6 +1949,7 @@ mod tests {
             records,
             vec![RevMapArtifactRecord {
                 source_ref: "refs/remotes/origin/trunk".to_string(),
+                uuid: "uuid".to_string(),
                 revision: 3,
                 has_commit: false,
             }]
@@ -1948,6 +1971,7 @@ mod tests {
             records,
             vec![RevMapArtifactRecord {
                 source_ref: "refs/remotes/git-svn".to_string(),
+                uuid: "uuid".to_string(),
                 revision: 5,
                 has_commit: true,
             }]
@@ -1955,16 +1979,56 @@ mod tests {
     }
 
     #[test]
+    fn supported_rev_map_artifacts_include_rev_map_uuid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let rev_map = tmp
+            .path()
+            .join(".git/svn/refs/remotes/origin/trunk/.rev_map.repository-uuid");
+        write_rev_map_fixture(&rev_map, 7);
+        let refs = vec!["refs/remotes/origin/trunk".to_string()];
+
+        let records = supported_rev_map(tmp.path(), &refs).unwrap();
+        let lengths = supported_rev_map_byte_lengths(tmp.path(), &refs).unwrap();
+
+        assert_eq!(
+            records,
+            vec![RevMapArtifactRecord {
+                source_ref: "refs/remotes/origin/trunk".to_string(),
+                uuid: "repository-uuid".to_string(),
+                revision: 7,
+                has_commit: true,
+            }]
+        );
+        assert_eq!(
+            lengths,
+            vec![RevMapByteLengthArtifact {
+                source_ref: "refs/remotes/origin/trunk".to_string(),
+                uuid: "repository-uuid".to_string(),
+                byte_len: 24,
+            }]
+        );
+        assert_eq!(
+            format_rev_map(&records),
+            "refs/remotes/origin/trunk repository-uuid 7 true"
+        );
+        assert_eq!(
+            format_rev_map_byte_lengths(&lengths),
+            "refs/remotes/origin/trunk repository-uuid 24"
+        );
+    }
+
+    #[test]
     fn format_rev_map_includes_source_ref() {
         let records = vec![RevMapArtifactRecord {
             source_ref: "refs/remotes/origin/trunk".to_string(),
+            uuid: "uuid".to_string(),
             revision: 3,
             has_commit: false,
         }];
 
         assert_eq!(
             format_rev_map(&records),
-            "refs/remotes/origin/trunk 3 false"
+            "refs/remotes/origin/trunk uuid 3 false"
         );
     }
 
