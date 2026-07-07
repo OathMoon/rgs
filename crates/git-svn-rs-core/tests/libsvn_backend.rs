@@ -223,6 +223,67 @@ fn linked_backend_log_reads_needs_lock_file_property() {
 }
 
 #[test]
+fn linked_backend_log_reads_textual_file_properties() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture
+        .set_run_script_property("svn:eol-style", "LF")
+        .unwrap();
+    fixture
+        .set_run_script_property("svn:mime-type", "text/plain")
+        .unwrap();
+    let revision = fixture
+        .set_run_script_property("svn:keywords", "Id")
+        .unwrap();
+    let backend = LibSvnBackend::for_url(fixture.url());
+
+    let revisions = backend.log(revision, revision).unwrap();
+    let run_script = revisions
+        .iter()
+        .find(|event| event.revision == revision)
+        .and_then(|event| {
+            event
+                .changed_paths
+                .iter()
+                .find(|path| path.path == "/trunk/run.sh")
+        })
+        .expect("run script change should be present");
+
+    assert_eq!(
+        run_script
+            .properties
+            .get("svn:eol-style")
+            .map(String::as_str),
+        Some("LF")
+    );
+    assert_eq!(
+        run_script
+            .properties
+            .get("svn:mime-type")
+            .map(String::as_str),
+        Some("text/plain")
+    );
+    assert_eq!(
+        run_script
+            .properties
+            .get("svn:keywords")
+            .map(String::as_str),
+        Some("Id")
+    );
+}
+
+#[test]
 fn linked_backend_do_update_drives_fetch_editor_callbacks() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

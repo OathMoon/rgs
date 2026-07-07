@@ -1127,7 +1127,12 @@ unsafe fn svn_file_properties(props: *mut AprHashT) -> BTreeMap<String, String> 
         if let Some(name) = unsafe { hash_key_to_string(key, key_len) }
             && matches!(
                 name.as_str(),
-                "svn:executable" | "svn:special" | "svn:needs-lock"
+                "svn:executable"
+                    | "svn:special"
+                    | "svn:eol-style"
+                    | "svn:mime-type"
+                    | "svn:keywords"
+                    | "svn:needs-lock"
             )
         {
             let value = unsafe { svn_string_to_string(value as *const svn_string_t) };
