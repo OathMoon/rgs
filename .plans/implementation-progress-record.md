@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `ecd26c54 feat: reuse dcommit auth for post-commit fetch`
+- Latest implementation commit: `6777536 feat: clear removed svn file props in libsvn replay`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -46,6 +46,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `6dd17f5`: `import_ra_revisions()` can drive `SvnFetchEditor` from a `RaSession::do_update()` callback stream, write the resulting fast-import commits, and update rev_maps for a standard-layout mapping.
 - `2fb35a8`: linked `svn-libsvn` command fetch now routes real SVN imports through `RaSession::do_update()` and `SvnFetchEditor`, with per-mapping revision filtering and branch-copy source trees loaded from source rev_map commits.
 - `5e20caed`: RA editor-backed import now applies configured path filters before/after editor replay and preserves empty-directory placeholders, bringing the full linked `clone_fetch_real_svn` suite green in the configured vcpkg/libsvn environment.
+- `6777536`: linked libsvn log-backed replay now emits explicit `svn:executable`/`svn:special` removals when current file properties no longer contain them, preventing stale Git modes while the true delta editor integration is still pending.
 - `2456bfc5`: dcommit SVN CLI write-back now supports local `svn://` repositories served by `svnserve`, with regression coverage in default and linked `svn-libsvn` builds.
 - `771a734e`: dcommit SVN CLI write-back now applies persisted and command-line SVN auth/config options (`--username`, `--config-dir`, `--no-auth-cache`) to checkout, working-copy edits, property changes, and commit.
 - `be9e8dd8`: `dcommit` accepts command-line `--password`, passes it to SVN CLI write-back commands without persisting it to git config, and has end-to-end coverage for an `svnserve` repository with anonymous reads and authenticated writes.
@@ -85,6 +86,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `import_ra_revisions()` now provides the first import path that consumes `RaSession::do_update()` editor callbacks directly, converts them through `SvnFetchEditor`, writes fast-import data, and records rev_map entries.
 - RA editor-backed import now filters revisions per mapping before replay and can seed branch-copy editors from the copied source ref tree, allowing linked libsvn stdlayout file:// fetch to import trunk/branch history through `SvnFetchEditor`.
 - RA editor-backed import applies persisted include/ignore path filters to editor callbacks and resulting fast-import changes, and it emits configured empty-directory placeholders from SVN directory change metadata.
+- Linked libsvn log-backed replay now mirrors selected file property removal callbacks for `svn:executable` and `svn:special`, so incremental editor import can clear stale executable/symlink modes from the Git tree.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
 - `fetch --fetch-all` enumerates configured `svn-remote.*.url` entries.
 
@@ -151,6 +153,7 @@ Latest full gates recorded as passing:
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_switch_drives_fetch_editor_callbacks -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_ -- --nocapture` (covers normalized replay callback paths and copy-from paths)
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_replays_local_svnserve_repository -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_clears_removed_file_properties -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_metadata_with_config_dir_from_remote_config -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_authenticated_svnserve_with_credentials -- --nocapture`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_log_metadata_and_changed_paths -- --nocapture` (covers changed-path metadata, file content, `svn:executable`/`svn:special` file properties, and copied-directory file materialization)
