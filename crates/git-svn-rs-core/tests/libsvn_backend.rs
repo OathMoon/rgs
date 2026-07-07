@@ -1,6 +1,8 @@
 #![cfg(feature = "svn-libsvn")]
 
 use git_svn_rs_core::config::SvnRemoteConfig;
+use git_svn_rs_core::fast_import::FileChange;
+use git_svn_rs_core::fetch_editor::{FetchCommitPlan, SvnFetchEditor, TreeEntry};
 use git_svn_rs_core::mapping::build_single_path;
 use git_svn_rs_core::svn::SvnBackend;
 use git_svn_rs_core::svn::editor::FetchEditor;
@@ -250,6 +252,53 @@ fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
             .contains(&"apply_textdelta:branches/main/src/lib.rs:29".to_string())
     );
     assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
+fn linked_backend_do_update_clears_removed_file_properties() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture.remove_executable_from_run_script().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let plan = FetchCommitPlan {
+        mark: revision,
+        refname: "refs/remotes/origin/trunk".to_string(),
+        author: "alice <alice@example.com>".to_string(),
+        committer: "alice <alice@example.com>".to_string(),
+        timestamp: 1,
+        message: "remove executable property".to_string(),
+        parent_mark: None,
+        parent_ref: None,
+    };
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan,
+        vec![TreeEntry::file("run.sh", "100755", "#!/bin/sh\necho hi\n")],
+    )
+    .with_path_prefix("trunk");
+
+    session.do_update("trunk", revision, &mut editor).unwrap();
+    let commit = editor.into_commit().unwrap();
+
+    assert!(commit.changes.iter().any(|change| {
+        matches!(
+            change,
+            FileChange::Modify { path, mode, content }
+                if path == "run.sh"
+                    && mode == "100644"
+                    && content == b"#!/bin/sh\necho hi\n"
+        )
+    }));
 }
 
 #[test]

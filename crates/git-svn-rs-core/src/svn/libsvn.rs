@@ -943,8 +943,17 @@ fn replay_file_details(
     changed_path: &ChangedPath,
     editor: &mut dyn FetchEditor,
 ) -> Result<(), String> {
+    for name in ["svn:executable", "svn:special"] {
+        editor.change_file_prop(
+            editor_path,
+            name,
+            changed_path.properties.get(name).map(String::as_str),
+        )?;
+    }
     for (name, value) in &changed_path.properties {
-        editor.change_file_prop(editor_path, name, Some(value))?;
+        if !matches!(name.as_str(), "svn:executable" | "svn:special") {
+            editor.change_file_prop(editor_path, name, Some(value))?;
+        }
     }
     if let Some(content) = &changed_path.content {
         editor.apply_textdelta(editor_path, content)?;

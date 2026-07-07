@@ -179,6 +179,42 @@ impl StandardSvnFixture {
     }
 
     #[allow(dead_code)]
+    pub fn remove_executable_from_run_script(&self) -> Result<u32, String> {
+        let wc = self._tmp.path().join("remove-executable-wc");
+        run(
+            self._tmp.path(),
+            "svn",
+            &[
+                "checkout",
+                "--non-interactive",
+                self.url().as_str(),
+                path_arg(&wc)?,
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "propdel",
+                "--non-interactive",
+                "svn:executable",
+                "trunk/run.sh",
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "commit",
+                "--non-interactive",
+                "-m",
+                "remove executable property",
+            ],
+        )?;
+        Ok(self.latest_revision())
+    }
+
+    #[allow(dead_code)]
     pub fn uuid(&self) -> String {
         let output = Command::new("svn")
             .args(["info", "--show-item", "repos-uuid", self.url().as_str()])
