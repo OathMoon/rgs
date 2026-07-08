@@ -113,6 +113,7 @@ pub struct GoldenComparisonArtifacts {
     pub info_summary: String,
     pub log_revision_oneline: String,
     pub log_revision_range_oneline: String,
+    pub log_revision_reverse_range_oneline: String,
     pub find_rev_nearest: String,
     pub find_rev_commit: String,
     pub rebase_dry_run: String,
@@ -439,6 +440,10 @@ pub fn run_standard_trunk_golden_comparison(
         "perl/log-revision-range-oneline.txt",
         &perl.log_revision_range_oneline,
     )?;
+    capture.write_text(
+        "perl/log-revision-reverse-range-oneline.txt",
+        &perl.log_revision_reverse_range_oneline,
+    )?;
     capture.write_text("perl/find-rev-nearest.txt", &perl.find_rev_nearest)?;
     capture.write_text("perl/find-rev-commit.txt", &perl.find_rev_commit)?;
     capture.write_text("perl/rebase-dry-run.txt", &perl.rebase_dry_run)?;
@@ -499,6 +504,10 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text(
         "rust/log-revision-range-oneline.txt",
         &rust.log_revision_range_oneline,
+    )?;
+    capture.write_text(
+        "rust/log-revision-reverse-range-oneline.txt",
+        &rust.log_revision_reverse_range_oneline,
     )?;
     capture.write_text("rust/find-rev-nearest.txt", &rust.find_rev_nearest)?;
     capture.write_text("rust/find-rev-commit.txt", &rust.find_rev_commit)?;
@@ -633,6 +642,12 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "log --revision range output differs\nperl: {:?}\nrust: {:?}",
             perl.log_revision_range_oneline, rust.log_revision_range_oneline
+        ));
+    }
+    if perl.log_revision_reverse_range_oneline != rust.log_revision_reverse_range_oneline {
+        mismatches.push(format!(
+            "log --revision reverse range output differs\nperl: {:?}\nrust: {:?}",
+            perl.log_revision_reverse_range_oneline, rust.log_revision_reverse_range_oneline
         ));
     }
     if perl.find_rev_nearest != rust.find_rev_nearest {
@@ -886,6 +901,8 @@ fn collect_supported_artifacts(
     let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
     let log_revision_range_oneline =
         supported_log_revision_range_oneline(work_tree, tool, first_revision, first_revision + 1)?;
+    let log_revision_reverse_range_oneline =
+        supported_log_revision_range_oneline(work_tree, tool, first_revision + 1, first_revision)?;
     let find_rev_nearest = supported_find_rev_nearest(work_tree, tool, first_revision + 1)?;
     let find_rev_commit = supported_find_rev_commit(work_tree, tool, rev, first_revision)?;
     let rebase_dry_run = supported_rebase_dry_run(work_tree, tool)?;
@@ -913,6 +930,7 @@ fn collect_supported_artifacts(
         info_summary,
         log_revision_oneline,
         log_revision_range_oneline,
+        log_revision_reverse_range_oneline,
         find_rev_nearest,
         find_rev_commit,
         rebase_dry_run,
