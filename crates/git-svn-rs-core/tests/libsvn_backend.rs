@@ -355,7 +355,7 @@ fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
         .do_switch(
             "branches/main",
             3,
-            &format!("{}/trunk", fixture.url()),
+            &format!("{}/branches/main", fixture.url()),
             &mut editor,
         )
         .unwrap();
@@ -375,6 +375,52 @@ fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
         editor
             .events
             .contains(&"apply_textdelta:branches/main/src/lib.rs:29".to_string())
+    );
+    assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
+fn linked_backend_do_switch_uses_switch_url_source_path() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session
+        .do_switch(
+            "trunk",
+            3,
+            &format!("{}/branches/main", fixture.url()),
+            &mut editor,
+        )
+        .unwrap();
+
+    assert!(editor.events.contains(&"open_root:3".to_string()));
+    assert!(
+        editor
+            .events
+            .contains(&"add_directory:trunk<-trunk@1".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"add_file:trunk/src/lib.rs<-trunk/src/lib.rs@2".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"apply_textdelta:trunk/src/lib.rs:29".to_string())
     );
     assert!(editor.events.contains(&"close_edit".to_string()));
 }

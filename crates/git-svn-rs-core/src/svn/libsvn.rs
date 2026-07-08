@@ -260,6 +260,24 @@ impl LibSvnBackend {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    fn replay_log_update(
+        &self,
+        source_path: &str,
+        target_path: &str,
+        revision: u32,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        self.with_session(|session, pool| unsafe {
+            let revisions = get_log(session, pool, &[source_path], revision, revision)?;
+            let revision_event = revisions
+                .iter()
+                .find(|event| event.revision == revision)
+                .ok_or_else(|| format!("SVN revision r{revision} was not found"))?;
+            replay_revision(revision_event, source_path, target_path, editor)
+        })
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     fn config_hash(&self, pool: *mut AprPoolT) -> Result<*mut AprHashT, String> {
         let Some(config_dir) = self.config_dir.as_deref() else {
             return Ok(ptr::null_mut());
@@ -965,16 +983,22 @@ fn pool_c_string(pool: *mut AprPoolT, value: &str, label: &str) -> Result<*const
 #[cfg(git_svn_rs_libsvn_linked)]
 fn replay_revision(
     revision: &RevisionEvent,
-    path: &str,
+    source_path: &str,
+    target_path: &str,
     editor: &mut dyn FetchEditor,
 ) -> Result<(), String> {
-    let normalized_path = normalize_ra_path(path);
+    let normalized_source_path = normalize_ra_path(source_path);
+    let normalized_target_path = normalize_ra_path(target_path);
     editor.open_root(revision.revision)?;
     for changed_path in &revision.changed_paths {
-        if !path_matches(&changed_path.path, &normalized_path) {
+        if !path_matches(&changed_path.path, &normalized_source_path) {
             continue;
         }
-        let editor_path = editor_path(&changed_path.path);
+        let editor_path = remapped_editor_path(
+            &changed_path.path,
+            &normalized_source_path,
+            &normalized_target_path,
+        );
         match changed_path.action {
             ChangeAction::Delete => {
                 editor.delete_entry(&editor_path, revision.revision.saturating_sub(1))?;
@@ -1061,6 +1085,27 @@ fn normalize_ra_path(path: &str) -> String {
 #[cfg(git_svn_rs_libsvn_linked)]
 fn editor_path(path: &str) -> String {
     path.trim_start_matches('/').to_string()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn remapped_editor_path(changed_path: &str, source_path: &str, target_path: &str) -> String {
+    let changed_path = changed_path.trim_matches('/');
+    let relative_path = if source_path.is_empty() {
+        changed_path
+    } else {
+        changed_path
+            .strip_prefix(source_path)
+            .map(|path| path.trim_start_matches('/'))
+            .unwrap_or_default()
+    };
+
+    if target_path.is_empty() {
+        relative_path.to_string()
+    } else if relative_path.is_empty() {
+        target_path.to_string()
+    } else {
+        format!("{target_path}/{relative_path}")
+    }
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1522,14 +1567,7 @@ impl RaSession for LibSvnBackend {
     ) -> Result<(), String> {
         #[cfg(git_svn_rs_libsvn_linked)]
         {
-            self.with_session(|session, pool| unsafe {
-                let revisions = get_log(session, pool, &[path], revision, revision)?;
-                let revision_event = revisions
-                    .iter()
-                    .find(|event| event.revision == revision)
-                    .ok_or_else(|| format!("SVN revision r{revision} was not found"))?;
-                replay_revision(revision_event, path, editor)
-            })
+            self.replay_log_update(path, path, revision, editor)
         }
 
         #[cfg(not(git_svn_rs_libsvn_linked))]
@@ -1547,20 +1585,24 @@ impl RaSession for LibSvnBackend {
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
         #[cfg(git_svn_rs_libsvn_linked)]
-        ensure_switch_url_in_repository(self.url.as_deref(), switch_url)?;
+        {
+            let source_path = switch_url_path_in_repository(self.url.as_deref(), switch_url)?;
+            self.replay_log_update(&source_path, path, revision, editor)
+        }
 
         #[cfg(not(git_svn_rs_libsvn_linked))]
-        let _ = switch_url;
-
-        self.do_update(path, revision, editor)
+        {
+            let _ = switch_url;
+            self.do_update(path, revision, editor)
+        }
     }
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
-fn ensure_switch_url_in_repository(
+fn switch_url_path_in_repository(
     repository_url: Option<&str>,
     switch_url: &str,
-) -> Result<(), String> {
+) -> Result<String, String> {
     let repository_url = repository_url
         .ok_or_else(|| "libsvn backend requires an SVN repository URL".to_string())?;
     let repository_url = repository_url.trim_end_matches('/');
@@ -1570,8 +1612,12 @@ fn ensure_switch_url_in_repository(
             .strip_prefix(repository_url)
             .is_some_and(|suffix| suffix.starts_with('/'));
 
-    if is_same_repository {
-        Ok(())
+    if switch_url == repository_url {
+        Ok(String::new())
+    } else if is_same_repository {
+        Ok(switch_url[repository_url.len()..]
+            .trim_start_matches('/')
+            .to_string())
     } else {
         Err(format!(
             "switch URL is outside repository root: {switch_url} (root: {repository_url})"
