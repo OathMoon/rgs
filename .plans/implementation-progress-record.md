@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `27371cb feat: avoid unchanged libsvn property replay`
+- Latest implementation commit: `6e96ad59 feat: avoid unchanged libsvn text replay`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -85,6 +85,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `c904de87`: linked libsvn auth baton can register a native simple prompt provider backed by `AuthPrompt`, allowing authenticated local `svn://` reads to obtain username/password from the prompt abstraction while respecting no-auth-cache.
 - `06ac73c`: linked libsvn authenticated local `svn://` coverage now validates config usernames combined with prompt-supplied passwords and no-auth-cache.
 - `27371cb`: linked libsvn log-backed update replay now tracks whether properties changed, compares previous/current properties for modified files/directories when native log flags are unknown, and avoids emitting unchanged file property callbacks on content-only edits while preserving property removals.
+- `6e96ad59`: linked libsvn log-backed update replay now tracks whether file content changed, compares previous/current content when native log flags are unknown, and avoids emitting textdelta callbacks for property-only file edits.
 
 ## Completed Capabilities
 
@@ -131,6 +132,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn auth now supports explicit username/password defaults, persisted config username plus runtime password, and simple username/password prompting through the shared `AuthPrompt` abstraction.
 - Linked libsvn auth coverage validates prompt-supplied passwords using the configured username as the prompt default.
 - Linked libsvn log-backed replay is closer to native delta-editor semantics for modified paths: content-only file edits no longer synthesize unchanged property callbacks, while property removals still emit explicit removals.
+- Linked libsvn log-backed replay also suppresses unchanged text callbacks for property-only file edits, while preserving textdelta callbacks for content edits.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
@@ -204,6 +206,7 @@ Important targeted suites recorded as passing during recent work:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_switch -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_does_not_emit_unchanged_file_props -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_does_not_emit_textdelta_for_property_only_file_change -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_clears_removed_file_properties -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_clears_removed_needs_lock_property -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_subpath_session_reports_repository_root_and_relative_paths -- --nocapture`
