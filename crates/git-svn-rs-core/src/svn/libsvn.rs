@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 pub const LIBSVN_NOT_LINKED_MESSAGE: &str =
     "libsvn backend is enabled but not linked: no libsvn FFI bindings are compiled into this build";
 pub const LIBSVN_LINKED_PROBE_MESSAGE: &str =
-    "libsvn link probe succeeded via vcpkg; backend API calls are not implemented yet";
+    "libsvn link probe succeeded via vcpkg; native backend API calls are available";
 pub const LIBSVN_NOT_IMPLEMENTED_MESSAGE: &str =
     "libsvn backend is linked, but native libsvn API calls are not implemented yet";
 #[cfg(git_svn_rs_libsvn_linked)]

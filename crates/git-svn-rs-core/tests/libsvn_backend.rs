@@ -29,6 +29,11 @@ fn reports_feature_enabled_link_probe_state() {
     if cfg!(git_svn_rs_libsvn_linked) {
         assert_eq!(availability.link_status, LibSvnLinkStatus::Linked);
         assert_eq!(availability.detail, LIBSVN_LINKED_PROBE_MESSAGE);
+        assert!(
+            !availability.detail.contains("not implemented"),
+            "{}",
+            availability.detail
+        );
     } else {
         assert_eq!(availability.link_status, LibSvnLinkStatus::NotLinked);
         assert_eq!(availability.detail, LIBSVN_NOT_LINKED_MESSAGE);
