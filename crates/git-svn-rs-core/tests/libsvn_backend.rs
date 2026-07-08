@@ -889,6 +889,36 @@ fn linked_backend_prompts_for_authenticated_svnserve_credentials() {
 }
 
 #[test]
+fn linked_backend_prompts_for_authenticated_svnserve_password_with_config_username() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let config = SvnRemoteConfig::new("svn", svnserve.repo_url(), build_single_path(""))
+        .with_username("alice")
+        .without_auth_cache();
+    let backend = LibSvnBackend::from_config(&config)
+        .with_auth_prompt(MockAuthPrompt::new().with_password("secret"));
+
+    assert_eq!(
+        SvnBackend::latest_revnum(&backend).unwrap(),
+        fixture.latest_revision()
+    );
+    assert_eq!(SvnBackend::uuid(&backend).unwrap(), fixture.uuid());
+}
+
+#[test]
 fn linked_backend_replays_authenticated_svnserve_with_credentials() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
