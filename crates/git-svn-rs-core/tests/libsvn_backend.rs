@@ -255,6 +255,18 @@ fn linked_backend_get_dir_reads_directory_properties() {
         trunk.properties.get("custom:dir-prop").map(String::as_str),
         Some("dir-value")
     );
+
+    let log = session.get_log(&["trunk"], revision, revision).unwrap();
+    assert!(log.iter().any(|entry| {
+        entry.revision == revision
+            && entry.changed_paths.iter().any(|path| {
+                path.path == "/trunk"
+                    && path.action == ChangeAction::Modify
+                    && path.kind == NodeKind::Directory
+                    && path.properties.get("custom:dir-prop").map(String::as_str)
+                        == Some("dir-value")
+            })
+    }));
 }
 
 #[test]

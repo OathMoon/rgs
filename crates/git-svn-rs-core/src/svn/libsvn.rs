@@ -758,6 +758,16 @@ unsafe fn fill_file_details(
                 path.content = Some(content);
                 path.properties = properties;
             }
+            if matches!(
+                path.action,
+                ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
+            ) && path.kind == NodeKind::Directory
+            {
+                let directory_path = session_relative_path(session_path, &path.path);
+                let (_, properties) =
+                    unsafe { dir_listing(session, pool, &directory_path, revision_number) }?;
+                path.properties = properties;
+            }
 
             if !matches!(path.action, ChangeAction::Add | ChangeAction::Replace)
                 || path.kind != NodeKind::Directory
