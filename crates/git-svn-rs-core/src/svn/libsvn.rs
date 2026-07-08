@@ -515,16 +515,30 @@ type SvnDeltaCloseEditFunc =
     Option<unsafe extern "C" fn(edit_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t>;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaOpenRootFunc = Option<
+    unsafe extern "C" fn(
+        edit_baton: *mut c_void,
+        base_revision: c_long,
+        dir_pool: *mut AprPoolT,
+        root_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaCloseDirectoryFunc =
+    Option<unsafe extern "C" fn(dir_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 #[repr(C)]
 struct SvnDeltaEditorT {
     set_target_revision: SvnDeltaSetTargetRevisionFunc,
-    open_root: *mut c_void,
+    open_root: SvnDeltaOpenRootFunc,
     delete_entry: *mut c_void,
     add_directory: *mut c_void,
     open_directory: *mut c_void,
     change_dir_prop: *mut c_void,
-    close_directory: *mut c_void,
+    close_directory: SvnDeltaCloseDirectoryFunc,
     absent_directory: *mut c_void,
     add_file: *mut c_void,
     open_file: *mut c_void,
@@ -2062,6 +2076,11 @@ mod tests {
     use std::path::Path;
     #[cfg(git_svn_rs_libsvn_linked)]
     use std::process::Command;
+    #[cfg(git_svn_rs_libsvn_linked)]
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static CLOSED_DIRECTORY_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn backend_without_url_reports_expected_error() {
@@ -2156,6 +2175,7 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
+        CLOSED_DIRECTORY_CALLBACKS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2170,6 +2190,35 @@ mod tests {
 
         assert_eq!(baton.target_revision, 2);
         assert!(baton.closed);
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_directory_delta_callbacks() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
+
+        drive_update_report(
+            &backend,
+            2,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).close_directory = Some(record_close_directory);
+            },
+        )
+        .unwrap();
+
+        assert!(baton.root_opened);
+        assert_eq!(baton.root_base_revision, 0);
+        assert!(CLOSED_DIRECTORY_CALLBACKS.load(Ordering::SeqCst) > 0);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2238,6 +2287,9 @@ mod tests {
     struct RecordingEditorBaton {
         target_revision: c_long,
         closed: bool,
+        root_opened: bool,
+        root_base_revision: c_long,
+        closed_directories: usize,
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2258,6 +2310,35 @@ mod tests {
     ) -> *mut svn_error_t {
         let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
         baton.closed = true;
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_open_root(
+        edit_baton: *mut c_void,
+        base_revision: c_long,
+        _dir_pool: *mut AprPoolT,
+        root_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
+        baton.root_opened = true;
+        baton.root_base_revision = base_revision;
+        unsafe {
+            *root_baton = edit_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_close_directory(
+        dir_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        CLOSED_DIRECTORY_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        if !dir_baton.is_null() {
+            let baton = unsafe { &mut *(dir_baton as *mut RecordingEditorBaton) };
+            baton.closed_directories += 1;
+        }
         ptr::null_mut()
     }
 
