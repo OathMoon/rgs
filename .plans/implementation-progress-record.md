@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `59033bf fix: preserve libsvn error context fallback`
+- Latest implementation commit: `c3d7043 fix: refresh linked libsvn availability detail`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -69,6 +69,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `980c98e`: Phase 8 golden command-output artifacts now compare reverse `log --revision rM:rN --oneline` range output.
 - `1eda453`: linked libsvn error reporting now preserves child error messages in native call failures for deeper RA/session diagnostics.
 - `59033bf`: linked libsvn error detail formatting preserves the previous context fallback when no native error message is available.
+- `c3d7043`: linked libsvn availability diagnostics no longer claim native backend API calls are unimplemented after the vcpkg link probe succeeds.
 
 ## Completed Capabilities
 
@@ -111,6 +112,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn `RaSession::get_dir()` now exposes real user directory properties returned by native `svn_ra_get_dir2()` and filters internal `svn:entry:*` metadata out of the public listing.
 - Linked libsvn native call errors now include child error-chain details instead of only the top-level best message.
 - Linked libsvn native call error formatting retains a context fallback when libsvn returns no message.
+- Linked libsvn availability detail now reflects that native backend API calls are available when the vcpkg link probe succeeds.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
@@ -180,6 +182,7 @@ Important targeted suites recorded as passing during recent work:
 - `cargo clippy -p git-svn-rs-core --test compat_golden -- -D warnings`
 - With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::svn_call_ -- --nocapture`
 - With the same vcpkg environment: `cargo clippy -p git-svn-rs-core --features svn-libsvn -- -D warnings`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend reports_feature_enabled_link_probe_state -- --nocapture`
 - Recent focused default suites: `cargo test -p git-svn-rs --test readonly_commands -- --nocapture`, `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`, `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`, `cargo test -p git-svn-rs-core --test import_mock -- --nocapture`, `cargo test -p git-svn-rs-core --test fetch_editor`, `cargo test -p git-svn-rs-core --test git_backend -- --nocapture`, and `cargo test -p git-svn-rs-core --test fast_import`
 
 Compatibility notes:
