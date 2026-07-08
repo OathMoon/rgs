@@ -502,10 +502,23 @@ struct svn_auth_cred_simple_t {
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaSetTargetRevisionFunc = Option<
+    unsafe extern "C" fn(
+        edit_baton: *mut c_void,
+        target_revision: c_long,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaCloseEditFunc =
+    Option<unsafe extern "C" fn(edit_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 #[repr(C)]
 struct SvnDeltaEditorT {
-    set_target_revision: *mut c_void,
+    set_target_revision: SvnDeltaSetTargetRevisionFunc,
     open_root: *mut c_void,
     delete_entry: *mut c_void,
     add_directory: *mut c_void,
@@ -519,7 +532,7 @@ struct SvnDeltaEditorT {
     change_file_prop: *mut c_void,
     close_file: *mut c_void,
     absent_file: *mut c_void,
-    close_edit: *mut c_void,
+    close_edit: SvnDeltaCloseEditFunc,
     abort_edit: *mut c_void,
     apply_textdelta_stream: *mut c_void,
 }
@@ -2128,59 +2141,124 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
 
-        backend
-            .with_session(|session, pool| unsafe {
-                let editor = svn_delta_default_editor(pool);
-                assert!(!editor.is_null());
+        drive_update_report(&backend, 2, ptr::null_mut(), |_| {}).unwrap();
+    }
 
-                let mut reporter: *const SvnRaReporter3T = ptr::null();
-                let mut report_baton: *mut c_void = ptr::null_mut();
-                let target = CString::new("trunk").unwrap();
-                svn_call(
-                    svn_ra_do_update3(
-                        session,
-                        &mut reporter,
-                        &mut report_baton,
-                        2,
-                        target.as_ptr(),
-                        SVN_DEPTH_INFINITY,
-                        1,
-                        0,
-                        editor,
-                        ptr::null_mut(),
-                        pool,
-                        pool,
-                    ),
-                    "svn_ra_do_update3",
-                )?;
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_delta_editor_callbacks() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
 
-                assert!(!reporter.is_null());
-                let set_path = (*reporter)
-                    .set_path
-                    .ok_or_else(|| "libsvn returned a reporter without set_path".to_string())?;
-                let finish_report = (*reporter).finish_report.ok_or_else(|| {
-                    "libsvn returned a reporter without finish_report".to_string()
-                })?;
+        drive_update_report(
+            &backend,
+            2,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).set_target_revision = Some(record_target_revision);
+                (*editor).close_edit = Some(record_close_edit);
+            },
+        )
+        .unwrap();
 
-                let empty_path = CString::new("").unwrap();
-                svn_call(
-                    set_path(
-                        report_baton,
-                        empty_path.as_ptr(),
-                        0,
-                        SVN_DEPTH_INFINITY,
-                        1,
-                        ptr::null(),
-                        pool,
-                    ),
-                    "svn_ra_reporter3_t.set_path",
-                )?;
-                svn_call(
-                    finish_report(report_baton, pool),
-                    "svn_ra_reporter3_t.finish_report",
-                )
-            })
-            .unwrap();
+        assert_eq!(baton.target_revision, 2);
+        assert!(baton.closed);
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn drive_update_report(
+        backend: &LibSvnBackend,
+        revision: c_long,
+        update_baton: *mut c_void,
+        configure_editor: impl FnOnce(*mut SvnDeltaEditorT),
+    ) -> Result<(), String> {
+        backend.with_session(|session, pool| unsafe {
+            let editor = svn_delta_default_editor(pool);
+            assert!(!editor.is_null());
+            configure_editor(editor);
+
+            let mut reporter: *const SvnRaReporter3T = ptr::null();
+            let mut report_baton: *mut c_void = ptr::null_mut();
+            let target = CString::new("trunk").unwrap();
+            svn_call(
+                svn_ra_do_update3(
+                    session,
+                    &mut reporter,
+                    &mut report_baton,
+                    revision,
+                    target.as_ptr(),
+                    SVN_DEPTH_INFINITY,
+                    1,
+                    0,
+                    editor,
+                    update_baton,
+                    pool,
+                    pool,
+                ),
+                "svn_ra_do_update3",
+            )?;
+
+            assert!(!reporter.is_null());
+            let set_path = (*reporter)
+                .set_path
+                .ok_or_else(|| "libsvn returned a reporter without set_path".to_string())?;
+            let finish_report = (*reporter)
+                .finish_report
+                .ok_or_else(|| "libsvn returned a reporter without finish_report".to_string())?;
+
+            let empty_path = CString::new("").unwrap();
+            svn_call(
+                set_path(
+                    report_baton,
+                    empty_path.as_ptr(),
+                    0,
+                    SVN_DEPTH_INFINITY,
+                    1,
+                    ptr::null(),
+                    pool,
+                ),
+                "svn_ra_reporter3_t.set_path",
+            )?;
+            svn_call(
+                finish_report(report_baton, pool),
+                "svn_ra_reporter3_t.finish_report",
+            )
+        })
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[derive(Default)]
+    struct RecordingEditorBaton {
+        target_revision: c_long,
+        closed: bool,
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_target_revision(
+        edit_baton: *mut c_void,
+        target_revision: c_long,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
+        baton.target_revision = target_revision;
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_close_edit(
+        edit_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
+        baton.closed = true;
+        ptr::null_mut()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
