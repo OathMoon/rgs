@@ -13,7 +13,7 @@ pub struct Credentials {
     pub may_save: bool,
 }
 
-pub trait AuthPrompt {
+pub trait AuthPrompt: Send + Sync {
     fn simple(&self, request: AuthRequest) -> Result<Credentials, String>;
 }
 

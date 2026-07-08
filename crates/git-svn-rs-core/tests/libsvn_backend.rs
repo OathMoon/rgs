@@ -5,6 +5,7 @@ use git_svn_rs_core::fast_import::FileChange;
 use git_svn_rs_core::fetch_editor::{FetchCommitPlan, SvnFetchEditor, TreeEntry};
 use git_svn_rs_core::mapping::build_single_path;
 use git_svn_rs_core::svn::SvnBackend;
+use git_svn_rs_core::svn::auth::MockAuthPrompt;
 use git_svn_rs_core::svn::editor::FetchEditor;
 use git_svn_rs_core::svn::libsvn::{
     LIBSVN_LINKED_PROBE_MESSAGE, LIBSVN_NOT_LINKED_MESSAGE, LibSvnBackend, LibSvnLinkStatus,
@@ -847,6 +848,38 @@ fn linked_backend_reads_authenticated_svnserve_with_config_username_and_runtime_
         .with_username("alice")
         .without_auth_cache();
     let backend = LibSvnBackend::from_config(&config).with_password("secret");
+
+    assert_eq!(
+        SvnBackend::latest_revnum(&backend).unwrap(),
+        fixture.latest_revision()
+    );
+    assert_eq!(SvnBackend::uuid(&backend).unwrap(), fixture.uuid());
+}
+
+#[test]
+fn linked_backend_prompts_for_authenticated_svnserve_credentials() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let backend = LibSvnBackend::for_url(svnserve.repo_url())
+        .with_auth_prompt(
+            MockAuthPrompt::new()
+                .with_username("alice")
+                .with_password("secret"),
+        )
+        .without_auth_cache();
 
     assert_eq!(
         SvnBackend::latest_revnum(&backend).unwrap(),

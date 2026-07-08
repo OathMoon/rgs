@@ -1,3 +1,6 @@
+use super::auth::AuthPrompt;
+#[cfg(git_svn_rs_libsvn_linked)]
+use super::auth::AuthRequest;
 use super::editor::FetchEditor;
 #[cfg(git_svn_rs_libsvn_linked)]
 use super::ra::DirEntry;
@@ -16,6 +19,7 @@ use std::os::raw::{c_char, c_int, c_long, c_uint, c_void};
 use std::ptr;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::slice;
+use std::sync::Arc;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::sync::OnceLock;
 
@@ -46,7 +50,7 @@ const SVN_AUTH_PARAM_NO_AUTH_CACHE: &[u8] = b"svn:auth:no-auth-cache\0";
 #[cfg(git_svn_rs_libsvn_linked)]
 const SVN_AUTH_PRESENT_VALUE: &[u8] = b"1\0";
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct LibSvnBackend {
     #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
     url: Option<String>,
@@ -60,6 +64,24 @@ pub struct LibSvnBackend {
     password: Option<String>,
     #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
     no_auth_cache: bool,
+    #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
+    auth_prompt: Option<Arc<dyn AuthPrompt>>,
+}
+
+impl std::fmt::Debug for LibSvnBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("LibSvnBackend")
+            .field("url", &self.url)
+            .field("config_dir", &self.config_dir)
+            .field("username", &self.username)
+            .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("no_auth_cache", &self.no_auth_cache)
+            .field(
+                "auth_prompt",
+                &self.auth_prompt.as_ref().map(|_| "<present>"),
+            )
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,6 +108,7 @@ impl LibSvnBackend {
             username: None,
             password: None,
             no_auth_cache: false,
+            auth_prompt: None,
         }
     }
 
@@ -98,6 +121,7 @@ impl LibSvnBackend {
             username: None,
             password: None,
             no_auth_cache: false,
+            auth_prompt: None,
         }
     }
 
@@ -110,6 +134,7 @@ impl LibSvnBackend {
             username: config.username.clone(),
             password: None,
             no_auth_cache: config.no_auth_cache,
+            auth_prompt: None,
         }
     }
 
@@ -155,6 +180,11 @@ impl LibSvnBackend {
 
     pub fn without_auth_cache(mut self) -> Self {
         self.no_auth_cache = true;
+        self
+    }
+
+    pub fn with_auth_prompt(mut self, prompt: impl AuthPrompt + 'static) -> Self {
+        self.auth_prompt = Some(Arc::new(prompt));
         self
     }
 
@@ -340,9 +370,34 @@ impl LibSvnBackend {
         let provider_size = std::mem::size_of::<*mut SvnAuthProviderObjectT>()
             .try_into()
             .expect("pointer size should fit APR int");
-        let providers = unsafe { apr_array_make(pool, 2, provider_size) };
+        let providers = unsafe { apr_array_make(pool, 3, provider_size) };
         if providers.is_null() {
             return Err("APR returned a null auth provider array".to_string());
+        }
+
+        if let Some(prompt) = &self.auth_prompt {
+            let prompt_baton = unsafe { apr_palloc(pool, std::mem::size_of::<SimplePromptBaton>()) }
+                as *mut SimplePromptBaton;
+            if prompt_baton.is_null() {
+                return Err("APR returned a null auth prompt baton".to_string());
+            }
+            unsafe {
+                (*prompt_baton).prompt = prompt as *const Arc<dyn AuthPrompt>;
+                (*prompt_baton).no_auth_cache = self.no_auth_cache;
+            }
+            let mut prompt_provider = ptr::null_mut();
+            unsafe {
+                svn_auth_get_simple_prompt_provider(
+                    &mut prompt_provider,
+                    Some(prompt_simple_credentials),
+                    prompt_baton.cast::<c_void>(),
+                    3,
+                    pool,
+                );
+            }
+            if !prompt_provider.is_null() {
+                unsafe { push_auth_provider(providers, prompt_provider) };
+            }
         }
 
         let mut simple_provider = ptr::null_mut();
@@ -437,6 +492,14 @@ struct svn_stringbuf_t {
 
 #[cfg(git_svn_rs_libsvn_linked)]
 #[repr(C)]
+struct svn_auth_cred_simple_t {
+    username: *const c_char,
+    password: *const c_char,
+    may_save: c_int,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[repr(C)]
 struct svn_log_changed_path2_t {
     action: c_char,
     copyfrom_path: *const c_char,
@@ -508,6 +571,12 @@ enum SvnAuthProviderObjectT {}
 enum SvnRaSessionT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
+struct SimplePromptBaton {
+    prompt: *const Arc<dyn AuthPrompt>,
+    no_auth_cache: bool,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 struct AprRuntime;
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -565,6 +634,105 @@ type AprAbortFunc = Option<unsafe extern "C" fn(c_int) -> c_int>;
 type SvnAuthPlaintextPromptFunc = Option<
     unsafe extern "C" fn(*mut c_int, *const c_char, *mut c_void, *mut AprPoolT) -> *mut svn_error_t,
 >;
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnAuthSimplePromptFunc = Option<
+    unsafe extern "C" fn(
+        *mut *mut svn_auth_cred_simple_t,
+        *mut c_void,
+        *const c_char,
+        *const c_char,
+        c_int,
+        *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe extern "C" fn prompt_simple_credentials(
+    cred: *mut *mut svn_auth_cred_simple_t,
+    baton: *mut c_void,
+    realm: *const c_char,
+    username: *const c_char,
+    may_save: c_int,
+    pool: *mut AprPoolT,
+) -> *mut svn_error_t {
+    if cred.is_null() || baton.is_null() || pool.is_null() {
+        return ptr::null_mut();
+    }
+
+    let prompt_baton = unsafe { &*(baton.cast::<SimplePromptBaton>()) };
+    if prompt_baton.prompt.is_null() {
+        unsafe {
+            *cred = ptr::null_mut();
+        }
+        return ptr::null_mut();
+    }
+    let prompt = unsafe { &*prompt_baton.prompt };
+    let realm = if realm.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(realm) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    let default_username = if username.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(username) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    let credentials = match prompt.simple(AuthRequest {
+        realm,
+        default_username,
+        may_save: may_save != 0,
+        no_auth_cache: prompt_baton.no_auth_cache,
+    }) {
+        Ok(credentials) => credentials,
+        Err(_) => {
+            unsafe {
+                *cred = ptr::null_mut();
+            }
+            return ptr::null_mut();
+        }
+    };
+    let username = match CString::new(credentials.username) {
+        Ok(username) => username,
+        Err(_) => {
+            unsafe {
+                *cred = ptr::null_mut();
+            }
+            return ptr::null_mut();
+        }
+    };
+    let password = match CString::new(credentials.password) {
+        Ok(password) => password,
+        Err(_) => {
+            unsafe {
+                *cred = ptr::null_mut();
+            }
+            return ptr::null_mut();
+        }
+    };
+    let raw_cred = unsafe { apr_palloc(pool, std::mem::size_of::<svn_auth_cred_simple_t>()) }
+        as *mut svn_auth_cred_simple_t;
+    if raw_cred.is_null() {
+        unsafe {
+            *cred = ptr::null_mut();
+        }
+        return ptr::null_mut();
+    }
+    unsafe {
+        (*raw_cred).username = apr_pstrdup(pool, username.as_ptr());
+        (*raw_cred).password = apr_pstrdup(pool, password.as_ptr());
+        (*raw_cred).may_save = if credentials.may_save { 1 } else { 0 };
+        *cred = raw_cred;
+    }
+    ptr::null_mut()
+}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 unsafe extern "C" fn receive_log_entry(
@@ -1359,6 +1527,7 @@ unsafe extern "C" {
         allocator: *mut c_void,
     ) -> c_int;
     fn apr_pool_destroy(pool: *mut AprPoolT);
+    fn apr_palloc(pool: *mut AprPoolT, size: usize) -> *mut c_void;
     fn apr_pstrdup(pool: *mut AprPoolT, string: *const c_char) -> *const c_char;
     fn apr_array_make(
         pool: *mut AprPoolT,
@@ -1391,6 +1560,13 @@ unsafe extern "C" {
         provider: *mut *mut SvnAuthProviderObjectT,
         plaintext_prompt_func: SvnAuthPlaintextPromptFunc,
         prompt_baton: *mut c_void,
+        pool: *mut AprPoolT,
+    );
+    fn svn_auth_get_simple_prompt_provider(
+        provider: *mut *mut SvnAuthProviderObjectT,
+        prompt_func: SvnAuthSimplePromptFunc,
+        prompt_baton: *mut c_void,
+        retry_limit: c_int,
         pool: *mut AprPoolT,
     );
     fn svn_auth_get_username_provider(
