@@ -169,6 +169,37 @@ fn linked_backend_implements_ra_session_read_methods() {
 }
 
 #[test]
+fn linked_backend_subpath_session_reports_repository_root_and_relative_paths() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let trunk_url = format!("{}/trunk", fixture.url());
+    let session = LibSvnBackend::for_url(&trunk_url);
+
+    assert_eq!(RaSession::url(&session), trunk_url);
+    assert_eq!(RaSession::repos_root(&session), fixture.url());
+    assert_eq!(
+        session.check_path("src/lib.rs", 2).unwrap(),
+        Some(SvnNodeKind::File)
+    );
+    assert_eq!(
+        session.check_path("src", 2).unwrap(),
+        Some(SvnNodeKind::Directory)
+    );
+    assert_eq!(session.check_path("missing", 2).unwrap(), None);
+}
+
+#[test]
 fn linked_backend_get_dir_reads_directory_properties() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

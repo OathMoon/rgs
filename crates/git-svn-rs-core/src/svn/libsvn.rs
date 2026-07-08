@@ -50,6 +50,8 @@ const SVN_AUTH_PRESENT_VALUE: &[u8] = b"1\0";
 pub struct LibSvnBackend {
     #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
     url: Option<String>,
+    #[cfg(git_svn_rs_libsvn_linked)]
+    repos_root: OnceLock<String>,
     #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
     config_dir: Option<String>,
     #[cfg_attr(not(git_svn_rs_libsvn_linked), allow(dead_code))]
@@ -78,6 +80,8 @@ impl LibSvnBackend {
     pub fn new() -> Self {
         Self {
             url: None,
+            #[cfg(git_svn_rs_libsvn_linked)]
+            repos_root: OnceLock::new(),
             config_dir: None,
             username: None,
             password: None,
@@ -88,6 +92,8 @@ impl LibSvnBackend {
     pub fn for_url(url: impl Into<String>) -> Self {
         Self {
             url: Some(url.into()),
+            #[cfg(git_svn_rs_libsvn_linked)]
+            repos_root: OnceLock::new(),
             config_dir: None,
             username: None,
             password: None,
@@ -98,6 +104,8 @@ impl LibSvnBackend {
     pub fn from_config(config: &SvnRemoteConfig) -> Self {
         Self {
             url: Some(config.url.clone()),
+            #[cfg(git_svn_rs_libsvn_linked)]
+            repos_root: OnceLock::new(),
             config_dir: config.config_dir.clone(),
             username: config.username.clone(),
             password: None,
@@ -274,6 +282,21 @@ impl LibSvnBackend {
                 .find(|event| event.revision == revision)
                 .ok_or_else(|| format!("SVN revision r{revision} was not found"))?;
             replay_revision(revision_event, source_path, target_path, editor)
+        })
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn read_repos_root(&self) -> Result<String, String> {
+        self.with_session(|session, pool| unsafe {
+            let mut repos_root = ptr::null();
+            svn_call(
+                svn_ra_get_repos_root2(session, &mut repos_root, pool),
+                "svn_ra_get_repos_root2",
+            )?;
+            if repos_root.is_null() {
+                return Err("libsvn returned a null repository root URL".to_string());
+            }
+            Ok(CStr::from_ptr(repos_root).to_string_lossy().into_owned())
         })
     }
 
@@ -1373,6 +1396,11 @@ unsafe extern "C" {
         uuid: *mut *const c_char,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
+    fn svn_ra_get_repos_root2(
+        session: *mut SvnRaSessionT,
+        url: *mut *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
     fn svn_ra_get_file(
         session: *mut SvnRaSessionT,
         path: *const c_char,
@@ -1471,6 +1499,17 @@ impl RaSession for LibSvnBackend {
     }
 
     fn repos_root(&self) -> &str {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            self.repos_root
+                .get_or_init(|| {
+                    self.read_repos_root()
+                        .unwrap_or_else(|_| self.url().to_string())
+                })
+                .as_str()
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
         self.url()
     }
 
