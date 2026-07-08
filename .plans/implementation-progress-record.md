@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `c904de87 feat: prompt for libsvn simple credentials`
+- Latest implementation commit: `06ac73c test: cover prompted libsvn password with config username`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -83,6 +83,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `87ffa3b`: linked libsvn coverage now validates directory property replay for sessions opened on repository subpaths, including correct editor path remapping to the subpath root.
 - `e9dad9e`: linked libsvn authenticated local `svn://` coverage now validates persisted config usernames combined with runtime passwords and no-auth-cache.
 - `c904de87`: linked libsvn auth baton can register a native simple prompt provider backed by `AuthPrompt`, allowing authenticated local `svn://` reads to obtain username/password from the prompt abstraction while respecting no-auth-cache.
+- `06ac73c`: linked libsvn authenticated local `svn://` coverage now validates config usernames combined with prompt-supplied passwords and no-auth-cache.
 
 ## Completed Capabilities
 
@@ -127,6 +128,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn native call error formatting retains a context fallback when libsvn returns no message.
 - Linked libsvn availability detail now reflects that native backend API calls are available when the vcpkg link probe succeeds.
 - Linked libsvn auth now supports explicit username/password defaults, persisted config username plus runtime password, and simple username/password prompting through the shared `AuthPrompt` abstraction.
+- Linked libsvn auth coverage validates prompt-supplied passwords using the configured username as the prompt default.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
@@ -214,6 +216,7 @@ Important targeted suites recorded as passing during recent work:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_subpath_do_update_reports_directory_properties -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_authenticated_svnserve_with_config_username_and_runtime_password -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_prompts_for_authenticated_svnserve_credentials -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_prompts_for_authenticated_svnserve_password_with_config_username -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_authenticated_svnserve_with_credentials -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_rejects_authenticated_svnserve -- --nocapture`
 - `cargo test -p git-svn-rs-core --test libsvn_backend linked_backend_prompts_for_authenticated_svnserve_credentials -- --nocapture` (default build compiles the test target and filters out the linked-only test)
