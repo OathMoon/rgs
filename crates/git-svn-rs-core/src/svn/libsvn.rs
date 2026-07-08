@@ -499,6 +499,29 @@ struct svn_auth_cred_simple_t {
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+#[allow(dead_code)]
+#[repr(C)]
+struct SvnDeltaEditorT {
+    set_target_revision: *mut c_void,
+    open_root: *mut c_void,
+    delete_entry: *mut c_void,
+    add_directory: *mut c_void,
+    open_directory: *mut c_void,
+    change_dir_prop: *mut c_void,
+    close_directory: *mut c_void,
+    absent_directory: *mut c_void,
+    add_file: *mut c_void,
+    open_file: *mut c_void,
+    apply_textdelta: *mut c_void,
+    change_file_prop: *mut c_void,
+    close_file: *mut c_void,
+    absent_file: *mut c_void,
+    close_edit: *mut c_void,
+    abort_edit: *mut c_void,
+    apply_textdelta_stream: *mut c_void,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[repr(C)]
 struct svn_log_changed_path2_t {
     action: c_char,
@@ -1590,6 +1613,8 @@ unsafe extern "C" {
         buffer_size: usize,
     ) -> *const c_char;
     fn svn_error_clear(error: *mut svn_error_t);
+    #[allow(dead_code)]
+    fn svn_delta_default_editor(pool: *mut AprPoolT) -> *mut SvnDeltaEditorT;
     fn svn_auth_get_simple_provider2(
         provider: *mut *mut SvnAuthProviderObjectT,
         plaintext_prompt_func: SvnAuthPlaintextPromptFunc,
@@ -2022,5 +2047,18 @@ mod tests {
         let detail = unsafe { svn_error_detail(ptr::null_mut(), "svn_test_call") };
 
         assert_eq!(detail, "svn_test_call");
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn default_delta_editor_exposes_textdelta_stream_slot() {
+        AprRuntime::initialize().unwrap();
+        let apr = AprRuntime;
+        let pool = apr.create_pool().unwrap();
+
+        let editor = unsafe { svn_delta_default_editor(pool.as_ptr()) };
+
+        assert!(!editor.is_null());
+        assert!(!unsafe { (*editor).apply_textdelta_stream }.is_null());
     }
 }
