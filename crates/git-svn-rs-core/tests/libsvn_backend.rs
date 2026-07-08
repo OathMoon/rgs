@@ -690,6 +690,45 @@ fn linked_backend_switches_local_svnserve_repository() {
 }
 
 #[test]
+fn linked_backend_svnserve_get_dir_reads_directory_properties_and_logs_change() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture
+        .set_trunk_dir_property("custom:dir-prop", "dir-value")
+        .unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let session = LibSvnBackend::for_url(svnserve.repo_url());
+
+    let trunk = session.get_dir("trunk", revision).unwrap();
+    assert_eq!(
+        trunk.properties.get("custom:dir-prop").map(String::as_str),
+        Some("dir-value")
+    );
+
+    let log = session.get_log(&["trunk"], revision, revision).unwrap();
+    let revision_log = log
+        .iter()
+        .find(|entry| entry.revision == revision)
+        .expect("directory property revision should be present");
+    assert!(revision_log.changed_paths.iter().any(|path| {
+        path.path == "/trunk"
+            && path.action == ChangeAction::Modify
+            && path.kind == NodeKind::Directory
+    }));
+}
+
+#[test]
 fn linked_backend_reads_authenticated_svnserve_with_credentials() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
