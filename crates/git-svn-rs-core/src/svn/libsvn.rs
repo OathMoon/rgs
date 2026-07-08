@@ -49,6 +49,9 @@ const SVN_AUTH_PARAM_DEFAULT_PASSWORD: &[u8] = b"svn:auth:password\0";
 const SVN_AUTH_PARAM_NO_AUTH_CACHE: &[u8] = b"svn:auth:no-auth-cache\0";
 #[cfg(git_svn_rs_libsvn_linked)]
 const SVN_AUTH_PRESENT_VALUE: &[u8] = b"1\0";
+#[cfg(git_svn_rs_libsvn_linked)]
+#[allow(dead_code)]
+const SVN_DEPTH_INFINITY: c_int = 3;
 
 #[derive(Default)]
 pub struct LibSvnBackend {
@@ -519,6 +522,35 @@ struct SvnDeltaEditorT {
     close_edit: *mut c_void,
     abort_edit: *mut c_void,
     apply_textdelta_stream: *mut c_void,
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnRaReporterSetPathFunc = Option<
+    unsafe extern "C" fn(
+        report_baton: *mut c_void,
+        path: *const c_char,
+        revision: c_long,
+        depth: c_int,
+        start_empty: c_int,
+        lock_token: *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnRaReporterFinishReportFunc = Option<
+    unsafe extern "C" fn(report_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+#[allow(dead_code)]
+#[repr(C)]
+struct SvnRaReporter3T {
+    set_path: SvnRaReporterSetPathFunc,
+    delete_path: *mut c_void,
+    link_path: *mut c_void,
+    finish_report: SvnRaReporterFinishReportFunc,
+    abort_report: *mut c_void,
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1615,6 +1647,21 @@ unsafe extern "C" {
     fn svn_error_clear(error: *mut svn_error_t);
     #[allow(dead_code)]
     fn svn_delta_default_editor(pool: *mut AprPoolT) -> *mut SvnDeltaEditorT;
+    #[allow(dead_code)]
+    fn svn_ra_do_update3(
+        session: *mut SvnRaSessionT,
+        reporter: *mut *const SvnRaReporter3T,
+        report_baton: *mut *mut c_void,
+        revision_to_update_to: c_long,
+        update_target: *const c_char,
+        depth: c_int,
+        send_copyfrom_args: c_int,
+        ignore_ancestry: c_int,
+        update_editor: *const SvnDeltaEditorT,
+        update_baton: *mut c_void,
+        result_pool: *mut AprPoolT,
+        scratch_pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
     fn svn_auth_get_simple_provider2(
         provider: *mut *mut SvnAuthProviderObjectT,
         plaintext_prompt_func: SvnAuthPlaintextPromptFunc,
@@ -1996,6 +2043,13 @@ fn session_relative_path(session_path: &str, repository_path: &str) -> String {
 mod tests {
     use super::*;
 
+    #[cfg(git_svn_rs_libsvn_linked)]
+    use std::fs;
+    #[cfg(git_svn_rs_libsvn_linked)]
+    use std::path::Path;
+    #[cfg(git_svn_rs_libsvn_linked)]
+    use std::process::Command;
+
     #[test]
     fn backend_without_url_reports_expected_error() {
         let backend = LibSvnBackend::new();
@@ -2060,5 +2114,140 @@ mod tests {
 
         assert!(!editor.is_null());
         assert!(!unsafe { (*editor).apply_textdelta_stream }.is_null());
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_reporter_finishes_with_default_delta_editor() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+
+        backend
+            .with_session(|session, pool| unsafe {
+                let editor = svn_delta_default_editor(pool);
+                assert!(!editor.is_null());
+
+                let mut reporter: *const SvnRaReporter3T = ptr::null();
+                let mut report_baton: *mut c_void = ptr::null_mut();
+                let target = CString::new("trunk").unwrap();
+                svn_call(
+                    svn_ra_do_update3(
+                        session,
+                        &mut reporter,
+                        &mut report_baton,
+                        2,
+                        target.as_ptr(),
+                        SVN_DEPTH_INFINITY,
+                        1,
+                        0,
+                        editor,
+                        ptr::null_mut(),
+                        pool,
+                        pool,
+                    ),
+                    "svn_ra_do_update3",
+                )?;
+
+                assert!(!reporter.is_null());
+                let set_path = (*reporter)
+                    .set_path
+                    .ok_or_else(|| "libsvn returned a reporter without set_path".to_string())?;
+                let finish_report = (*reporter).finish_report.ok_or_else(|| {
+                    "libsvn returned a reporter without finish_report".to_string()
+                })?;
+
+                let empty_path = CString::new("").unwrap();
+                svn_call(
+                    set_path(
+                        report_baton,
+                        empty_path.as_ptr(),
+                        0,
+                        SVN_DEPTH_INFINITY,
+                        1,
+                        ptr::null(),
+                        pool,
+                    ),
+                    "svn_ra_reporter3_t.set_path",
+                )?;
+                svn_call(
+                    finish_report(report_baton, pool),
+                    "svn_ra_reporter3_t.finish_report",
+                )
+            })
+            .unwrap();
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn create_minimal_svn_repository() -> Result<(tempfile::TempDir, String), String> {
+        if !command_succeeds("svnadmin", &["--version"]) || !command_succeeds("svn", &["--version"])
+        {
+            return Err("svnadmin and svn are required".to_string());
+        }
+
+        let tmp = tempfile::tempdir().map_err(|error| error.to_string())?;
+        let repo = tmp.path().join("repo");
+        let wc = tmp.path().join("wc");
+        run(tmp.path(), "svnadmin", &["create", path_arg(&repo)?])?;
+        let repo_url =
+            url::Url::from_directory_path(repo.canonicalize().map_err(|e| e.to_string())?)
+                .map_err(|()| "failed to build file URL for SVN repository".to_string())?
+                .to_string()
+                .trim_end_matches('/')
+                .to_string();
+        run(tmp.path(), "svn", &["checkout", &repo_url, "wc"])?;
+        run(&wc, "svn", &["mkdir", "trunk"])?;
+        run(&wc, "svn", &["commit", "-m", "create trunk"])?;
+        let trunk = wc.join("trunk");
+        run(&wc, "svn", &["update", "trunk"])?;
+        fs::write(trunk.join("file.txt"), b"hello\n").map_err(|error| error.to_string())?;
+        run(&wc, "svn", &["add", "trunk/file.txt"])?;
+        run(&wc, "svn", &["commit", "-m", "add file"])?;
+
+        Ok((tmp, repo_url))
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn command_succeeds(program: &str, args: &[&str]) -> bool {
+        Command::new(program)
+            .args(args)
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
+        let output = Command::new(program)
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .map_err(|error| format!("{program} failed to start: {error}"))?;
+        if output.status.success() {
+            return Ok(());
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(format!(
+            "{program} failed with status {}: {}{}",
+            output.status,
+            stderr.trim(),
+            if stdout.trim().is_empty() {
+                String::new()
+            } else {
+                format!(" stdout: {}", stdout.trim())
+            }
+        ))
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn path_arg(path: &Path) -> Result<&str, String> {
+        path.to_str()
+            .ok_or_else(|| format!("path is not valid UTF-8: {}", path.display()))
     }
 }
