@@ -1187,16 +1187,16 @@ unsafe fn svn_call(error: *mut svn_error_t, context: &str) -> Result<(), String>
     if error.is_null() {
         Ok(())
     } else {
-        let detail = unsafe { svn_error_detail(error) };
+        let detail = unsafe { svn_error_detail(error, context) };
         unsafe { svn_error_clear(error) };
         Err(format!("{context} failed: {detail}"))
     }
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
-unsafe fn svn_error_detail(error: *mut svn_error_t) -> String {
+unsafe fn svn_error_detail(error: *mut svn_error_t, context: &str) -> String {
     if error.is_null() {
-        return String::new();
+        return context.to_string();
     }
 
     let mut messages = Vec::new();
@@ -1225,7 +1225,11 @@ unsafe fn svn_error_detail(error: *mut svn_error_t) -> String {
         child = unsafe { (*child).child };
     }
 
-    messages.join(": ")
+    if messages.is_empty() {
+        context.to_string()
+    } else {
+        messages.join(": ")
+    }
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1590,9 +1594,17 @@ mod tests {
             line: 0,
         };
 
-        let error = unsafe { svn_error_detail(&mut parent) };
+        let error = unsafe { svn_error_detail(&mut parent, "svn_test_call") };
 
         assert!(error.contains("parent detail"), "{error}");
         assert!(error.contains("child detail"), "{error}");
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn svn_call_error_detail_falls_back_to_context() {
+        let detail = unsafe { svn_error_detail(ptr::null_mut(), "svn_test_call") };
+
+        assert_eq!(detail, "svn_test_call");
     }
 }
