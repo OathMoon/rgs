@@ -380,6 +380,39 @@ fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
 }
 
 #[test]
+fn linked_backend_do_switch_rejects_url_outside_repository_root() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    let err = session
+        .do_switch(
+            "branches/main",
+            3,
+            "file:///outside-repository/trunk",
+            &mut editor,
+        )
+        .unwrap_err();
+
+    assert!(err.contains("switch URL is outside repository root"));
+    assert!(err.contains("file:///outside-repository/trunk"));
+    assert!(err.contains(&fixture.url()));
+    assert!(editor.events.is_empty());
+}
+
+#[test]
 fn linked_backend_do_update_clears_removed_file_properties() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

@@ -1546,8 +1546,36 @@ impl RaSession for LibSvnBackend {
         switch_url: &str,
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        ensure_switch_url_in_repository(self.url.as_deref(), switch_url)?;
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
         let _ = switch_url;
+
         self.do_update(path, revision, editor)
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn ensure_switch_url_in_repository(
+    repository_url: Option<&str>,
+    switch_url: &str,
+) -> Result<(), String> {
+    let repository_url = repository_url
+        .ok_or_else(|| "libsvn backend requires an SVN repository URL".to_string())?;
+    let repository_url = repository_url.trim_end_matches('/');
+    let switch_url = switch_url.trim_end_matches('/');
+    let is_same_repository = switch_url == repository_url
+        || switch_url
+            .strip_prefix(repository_url)
+            .is_some_and(|suffix| suffix.starts_with('/'));
+
+    if is_same_repository {
+        Ok(())
+    } else {
+        Err(format!(
+            "switch URL is outside repository root: {switch_url} (root: {repository_url})"
+        ))
     }
 }
 
