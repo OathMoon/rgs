@@ -859,6 +859,7 @@ unsafe fn changed_path_to_rust(
         },
         copy_from_rev: u32::try_from(changed_path.copyfrom_rev).ok(),
         kind: node_kind_from_raw(changed_path.node_kind),
+        properties_modified: changed_path.props_modified == 1,
         properties: BTreeMap::new(),
         content: None,
     })
@@ -923,6 +924,11 @@ unsafe fn fill_file_details(
                 let file_path = session_relative_path(session_path, &path.path);
                 let (content, properties) =
                     unsafe { get_file(session, pool, &file_path, revision_number) }?;
+                if path.action == ChangeAction::Modify && revision_number > 0 {
+                    let (_, previous_properties) =
+                        unsafe { get_file(session, pool, &file_path, revision_number - 1) }?;
+                    path.properties_modified = properties != previous_properties;
+                }
                 path.content = Some(content);
                 path.properties = properties;
             }
@@ -934,6 +940,12 @@ unsafe fn fill_file_details(
                 let directory_path = session_relative_path(session_path, &path.path);
                 let (_, properties) =
                     unsafe { dir_listing(session, pool, &directory_path, revision_number) }?;
+                if path.action == ChangeAction::Modify && revision_number > 0 {
+                    let (_, previous_properties) = unsafe {
+                        dir_listing(session, pool, &directory_path, revision_number - 1)
+                    }?;
+                    path.properties_modified = properties != previous_properties;
+                }
                 path.properties = properties;
             }
 
@@ -962,6 +974,7 @@ unsafe fn fill_file_details(
                         .map(|source| format!("{}/{}", source.trim_end_matches('/'), relative)),
                     copy_from_rev: path.copy_from_rev,
                     kind: NodeKind::File,
+                    properties_modified: true,
                     properties,
                     content: Some(content),
                 });
@@ -1238,7 +1251,7 @@ fn replay_revision(
                             .as_ref()
                             .map(|(path, revision)| (path.as_str(), *revision)),
                     )?;
-                    replay_directory_details(&editor_path, changed_path, editor)?
+                    replay_directory_details(&editor_path, changed_path, editor, true)?
                 }
                 NodeKind::File | NodeKind::Symlink => {
                     let copy_from =
@@ -1249,14 +1262,24 @@ fn replay_revision(
                             .as_ref()
                             .map(|(path, revision)| (path.as_str(), *revision)),
                     )?;
-                    replay_file_details(&editor_path, changed_path, editor)?;
+                    replay_file_details(&editor_path, changed_path, editor, true)?;
                 }
             },
             ChangeAction::Modify => {
                 if matches!(changed_path.kind, NodeKind::File | NodeKind::Symlink) {
-                    replay_file_details(&editor_path, changed_path, editor)?;
+                    replay_file_details(
+                        &editor_path,
+                        changed_path,
+                        editor,
+                        changed_path.properties_modified,
+                    )?;
                 } else if changed_path.kind == NodeKind::Directory {
-                    replay_directory_details(&editor_path, changed_path, editor)?;
+                    replay_directory_details(
+                        &editor_path,
+                        changed_path,
+                        editor,
+                        changed_path.properties_modified,
+                    )?;
                 }
             }
         }
@@ -1269,9 +1292,12 @@ fn replay_directory_details(
     editor_path: &str,
     changed_path: &ChangedPath,
     editor: &mut dyn FetchEditor,
+    include_properties: bool,
 ) -> Result<(), String> {
-    for (name, value) in &changed_path.properties {
-        editor.change_directory_prop(editor_path, name, Some(value))?;
+    if include_properties {
+        for (name, value) in &changed_path.properties {
+            editor.change_directory_prop(editor_path, name, Some(value))?;
+        }
     }
     Ok(())
 }
@@ -1281,17 +1307,20 @@ fn replay_file_details(
     editor_path: &str,
     changed_path: &ChangedPath,
     editor: &mut dyn FetchEditor,
+    include_properties: bool,
 ) -> Result<(), String> {
-    for &name in SUPPORTED_FILE_PROPS_WITH_REMOVALS {
-        editor.change_file_prop(
-            editor_path,
-            name,
-            changed_path.properties.get(name).map(String::as_str),
-        )?;
-    }
-    for (name, value) in &changed_path.properties {
-        if !SUPPORTED_FILE_PROPS_WITH_REMOVALS.contains(&name.as_str()) {
-            editor.change_file_prop(editor_path, name, Some(value))?;
+    if include_properties {
+        for &name in SUPPORTED_FILE_PROPS_WITH_REMOVALS {
+            editor.change_file_prop(
+                editor_path,
+                name,
+                changed_path.properties.get(name).map(String::as_str),
+            )?;
+        }
+        for (name, value) in &changed_path.properties {
+            if !SUPPORTED_FILE_PROPS_WITH_REMOVALS.contains(&name.as_str()) {
+                editor.change_file_prop(editor_path, name, Some(value))?;
+            }
         }
     }
     if let Some(content) = &changed_path.content {

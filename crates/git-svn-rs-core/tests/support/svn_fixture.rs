@@ -184,6 +184,33 @@ impl StandardSvnFixture {
     }
 
     #[allow(dead_code)]
+    pub fn modify_run_script_content(&self, content: &str) -> Result<u32, String> {
+        let wc = self._tmp.path().join("modify-run-script-content-wc");
+        run(
+            self._tmp.path(),
+            "svn",
+            &[
+                "checkout",
+                "--non-interactive",
+                self.url().as_str(),
+                path_arg(&wc)?,
+            ],
+        )?;
+        std::fs::write(wc.join("trunk/run.sh"), content).map_err(|e| e.to_string())?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "commit",
+                "--non-interactive",
+                "-m",
+                "modify run script content",
+            ],
+        )?;
+        Ok(self.latest_revision())
+    }
+
+    #[allow(dead_code)]
     pub fn remove_run_script_property(&self, name: &str, message: &str) -> Result<u32, String> {
         let wc = self._tmp.path().join("remove-executable-wc");
         run(

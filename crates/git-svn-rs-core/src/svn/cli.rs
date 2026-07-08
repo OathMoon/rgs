@@ -243,6 +243,7 @@ impl SvnBackend for SvnCliBackend {
                             }),
                             copy_from_rev: path.copy_from_rev,
                             kind: NodeKind::File,
+                            properties_modified: true,
                             properties: self.file_properties(&file_path, revision.revision)?,
                             content: Some(self.cat(&file_path, revision.revision)?),
                         });
@@ -320,6 +321,7 @@ fn parse_changed_paths(body: &str) -> Result<Vec<ChangedPath>, String> {
                 .map(|value| value.parse().map_err(|e: ParseIntError| e.to_string()))
                 .transpose()?,
             kind: parse_kind(attr(header, "kind").as_deref()),
+            properties_modified: true,
             properties: BTreeMap::new(),
             content: None,
         });
