@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `d36cb2b test: cover libsvn svnserve switches`
+- Latest implementation commit: `d29adce test: cover svnserve directory properties`
 - Worktree before this update: clean after implementation commit
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -76,6 +76,8 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `1d3dd39`: linked libsvn authenticated `svnserve` coverage now includes missing and wrong credential failures while preserving native `svn_ra_open5` diagnostic context.
 - `b93a333`: linked libsvn log-backed update replay now handles sessions opened on repository subpaths by using session-relative native content reads while matching repository-relative changed paths.
 - `d36cb2b`: linked libsvn local `svn://` coverage now validates `do_switch()` branch-copy replay in addition to metadata, log, and update replay.
+- `69c2234`: linked libsvn authenticated local `svn://` coverage now validates path-filtered log reads and `do_update()` replay with explicit credentials and no auth cache.
+- `d29adce`: linked libsvn local `svn://` coverage now validates directory property reads via `get_dir()` and corresponding directory-change log visibility.
 
 ## Completed Capabilities
 
@@ -162,7 +164,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 ## Remaining Work
 
-- Continue the real `svn-libsvn` backend beyond native version, RA repository metadata/root reads, read-only `RaSession` methods, RA log metadata, changed-file content/property reads, copied-directory file materialization, config-dir propagation, basic auth baton support with local `svnserve` success/failure coverage, local `svn://` update/switch replay validation, initial path-compatible log-backed `do_update`/`do_switch` replay, subpath update replay, `do_switch()` repository-root URL validation, and switch URL source-path mapping; remaining backend work includes true libsvn delta editor integration, richer auth prompt/provider flows, broader remote service validation, and deeper libsvn error/session handling.
+- Continue the real `svn-libsvn` backend beyond native version, RA repository metadata/root reads, read-only `RaSession` methods, RA log metadata, changed-file content/property reads, copied-directory file materialization, config-dir propagation, basic auth baton support with local `svnserve` success/failure and replay coverage, local `svn://` update/switch replay validation, local `svn://` directory property/log validation, initial path-compatible log-backed `do_update`/`do_switch` replay, subpath update replay, `do_switch()` repository-root URL validation, and switch URL source-path mapping; remaining backend work includes true libsvn delta editor integration, richer auth prompt/provider flows, broader remote service validation, and deeper libsvn error/session handling.
 - Current `svn-libsvn` feature builds and runs a vcpkg Subversion link probe; this environment links when `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and the vcpkg `installed\x64-windows\bin` directory is on `PATH`.
 - Broaden replay-backed `clone`/`fetch` validation beyond local `file://` and authenticated local `svn://`, especially non-local remote auth/service scenarios and full RA editor integration.
 - Continue hardening branch/tag/copy, absent path, empty-directory, executable, symlink, and `git-svn-id` behavior against non-local SVN servers.
@@ -198,6 +200,9 @@ Important targeted suites recorded as passing during recent work:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_subpath_session_do_update_replays_relative_paths -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_switches_local_svnserve_repository -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_replays_local_svnserve_repository -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_replays_authenticated_svnserve_with_credentials -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_svnserve_get_dir_reads_directory_properties_and_logs_change -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_get_dir_reads_directory_properties -- --nocapture`
 - With the same vcpkg environment: `cargo clippy -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- -D warnings`
 - Recent focused default suites: `cargo test -p git-svn-rs --test readonly_commands -- --nocapture`, `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`, `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`, `cargo test -p git-svn-rs-core --test import_mock -- --nocapture`, `cargo test -p git-svn-rs-core --test fetch_editor`, `cargo test -p git-svn-rs-core --test git_backend -- --nocapture`, and `cargo test -p git-svn-rs-core --test fast_import`
 
@@ -208,6 +213,6 @@ Compatibility notes:
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including manual strict compatibility mode.
 ## Recommended Next Steps
 
-1. Continue Phase 4/7 production backend work in the configured vcpkg/libsvn environment, likely with the next small RA/session slice around authenticated replay operations, remote `svnserve` directory-property/log validation, or deeper native delta-editor integration.
+1. Continue Phase 4/7 production backend work in the configured vcpkg/libsvn environment, likely with the next slice around deeper native delta-editor integration, broader non-local remote validation, or remaining libsvn auth/provider prompt behavior.
 2. Expand strict compatibility runs in environments with Perl git-svn, SVN CLI, and `svnserve`.
 3. Add remaining golden edge cases around remote layouts, refs/config metadata, rev_map records, command output, and property behavior.
