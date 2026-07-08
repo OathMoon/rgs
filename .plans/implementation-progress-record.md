@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `0e57d2c feat: bind libsvn update reporter`
+- Latest implementation commit: `d3d23ea feat: type libsvn editor callbacks`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -88,6 +88,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `6e96ad59`: linked libsvn log-backed update replay now tracks whether file content changed, compares previous/current content when native log flags are unknown, and avoids emitting textdelta callbacks for property-only file edits.
 - `b5e9659`: linked libsvn builds now bind the native `svn_delta_default_editor()` surface and validate the installed `svn_delta_editor_t` layout includes the `apply_textdelta_stream` tail slot needed for future `svn_ra_do_update3` integration.
 - `0e57d2c`: linked libsvn builds now bind the native `svn_ra_do_update3()` reporter surface and validate a minimal `file://` repository update report can `set_path` and `finish_report` through the default delta editor.
+- `d3d23ea`: linked libsvn delta-editor scaffolding now types the `set_target_revision` and `close_edit` callback slots and validates patched callbacks are invoked by a native `svn_ra_do_update3()` report.
 
 ## Completed Capabilities
 
@@ -137,6 +138,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn log-backed replay also suppresses unchanged text callbacks for property-only file edits, while preserving textdelta callbacks for content edits.
 - Linked libsvn now has the first native delta-editor FFI scaffold in place: the default editor template can be allocated and its modern `apply_textdelta_stream` slot is visible in the Rust layout.
 - Linked libsvn now has the first native update-reporter FFI scaffold in place: a minimal `svn_ra_do_update3()` report can be driven against a local `file://` repository with the default delta editor.
+- Linked libsvn native update scaffolding can now patch and observe delta-editor lifecycle callbacks (`set_target_revision` and `close_edit`) during a real `svn_ra_do_update3()` report.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
@@ -233,6 +235,7 @@ Important targeted suites recorded as passing during recent work:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_rejects_authenticated_svnserve -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::default_delta_editor_exposes_textdelta_stream_slot -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_reporter_finishes_with_default_delta_editor -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_ -- --nocapture`
 - `cargo test -p git-svn-rs-core --test libsvn_backend linked_backend_prompts_for_authenticated_svnserve_credentials -- --nocapture` (default build compiles the test target and filters out the linked-only test)
 - `cargo test -p git-svn-rs-core --test auth_prompt`
 - `cargo test -p git-svn-rs-core --test fetch_editor`
