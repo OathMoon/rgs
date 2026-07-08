@@ -639,6 +639,56 @@ fn linked_backend_reads_authenticated_svnserve_with_credentials() {
 }
 
 #[test]
+fn linked_backend_rejects_authenticated_svnserve_without_credentials() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let backend = LibSvnBackend::for_url(svnserve.repo_url()).without_auth_cache();
+
+    let err = SvnBackend::latest_revnum(&backend).unwrap_err();
+
+    assert!(err.contains("svn_ra_open5 failed"), "{err}");
+}
+
+#[test]
+fn linked_backend_rejects_authenticated_svnserve_with_wrong_credentials() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let backend = LibSvnBackend::for_url(svnserve.repo_url())
+        .with_credentials("alice", "wrong")
+        .without_auth_cache();
+
+    let err = SvnBackend::latest_revnum(&backend).unwrap_err();
+
+    assert!(err.contains("svn_ra_open5 failed"), "{err}");
+}
+
+#[test]
 fn linked_backend_reads_log_metadata_and_changed_paths() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
