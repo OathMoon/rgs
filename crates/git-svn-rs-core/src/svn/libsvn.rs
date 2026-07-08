@@ -550,6 +550,22 @@ type SvnDeltaCloseFileFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnTxdeltaWindowHandlerFunc = Option<
+    unsafe extern "C" fn(window: *mut SvnTxdeltaWindowT, baton: *mut c_void) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaApplyTextdeltaFunc = Option<
+    unsafe extern "C" fn(
+        file_baton: *mut c_void,
+        base_checksum: *const c_char,
+        result_pool: *mut AprPoolT,
+        handler: *mut SvnTxdeltaWindowHandlerFunc,
+        handler_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 #[repr(C)]
 struct SvnDeltaEditorT {
@@ -563,7 +579,7 @@ struct SvnDeltaEditorT {
     absent_directory: *mut c_void,
     add_file: SvnDeltaAddFileFunc,
     open_file: *mut c_void,
-    apply_textdelta: *mut c_void,
+    apply_textdelta: SvnDeltaApplyTextdeltaFunc,
     change_file_prop: *mut c_void,
     close_file: SvnDeltaCloseFileFunc,
     absent_file: *mut c_void,
@@ -656,6 +672,9 @@ enum AprHashIndexT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 enum SvnStreamT {}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+enum SvnTxdeltaWindowT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 #[repr(C)]
@@ -2108,6 +2127,12 @@ mod tests {
     static ADDED_FILE_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     #[cfg(git_svn_rs_libsvn_linked)]
     static CLOSED_FILE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static TEXTDELTA_DONE_WINDOWS: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn backend_without_url_reports_expected_error() {
@@ -2283,6 +2308,40 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_textdelta_callbacks() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
+        APPLY_TEXTDELTA_CALLBACKS.store(0, Ordering::SeqCst);
+        TEXTDELTA_WINDOWS.store(0, Ordering::SeqCst);
+        TEXTDELTA_DONE_WINDOWS.store(0, Ordering::SeqCst);
+
+        drive_update_report(
+            &backend,
+            2,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).add_file = Some(record_add_file);
+                (*editor).apply_textdelta = Some(record_apply_textdelta);
+                (*editor).close_file = Some(record_close_file);
+            },
+        )
+        .unwrap();
+
+        assert_eq!(APPLY_TEXTDELTA_CALLBACKS.load(Ordering::SeqCst), 1);
+        assert!(TEXTDELTA_WINDOWS.load(Ordering::SeqCst) > 0);
+        assert_eq!(TEXTDELTA_DONE_WINDOWS.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     fn drive_update_report(
         backend: &LibSvnBackend,
         revision: c_long,
@@ -2438,6 +2497,35 @@ mod tests {
         if !file_baton.is_null() {
             let baton = unsafe { &mut *(file_baton as *mut RecordingEditorBaton) };
             baton.closed_files += 1;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_apply_textdelta(
+        _file_baton: *mut c_void,
+        _base_checksum: *const c_char,
+        _result_pool: *mut AprPoolT,
+        handler: *mut SvnTxdeltaWindowHandlerFunc,
+        handler_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        APPLY_TEXTDELTA_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            *handler = Some(record_textdelta_window);
+            *handler_baton = ptr::null_mut();
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_textdelta_window(
+        window: *mut SvnTxdeltaWindowT,
+        _baton: *mut c_void,
+    ) -> *mut svn_error_t {
+        if window.is_null() {
+            TEXTDELTA_DONE_WINDOWS.fetch_add(1, Ordering::SeqCst);
+        } else {
+            TEXTDELTA_WINDOWS.fetch_add(1, Ordering::SeqCst);
         }
         ptr::null_mut()
     }
