@@ -200,6 +200,36 @@ fn linked_backend_subpath_session_reports_repository_root_and_relative_paths() {
 }
 
 #[test]
+fn linked_backend_subpath_session_do_update_replays_relative_paths() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let session = LibSvnBackend::for_url(format!("{}/trunk", fixture.url()));
+    let mut editor = RecordingFetchEditor::default();
+
+    session.do_update("src/lib.rs", 2, &mut editor).unwrap();
+
+    assert!(editor.events.contains(&"open_root:2".to_string()));
+    assert!(editor.events.contains(&"add_file:src/lib.rs".to_string()));
+    assert!(
+        editor
+            .events
+            .contains(&"apply_textdelta:src/lib.rs:29".to_string())
+    );
+    assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
 fn linked_backend_get_dir_reads_directory_properties() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

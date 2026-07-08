@@ -275,13 +275,22 @@ impl LibSvnBackend {
         revision: u32,
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
+        let session_path = self.session_repository_path();
+        let replay_source_path = join_ra_paths(&session_path, source_path);
         self.with_session(|session, pool| unsafe {
-            let revisions = get_log(session, pool, &[source_path], revision, revision)?;
+            let revisions = get_log(
+                session,
+                pool,
+                &session_path,
+                &[source_path],
+                revision,
+                revision,
+            )?;
             let revision_event = revisions
                 .iter()
                 .find(|event| event.revision == revision)
                 .ok_or_else(|| format!("SVN revision r{revision} was not found"))?;
-            replay_revision(revision_event, source_path, target_path, editor)
+            replay_revision(revision_event, &replay_source_path, target_path, editor)
         })
     }
 
@@ -298,6 +307,15 @@ impl LibSvnBackend {
             }
             Ok(CStr::from_ptr(repos_root).to_string_lossy().into_owned())
         })
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn session_repository_path(&self) -> String {
+        let Some(url) = self.url.as_deref() else {
+            return String::new();
+        };
+        let root = self.repos_root();
+        url_path_in_repository(Some(root), url, "session URL").unwrap_or_default()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -712,6 +730,7 @@ fn svn_node_kind_from_change_kind(kind: &NodeKind) -> SvnNodeKind {
 unsafe fn fill_file_details(
     session: *mut SvnRaSessionT,
     pool: *mut AprPoolT,
+    session_path: &str,
     revisions: &mut [RevisionEvent],
 ) -> Result<(), String> {
     for revision in revisions {
@@ -733,8 +752,9 @@ unsafe fn fill_file_details(
                 ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
             ) && path.kind == NodeKind::File
             {
+                let file_path = session_relative_path(session_path, &path.path);
                 let (content, properties) =
-                    unsafe { get_file(session, pool, &path.path, revision_number) }?;
+                    unsafe { get_file(session, pool, &file_path, revision_number) }?;
                 path.content = Some(content);
                 path.properties = properties;
             }
@@ -745,13 +765,16 @@ unsafe fn fill_file_details(
             {
                 continue;
             }
-            for relative in unsafe { list_files(session, pool, &path.path, revision_number) }? {
+            let directory_path = session_relative_path(session_path, &path.path);
+            for relative in unsafe { list_files(session, pool, &directory_path, revision_number) }?
+            {
                 let file_path = format!("{}/{}", path.path.trim_end_matches('/'), relative);
                 if !known_paths.insert(file_path.clone()) {
                     continue;
                 }
+                let file_session_path = session_relative_path(session_path, &file_path);
                 let (content, properties) =
-                    unsafe { get_file(session, pool, &file_path, revision_number) }?;
+                    unsafe { get_file(session, pool, &file_session_path, revision_number) }?;
                 copied_files.push(ChangedPath {
                     path: file_path,
                     action: ChangeAction::Add,
@@ -910,6 +933,7 @@ unsafe fn dir_listing(
 unsafe fn get_log(
     session: *mut SvnRaSessionT,
     pool: *mut AprPoolT,
+    session_path: &str,
     paths: &[&str],
     start: u32,
     end: u32,
@@ -977,7 +1001,7 @@ unsafe fn get_log(
             ),
             "svn_ra_get_log2",
         )?;
-        fill_file_details(session, pool, &mut revisions)?;
+        fill_file_details(session, pool, session_path, &mut revisions)?;
     }
     Ok(revisions)
 }
@@ -1482,7 +1506,10 @@ impl SvnBackend for LibSvnBackend {
     fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
         #[cfg(git_svn_rs_libsvn_linked)]
         {
-            self.with_session(|session, pool| unsafe { get_log(session, pool, &[], start, end) })
+            let session_path = self.session_repository_path();
+            self.with_session(|session, pool| unsafe {
+                get_log(session, pool, &session_path, &[], start, end)
+            })
         }
 
         #[cfg(not(git_svn_rs_libsvn_linked))]
@@ -1588,7 +1615,10 @@ impl RaSession for LibSvnBackend {
     fn get_log(&self, paths: &[&str], start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
         #[cfg(git_svn_rs_libsvn_linked)]
         {
-            self.with_session(|session, pool| unsafe { get_log(session, pool, paths, start, end) })
+            let session_path = self.session_repository_path();
+            self.with_session(|session, pool| unsafe {
+                get_log(session, pool, &session_path, paths, start, end)
+            })
         }
 
         #[cfg(not(git_svn_rs_libsvn_linked))]
@@ -1642,25 +1672,63 @@ fn switch_url_path_in_repository(
     repository_url: Option<&str>,
     switch_url: &str,
 ) -> Result<String, String> {
+    url_path_in_repository(repository_url, switch_url, "switch URL")
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn url_path_in_repository(
+    repository_url: Option<&str>,
+    url: &str,
+    url_label: &str,
+) -> Result<String, String> {
     let repository_url = repository_url
         .ok_or_else(|| "libsvn backend requires an SVN repository URL".to_string())?;
     let repository_url = repository_url.trim_end_matches('/');
-    let switch_url = switch_url.trim_end_matches('/');
-    let is_same_repository = switch_url == repository_url
-        || switch_url
+    let url = url.trim_end_matches('/');
+    let is_same_repository = url == repository_url
+        || url
             .strip_prefix(repository_url)
             .is_some_and(|suffix| suffix.starts_with('/'));
 
-    if switch_url == repository_url {
+    if url == repository_url {
         Ok(String::new())
     } else if is_same_repository {
-        Ok(switch_url[repository_url.len()..]
+        Ok(url[repository_url.len()..]
             .trim_start_matches('/')
             .to_string())
     } else {
         Err(format!(
-            "switch URL is outside repository root: {switch_url} (root: {repository_url})"
+            "{url_label} is outside repository root: {url} (root: {repository_url})"
         ))
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn join_ra_paths(base: &str, path: &str) -> String {
+    let base = base.trim_matches('/');
+    let path = path.trim_matches('/');
+    match (base.is_empty(), path.is_empty()) {
+        (true, true) => String::new(),
+        (true, false) => path.to_string(),
+        (false, true) => base.to_string(),
+        (false, false) => format!("{base}/{path}"),
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn session_relative_path(session_path: &str, repository_path: &str) -> String {
+    let session_path = session_path.trim_matches('/');
+    let repository_path = repository_path.trim_matches('/');
+    if session_path.is_empty() {
+        return repository_path.to_string();
+    }
+
+    if repository_path == session_path {
+        String::new()
+    } else if let Some(path) = repository_path.strip_prefix(&format!("{session_path}/")) {
+        path.to_string()
+    } else {
+        repository_path.to_string()
     }
 }
 
