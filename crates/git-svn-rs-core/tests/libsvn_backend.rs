@@ -643,6 +643,53 @@ fn linked_backend_replays_local_svnserve_repository() {
 }
 
 #[test]
+fn linked_backend_switches_local_svnserve_repository() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let session = LibSvnBackend::for_url(svnserve.repo_url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session
+        .do_switch(
+            "branches/main",
+            3,
+            &format!("{}/branches/main", svnserve.repo_url()),
+            &mut editor,
+        )
+        .unwrap();
+
+    assert!(editor.events.contains(&"open_root:3".to_string()));
+    assert!(
+        editor
+            .events
+            .contains(&"add_directory:branches/main<-trunk@1".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"add_file:branches/main/src/lib.rs<-trunk/src/lib.rs@2".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"apply_textdelta:branches/main/src/lib.rs:29".to_string())
+    );
+    assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
 fn linked_backend_reads_authenticated_svnserve_with_credentials() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
