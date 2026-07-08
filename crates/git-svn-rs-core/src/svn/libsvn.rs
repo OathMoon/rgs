@@ -1069,7 +1069,8 @@ fn replay_revision(
                         copy_from
                             .as_ref()
                             .map(|(path, revision)| (path.as_str(), *revision)),
-                    )?
+                    )?;
+                    replay_directory_details(&editor_path, changed_path, editor)?
                 }
                 NodeKind::File | NodeKind::Symlink => {
                     let copy_from =
@@ -1086,11 +1087,25 @@ fn replay_revision(
             ChangeAction::Modify => {
                 if matches!(changed_path.kind, NodeKind::File | NodeKind::Symlink) {
                     replay_file_details(&editor_path, changed_path, editor)?;
+                } else if changed_path.kind == NodeKind::Directory {
+                    replay_directory_details(&editor_path, changed_path, editor)?;
                 }
             }
         }
     }
     editor.close_edit()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn replay_directory_details(
+    editor_path: &str,
+    changed_path: &ChangedPath,
+    editor: &mut dyn FetchEditor,
+) -> Result<(), String> {
+    for (name, value) in &changed_path.properties {
+        editor.change_directory_prop(editor_path, name, Some(value))?;
+    }
+    Ok(())
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]

@@ -9,6 +9,15 @@ pub trait FetchEditor {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), String>;
+    fn change_directory_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        let _ = (path, name, value);
+        Ok(())
+    }
     fn apply_textdelta(&mut self, path: &str, content: &[u8]) -> Result<(), String>;
     fn close_edit(&mut self) -> Result<(), String>;
 }

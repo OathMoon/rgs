@@ -612,6 +612,36 @@ fn linked_backend_do_update_clears_removed_needs_lock_property() {
 }
 
 #[test]
+fn linked_backend_do_update_reports_directory_properties() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture
+        .set_trunk_dir_property("custom:dir-prop", "dir-value")
+        .unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session.do_update("trunk", revision, &mut editor).unwrap();
+
+    assert!(
+        editor
+            .events
+            .contains(&"change_directory_prop:trunk:custom:dir-prop=dir-value".to_string())
+    );
+}
+
+#[test]
 fn linked_backend_replays_local_svnserve_repository() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
@@ -985,6 +1015,19 @@ impl FetchEditor for RecordingFetchEditor {
     ) -> Result<(), String> {
         self.events.push(format!(
             "change_file_prop:{path}:{name}={}",
+            value.unwrap_or_default()
+        ));
+        Ok(())
+    }
+
+    fn change_directory_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        self.events.push(format!(
+            "change_directory_prop:{path}:{name}={}",
             value.unwrap_or_default()
         ));
         Ok(())
