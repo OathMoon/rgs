@@ -716,6 +716,46 @@ fn linked_backend_reads_authenticated_svnserve_with_credentials() {
 }
 
 #[test]
+fn linked_backend_replays_authenticated_svnserve_with_credentials() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let svnserve = SvnServe::start(fixture.root()).unwrap();
+    let backend = LibSvnBackend::for_url(svnserve.repo_url())
+        .with_credentials("alice", "secret")
+        .without_auth_cache();
+    let mut editor = RecordingFetchEditor::default();
+
+    let trunk_log = backend.get_log(&["trunk"], 1, 2).unwrap();
+    assert!(trunk_log.iter().any(|revision| revision.revision == 2));
+    assert!(!trunk_log.iter().any(|revision| revision.revision == 3));
+
+    backend.do_update("trunk", 2, &mut editor).unwrap();
+    assert!(
+        editor
+            .events
+            .contains(&"add_file:trunk/src/lib.rs".to_string())
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"apply_textdelta:trunk/src/lib.rs:29".to_string())
+    );
+    assert!(editor.events.contains(&"close_edit".to_string()));
+}
+
+#[test]
 fn linked_backend_rejects_authenticated_svnserve_without_credentials() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
