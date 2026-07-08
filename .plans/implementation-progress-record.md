@@ -166,133 +166,27 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 ## Verification Evidence
 
-Latest full gates recorded as passing:
+Recent full gates recorded as passing:
 
 - `cargo fmt --check`
 - `cargo test --workspace`
 - `cargo test -p git-svn-rs-core --features svn-libsvn`
-- `cargo test -p git-svn-rs-core --features svn-libsvn libsvn -- --nocapture`
-- `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
-- `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend backend_reports_native_version_when_linked -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_file_repository_metadata -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_implements_ra_session_read_methods -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_drives_fetch_editor_callbacks -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_switch_drives_fetch_editor_callbacks -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_ -- --nocapture` (covers normalized replay callback paths and copy-from paths)
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_replays_local_svnserve_repository -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_clears_removed_file_properties -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_do_update_clears_removed_needs_lock_property -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_get_dir_reads_directory_properties -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_log_reads_needs_lock_file_property -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_log_reads_textual_file_properties -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_metadata_with_config_dir_from_remote_config -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_authenticated_svnserve_with_credentials -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend linked_backend_reads_log_metadata_and_changed_paths -- --nocapture` (covers changed-path metadata, file content, `svn:executable`/`svn:special` file properties, and copied-directory file materialization)
-- `cargo test -p git-svn-rs-core commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
-- `cargo test -p git-svn-rs-core commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
-- `cargo test -p git-svn-rs-core svn::cli::tests::backend_command_args_include_auth_and_config_options -- --nocapture`
-- `cargo test -p git-svn-rs-core --test import_mock imports_ra_session_update_into_git_and_rev_map`
-- `cargo test -p git-svn-rs-core --test import_mock ra_import_filters_revisions_per_mapping_before_replay`
-- `cargo test -p git-svn-rs-core --test import_mock ra_import_applies_path_filters_to_editor_changes`
-- `cargo test -p git-svn-rs-core --test import_mock ra_import_preserves_empty_directories_with_placeholder`
-- `cargo test -p git-svn-rs-core --test import_mock`
-- `cargo test -p git-svn-rs-core --test fetch_editor`
-- `cargo test -p git-svn-rs-core --test fetch_editor commit_plan_can_carry_parent_ref_for_incremental_editor_import`
-- `cargo test -p git-svn-rs-core --test fetch_editor editor_can_load_base_tree_from_git_ref`
-- `cargo test -p git-svn-rs-core --test git_backend --test fetch_editor`
-- `cargo clippy -p git-svn-rs-core --test fetch_editor -- -D warnings`
-- `cargo clippy -p git-svn-rs-core --test import_mock --test ra_session_mock --test fetch_editor -- -D warnings`
-- `cargo clippy -p git-svn-rs-core --test fetch_editor --test git_backend -- -D warnings`
-- `cargo clippy -p git-svn-rs-core -- -D warnings`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo clippy -p git-svn-rs-core --features svn-libsvn -- -D warnings`
-- `cargo test -p git-svn-rs-core commands::dcommit::tests::dcommit_svn_options_apply_command_line_auth_overrides -- --nocapture`
-- `cargo test -p git-svn-rs-core svn::cli::tests::backend_command_args_include_auth_and_config_options -- --nocapture`
-- `cargo test -p git-svn-rs-core --test cli_parse parses_dcommit_auth_options -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn commands::dcommit::tests::dcommit_svn_options_apply_command_line_auth_overrides -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn svn::cli::tests::backend_command_args_include_auth_and_config_options -- --nocapture`
-- `cargo test -p git-svn-rs --no-default-features --test clone_fetch_real_svn -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_prefers_linked_libsvn_and_otherwise_uses_svn_cli`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_applies_command_line_username_without_password`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_applies_command_line_config_dir_override`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn commands::fetch::tests::configured_backend_applies_command_line_password_without_username`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_stdlayout_authenticated_svn_url_imports_with_password -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_file_url_imports_trunk_history_after_init -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_stdlayout_svn_url_imports_branch_tag_and_copy_contents_after_init -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_file_url_applies_ignore_paths_filter -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_file_url_applies_include_paths_filter -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn clone_stdlayout_file_url_preserves_empty_dirs_when_requested -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn fetch_file_url_preserves_empty_dirs_from_persisted_config -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo clippy -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- -D warnings`
-- `cargo fmt --check`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- --nocapture`
-- `cargo clippy -p git-svn-rs-core -- -D warnings`
-- With the same vcpkg environment: `cargo clippy -p git-svn-rs-core --features svn-libsvn --test libsvn_backend -- -D warnings`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test diagnostics -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test fetch_editor`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn --test import_mock imports_ra_session_update_into_git_and_rev_map`
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `powershell -ExecutionPolicy Bypass -File scripts\verify.ps1`
 
-Important targeted suites recorded as passing during this work:
+Important targeted suites recorded as passing during recent work:
 
-- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`
-- `cargo test -p git-svn-rs --test clone_fetch_real_svn clone_stdlayout_authenticated_svn_url_imports_with_password -- --nocapture`
-- `cargo test -p git-svn-rs --test readonly_commands -- --nocapture` (39 tests; includes SVN-style verbose log paths and `gc` unhandled/index cleanup)
-- `cargo test -p git-svn-rs --test readonly_commands info_url_resolves_branch_from_branches_mapping -- --nocapture`
-- `cargo test -p git-svn-rs --test readonly_commands log_short_limit_returns_latest_svn_revisions -- --nocapture`
-- `cargo test -p git-svn-rs --test readonly_commands log_revision_reverse_range_filters_to_requested_svn_revisions -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_revision_option_does_not_limit_post_commit_fetch_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_linear_commit_to_svnserve_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_to_authenticated_svnserve_with_password_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_fetches_after_authenticated_svnserve_write_when_reads_require_auth -- --nocapture`
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs --features svn-libsvn --test dcommit_linear dcommit_writes_linear_commit_to_svnserve_when_tools_exist -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs --features svn-libsvn --test dcommit_linear dcommit_fetches_after_authenticated_svnserve_write_when_reads_require_auth -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_without_dry_run_is_guarded_for_non_mock_urls -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_honors_command_line_svn_config_auto_props_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_honors_svn_config_auto_props_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_valued_executable_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_valued_special_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_boolean_executable_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_boolean_special_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_needs_lock_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_writes_boolean_needs_lock_from_gitattributes_to_file_svn_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test dcommit_linear dcommit_direct_gitattributes_property_can_be_cleared_by_later_rule_when_tools_exist -- --nocapture`
-- `cargo test -p git-svn-rs --test clone_fetch_smoke -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden artifact_comparison_reports_supported_subset_mismatches -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden supported_rev_map_reads_sha256_records -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden supported_config_includes_optional_branch_and_tag_mappings -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden optional_config_values -- --nocapture`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (23 tests; includes optional config metadata/auth coverage and one-`+` refspec normalization)
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; includes rev_map filename UUID snapshots)
+- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; covers optional config/auth metadata, rev_map filename UUID snapshots, textual SVN properties, stdlayout tree contents, and forward/reverse revision-range log golden output)
 - `cargo clippy -p git-svn-rs-core --test compat_golden -- -D warnings`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; includes textual SVN property fixture coverage)
-- `cargo fmt --check`
-- `cargo clippy -p git-svn-rs-core --test compat_golden -- -D warnings`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; includes stdlayout ref-tip tree content checks)
-- `cargo clippy -p git-svn-rs-core --test compat_golden -- -D warnings`
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; includes revision range log golden output)
-- `cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (24 tests; includes reverse revision range log golden output)
-- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::svn_call_reports_child_error_messages -- --nocapture`
+- With `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `PATH` including `E:\vcpkg\installed\x64-windows\bin`: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::svn_call_ -- --nocapture`
 - With the same vcpkg environment: `cargo clippy -p git-svn-rs-core --features svn-libsvn -- -D warnings`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::svn_call_ -- --nocapture`
-- `cargo test -p git-svn-rs-core --test import_mock -- --nocapture`
-- `cargo test -p git-svn-rs-core --test dcommit_diff_planner -- --nocapture`
-- `cargo test -p git-svn-rs-core --test git_backend -- --nocapture`
-- `cargo test -p git-svn-rs-core --test fast_import`
+- Recent focused default suites: `cargo test -p git-svn-rs --test readonly_commands -- --nocapture`, `cargo test -p git-svn-rs --test dcommit_linear -- --nocapture`, `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture`, `cargo test -p git-svn-rs-core --test import_mock -- --nocapture`, `cargo test -p git-svn-rs-core --test fetch_editor`, `cargo test -p git-svn-rs-core --test git_backend -- --nocapture`, and `cargo test -p git-svn-rs-core --test fast_import`
 
 Compatibility notes:
 
 - Perl comparisons skip when Perl git-svn is unavailable unless strict compatibility mode is enabled.
-- `scripts/verify.ps1` passes when allowed enough runtime; one earlier short tool timeout interrupted `cargo test --workspace` and produced a transient BrokenPipe.
+- vcpkg/libsvn verification requires `VCPKG_ROOT=E:\vcpkg`, `VCPKG_DEFAULT_TRIPLET=x64-windows`, `VCPKGRS_DYNAMIC=1`, and `E:\vcpkg\installed\x64-windows\bin` on `PATH`.
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including manual strict compatibility mode.
-
 ## Recommended Next Steps
 
 1. Continue Phase 4/7 production backend work in the configured vcpkg/libsvn environment, starting with true libsvn delta editor integration and deeper auth/config/session handling.
