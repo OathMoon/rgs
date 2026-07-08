@@ -529,6 +529,27 @@ type SvnDeltaCloseDirectoryFunc =
     Option<unsafe extern "C" fn(dir_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t>;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaAddFileFunc = Option<
+    unsafe extern "C" fn(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        copyfrom_path: *const c_char,
+        copyfrom_revision: c_long,
+        file_pool: *mut AprPoolT,
+        file_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaCloseFileFunc = Option<
+    unsafe extern "C" fn(
+        file_baton: *mut c_void,
+        text_checksum: *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 #[repr(C)]
 struct SvnDeltaEditorT {
@@ -540,11 +561,11 @@ struct SvnDeltaEditorT {
     change_dir_prop: *mut c_void,
     close_directory: SvnDeltaCloseDirectoryFunc,
     absent_directory: *mut c_void,
-    add_file: *mut c_void,
+    add_file: SvnDeltaAddFileFunc,
     open_file: *mut c_void,
     apply_textdelta: *mut c_void,
     change_file_prop: *mut c_void,
-    close_file: *mut c_void,
+    close_file: SvnDeltaCloseFileFunc,
     absent_file: *mut c_void,
     close_edit: SvnDeltaCloseEditFunc,
     abort_edit: *mut c_void,
@@ -2077,10 +2098,16 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     use std::process::Command;
     #[cfg(git_svn_rs_libsvn_linked)]
+    use std::sync::Mutex;
+    #[cfg(git_svn_rs_libsvn_linked)]
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[cfg(git_svn_rs_libsvn_linked)]
     static CLOSED_DIRECTORY_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static ADDED_FILE_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static CLOSED_FILE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn backend_without_url_reports_expected_error() {
@@ -2204,6 +2231,8 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
+        ADDED_FILE_CALLBACKS.lock().unwrap().clear();
+        CLOSED_FILE_CALLBACKS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2219,6 +2248,38 @@ mod tests {
         assert!(baton.root_opened);
         assert_eq!(baton.root_base_revision, 0);
         assert!(CLOSED_DIRECTORY_CALLBACKS.load(Ordering::SeqCst) > 0);
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_file_delta_callbacks() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
+
+        drive_update_report(
+            &backend,
+            2,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).add_file = Some(record_add_file);
+                (*editor).close_file = Some(record_close_file);
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            ADDED_FILE_CALLBACKS.lock().unwrap().as_slice(),
+            ["trunk/file.txt"]
+        );
+        assert_eq!(CLOSED_FILE_CALLBACKS.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2290,6 +2351,8 @@ mod tests {
         root_opened: bool,
         root_base_revision: c_long,
         closed_directories: usize,
+        added_files: Vec<String>,
+        closed_files: usize,
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2338,6 +2401,43 @@ mod tests {
         if !dir_baton.is_null() {
             let baton = unsafe { &mut *(dir_baton as *mut RecordingEditorBaton) };
             baton.closed_directories += 1;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_add_file(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        _copyfrom_path: *const c_char,
+        _copyfrom_revision: c_long,
+        _file_pool: *mut AprPoolT,
+        file_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        let path = unsafe { CStr::from_ptr(path) }
+            .to_string_lossy()
+            .into_owned();
+        ADDED_FILE_CALLBACKS.lock().unwrap().push(path.clone());
+        if !parent_baton.is_null() {
+            let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+            baton.added_files.push(path);
+        }
+        unsafe {
+            *file_baton = parent_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_close_file(
+        file_baton: *mut c_void,
+        _text_checksum: *const c_char,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        CLOSED_FILE_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        if !file_baton.is_null() {
+            let baton = unsafe { &mut *(file_baton as *mut RecordingEditorBaton) };
+            baton.closed_files += 1;
         }
         ptr::null_mut()
     }
