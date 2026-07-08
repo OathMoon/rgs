@@ -1187,18 +1187,45 @@ unsafe fn svn_call(error: *mut svn_error_t, context: &str) -> Result<(), String>
     if error.is_null() {
         Ok(())
     } else {
-        let mut buffer = [0i8; 512];
-        let message = unsafe { svn_err_best_message(error, buffer.as_mut_ptr(), buffer.len()) };
-        let detail = if message.is_null() {
-            context.to_string()
-        } else {
-            unsafe { CStr::from_ptr(message) }
-                .to_string_lossy()
-                .into_owned()
-        };
+        let detail = unsafe { svn_error_detail(error) };
         unsafe { svn_error_clear(error) };
         Err(format!("{context} failed: {detail}"))
     }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn svn_error_detail(error: *mut svn_error_t) -> String {
+    if error.is_null() {
+        return String::new();
+    }
+
+    let mut messages = Vec::new();
+    let mut buffer = [0i8; 512];
+    let best_message = unsafe { svn_err_best_message(error, buffer.as_mut_ptr(), buffer.len()) };
+    if !best_message.is_null() {
+        let message = unsafe { CStr::from_ptr(best_message) }
+            .to_string_lossy()
+            .into_owned();
+        if !message.is_empty() {
+            messages.push(message);
+        }
+    }
+
+    let mut child = unsafe { (*error).child };
+    while !child.is_null() {
+        let message = unsafe { (*child).message };
+        if !message.is_null() {
+            let message = unsafe { CStr::from_ptr(message) }
+                .to_string_lossy()
+                .into_owned();
+            if !message.is_empty() && !messages.iter().any(|existing| existing == &message) {
+                messages.push(message);
+            }
+        }
+        child = unsafe { (*child).child };
+    }
+
+    messages.join(": ")
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1539,5 +1566,33 @@ mod tests {
             SvnBackend::uuid(&backend).unwrap_err(),
             LibSvnBackend::unavailable_message()
         );
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn svn_call_reports_child_error_messages() {
+        let child_message = CString::new("child detail").unwrap();
+        let parent_message = CString::new("parent detail").unwrap();
+        let mut child = svn_error_t {
+            apr_err: 2,
+            message: child_message.as_ptr(),
+            child: ptr::null_mut(),
+            pool: ptr::null_mut(),
+            file: ptr::null(),
+            line: 0,
+        };
+        let mut parent = svn_error_t {
+            apr_err: 1,
+            message: parent_message.as_ptr(),
+            child: &mut child,
+            pool: ptr::null_mut(),
+            file: ptr::null(),
+            line: 0,
+        };
+
+        let error = unsafe { svn_error_detail(&mut parent) };
+
+        assert!(error.contains("parent detail"), "{error}");
+        assert!(error.contains("child detail"), "{error}");
     }
 }
