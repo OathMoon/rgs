@@ -17,6 +17,7 @@ pub struct ChangedPath {
     pub copy_from_rev: Option<u32>,
     pub kind: NodeKind,
     pub properties_modified: bool,
+    pub content_modified: bool,
     pub properties: BTreeMap<String, String>,
     pub content: Option<Vec<u8>>,
 }

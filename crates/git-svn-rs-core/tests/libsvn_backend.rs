@@ -652,6 +652,46 @@ fn linked_backend_do_update_does_not_emit_unchanged_file_props() {
 }
 
 #[test]
+fn linked_backend_do_update_does_not_emit_textdelta_for_property_only_file_change() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture
+        .set_run_script_property("svn:needs-lock", "x")
+        .unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session.do_update("trunk", revision, &mut editor).unwrap();
+
+    assert!(
+        editor
+            .events
+            .contains(&"change_file_prop:trunk/run.sh:svn:needs-lock=*".to_string()),
+        "{:?}",
+        editor.events
+    );
+    assert!(
+        !editor
+            .events
+            .iter()
+            .any(|event| event.starts_with("apply_textdelta:trunk/run.sh:")),
+        "{:?}",
+        editor.events
+    );
+}
+
+#[test]
 fn linked_backend_do_update_reports_directory_properties() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

@@ -860,6 +860,7 @@ unsafe fn changed_path_to_rust(
         copy_from_rev: u32::try_from(changed_path.copyfrom_rev).ok(),
         kind: node_kind_from_raw(changed_path.node_kind),
         properties_modified: changed_path.props_modified == 1,
+        content_modified: changed_path.text_modified == 1,
         properties: BTreeMap::new(),
         content: None,
     })
@@ -925,8 +926,9 @@ unsafe fn fill_file_details(
                 let (content, properties) =
                     unsafe { get_file(session, pool, &file_path, revision_number) }?;
                 if path.action == ChangeAction::Modify && revision_number > 0 {
-                    let (_, previous_properties) =
+                    let (previous_content, previous_properties) =
                         unsafe { get_file(session, pool, &file_path, revision_number - 1) }?;
+                    path.content_modified = content != previous_content;
                     path.properties_modified = properties != previous_properties;
                 }
                 path.content = Some(content);
@@ -975,6 +977,7 @@ unsafe fn fill_file_details(
                     copy_from_rev: path.copy_from_rev,
                     kind: NodeKind::File,
                     properties_modified: true,
+                    content_modified: true,
                     properties,
                     content: Some(content),
                 });
@@ -1262,7 +1265,7 @@ fn replay_revision(
                             .as_ref()
                             .map(|(path, revision)| (path.as_str(), *revision)),
                     )?;
-                    replay_file_details(&editor_path, changed_path, editor, true)?;
+                    replay_file_details(&editor_path, changed_path, editor, true, true)?;
                 }
             },
             ChangeAction::Modify => {
@@ -1272,6 +1275,7 @@ fn replay_revision(
                         changed_path,
                         editor,
                         changed_path.properties_modified,
+                        changed_path.content_modified,
                     )?;
                 } else if changed_path.kind == NodeKind::Directory {
                     replay_directory_details(
@@ -1308,6 +1312,7 @@ fn replay_file_details(
     changed_path: &ChangedPath,
     editor: &mut dyn FetchEditor,
     include_properties: bool,
+    include_content: bool,
 ) -> Result<(), String> {
     if include_properties {
         for &name in SUPPORTED_FILE_PROPS_WITH_REMOVALS {
@@ -1323,7 +1328,7 @@ fn replay_file_details(
             }
         }
     }
-    if let Some(content) = &changed_path.content {
+    if include_content && let Some(content) = &changed_path.content {
         editor.apply_textdelta(editor_path, content)?;
     }
     Ok(())
