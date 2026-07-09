@@ -610,6 +610,28 @@ type SvnDeltaApplyTextdeltaFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnTxdeltaStreamOpenFunc = Option<
+    unsafe extern "C" fn(
+        txdelta_stream: *mut *mut SvnTxdeltaStreamT,
+        baton: *mut c_void,
+        result_pool: *mut AprPoolT,
+        scratch_pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaApplyTextdeltaStreamFunc = Option<
+    unsafe extern "C" fn(
+        editor: *const SvnDeltaEditorT,
+        file_baton: *mut c_void,
+        base_checksum: *const c_char,
+        open_func: SvnTxdeltaStreamOpenFunc,
+        open_baton: *mut c_void,
+        scratch_pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 type SvnDeltaChangeDirPropFunc = Option<
     unsafe extern "C" fn(
         dir_baton: *mut c_void,
@@ -649,7 +671,7 @@ struct SvnDeltaEditorT {
     absent_file: *mut c_void,
     close_edit: SvnDeltaCloseEditFunc,
     abort_edit: *mut c_void,
-    apply_textdelta_stream: *mut c_void,
+    apply_textdelta_stream: SvnDeltaApplyTextdeltaStreamFunc,
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -739,6 +761,9 @@ enum SvnStreamT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 enum SvnTxdeltaWindowT {}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+enum SvnTxdeltaStreamT {}
 
 #[cfg(git_svn_rs_libsvn_linked)]
 #[repr(C)]
@@ -2206,6 +2231,8 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
+    static APPLY_TEXTDELTA_STREAM_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_DONE_WINDOWS: AtomicUsize = AtomicUsize::new(0);
@@ -2273,7 +2300,7 @@ mod tests {
         let editor = unsafe { svn_delta_default_editor(pool.as_ptr()) };
 
         assert!(!editor.is_null());
-        assert!(!unsafe { (*editor).apply_textdelta_stream }.is_null());
+        assert!(unsafe { (*editor).apply_textdelta_stream }.is_some());
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2415,6 +2442,33 @@ mod tests {
         assert_eq!(APPLY_TEXTDELTA_CALLBACKS.load(Ordering::SeqCst), 1);
         assert!(TEXTDELTA_WINDOWS.load(Ordering::SeqCst) > 0);
         assert_eq!(TEXTDELTA_DONE_WINDOWS.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn default_delta_editor_accepts_patched_textdelta_stream_callback() {
+        AprRuntime::initialize().unwrap();
+        let apr = AprRuntime;
+        let pool = apr.create_pool().unwrap();
+        let editor = unsafe { svn_delta_default_editor(pool.as_ptr()) };
+        APPLY_TEXTDELTA_STREAM_CALLBACKS.store(0, Ordering::SeqCst);
+
+        assert!(!editor.is_null());
+        let error = unsafe {
+            (*editor).apply_textdelta_stream = Some(record_apply_textdelta_stream);
+            let apply_textdelta_stream = (*editor).apply_textdelta_stream.unwrap();
+            apply_textdelta_stream(
+                editor,
+                ptr::null_mut(),
+                ptr::null(),
+                Some(record_open_txdelta_stream),
+                ptr::null_mut(),
+                pool.as_ptr(),
+            )
+        };
+
+        assert!(error.is_null());
+        assert_eq!(APPLY_TEXTDELTA_STREAM_CALLBACKS.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2932,6 +2986,33 @@ mod tests {
         unsafe {
             *handler = Some(record_textdelta_window);
             *handler_baton = ptr::null_mut();
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_apply_textdelta_stream(
+        _editor: *const SvnDeltaEditorT,
+        _file_baton: *mut c_void,
+        _base_checksum: *const c_char,
+        open_func: SvnTxdeltaStreamOpenFunc,
+        _open_baton: *mut c_void,
+        _scratch_pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        assert!(open_func.is_some());
+        APPLY_TEXTDELTA_STREAM_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_open_txdelta_stream(
+        txdelta_stream: *mut *mut SvnTxdeltaStreamT,
+        _baton: *mut c_void,
+        _result_pool: *mut AprPoolT,
+        _scratch_pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        unsafe {
+            *txdelta_stream = ptr::null_mut();
         }
         ptr::null_mut()
     }
