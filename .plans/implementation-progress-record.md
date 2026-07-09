@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `3b880aa feat: track native directory paths in fetch adapter`
+- Latest implementation commit: `0285e5e feat: filter native internal directory props`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -107,6 +107,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `838ab16`: linked libsvn native update adapter scaffolding now bridges `change_dir_prop` callbacks into `FetchEditor`, with directory property change coverage for `svn:ignore` on the update target.
 - `4a096aa`: linked libsvn native update adapter scaffolding now bridges `delete_entry` callbacks into `FetchEditor`, with file deletion coverage and serialized native update callback smoke helpers to avoid shared recorder races.
 - `3b880aa`: linked libsvn native update adapter scaffolding now tracks nested directory paths with a directory stack and closes directory batons, so nested `change_dir_prop` callbacks reach the correct `FetchEditor` path.
+- `0285e5e`: linked libsvn native update adapter scaffolding now filters internal `svn:entry:*` directory props before invoking `FetchEditor`.
 
 ## Completed Capabilities
 
@@ -175,6 +176,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn native update adapter scaffolding now also covers update-target directory property changes through native `change_dir_prop` callbacks.
 - Linked libsvn native update adapter scaffolding now also covers file deletions through native `delete_entry` callbacks.
 - Linked libsvn native update adapter scaffolding now tracks nested directory paths for directory property callbacks.
+- Linked libsvn native update adapter scaffolding filters internal `svn:entry:*` directory props from native callback streams.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
