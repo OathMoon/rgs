@@ -2749,6 +2749,14 @@ mod tests {
             "{:?}",
             editor.events
         );
+        assert!(
+            !editor
+                .events
+                .iter()
+                .any(|event| event.starts_with("change_directory_prop:trunk:svn:entry:")),
+            "{:?}",
+            editor.events
+        );
         assert!(editor.events.contains(&"close_edit".to_string()));
     }
 
@@ -3592,6 +3600,9 @@ mod tests {
         }
         let baton = unsafe { &mut *(dir_baton as *mut FetchEditorUpdateBaton) };
         let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+        if name.starts_with("svn:entry:") {
+            return ptr::null_mut();
+        }
         let value = if value.is_null() {
             None
         } else {
