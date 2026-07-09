@@ -2663,6 +2663,35 @@ mod tests {
 
     #[cfg(git_svn_rs_libsvn_linked)]
     #[test]
+    fn native_update_callbacks_drive_fetch_editor_for_initial_file_add() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut editor = RecordingFetchEditor::default();
+
+        drive_fetch_editor_update_report_for_test(&backend, "trunk", 2, 0, 1, &mut editor).unwrap();
+
+        assert!(editor.events.contains(&"open_root:2".to_string()));
+        assert!(
+            editor
+                .events
+                .contains(&"add_file:trunk/file.txt".to_string())
+        );
+        assert!(
+            editor
+                .events
+                .contains(&"apply_textdelta:trunk/file.txt:6".to_string())
+        );
+        assert!(editor.events.contains(&"close_edit".to_string()));
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
     fn default_delta_editor_accepts_patched_textdelta_stream_callback() {
         AprRuntime::initialize().unwrap();
         let apr = AprRuntime;
@@ -3016,6 +3045,85 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    fn drive_fetch_editor_update_report_for_test(
+        backend: &LibSvnBackend,
+        target: &str,
+        revision: c_long,
+        base_revision: c_long,
+        start_empty: c_int,
+        fetch_editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        backend.with_session(|session, pool| unsafe {
+            let editor = svn_delta_default_editor(pool);
+            assert!(!editor.is_null());
+
+            let mut baton = FetchEditorUpdateBaton {
+                editor: fetch_editor,
+                active_file_path: None,
+                active_textdelta_buffer: ptr::null_mut(),
+                error: None,
+            };
+            (*editor).set_target_revision = Some(fetch_set_target_revision);
+            (*editor).open_root = Some(fetch_open_root);
+            (*editor).add_directory = Some(fetch_add_directory);
+            (*editor).open_directory = Some(fetch_open_directory);
+            (*editor).add_file = Some(fetch_add_file);
+            (*editor).apply_textdelta = Some(fetch_apply_textdelta);
+            (*editor).close_file = Some(fetch_close_file);
+            (*editor).close_edit = Some(fetch_close_edit);
+
+            let mut reporter: *const SvnRaReporter3T = ptr::null();
+            let mut report_baton: *mut c_void = ptr::null_mut();
+            let target = CString::new(target).map_err(|_| "SVN update target contains NUL")?;
+            svn_call(
+                svn_ra_do_update3(
+                    session,
+                    &mut reporter,
+                    &mut report_baton,
+                    revision,
+                    target.as_ptr(),
+                    SVN_DEPTH_INFINITY,
+                    1,
+                    0,
+                    editor,
+                    (&mut baton as *mut FetchEditorUpdateBaton).cast::<c_void>(),
+                    pool,
+                    pool,
+                ),
+                "svn_ra_do_update3",
+            )?;
+
+            assert!(!reporter.is_null());
+            let set_path = (*reporter)
+                .set_path
+                .ok_or_else(|| "libsvn returned a reporter without set_path".to_string())?;
+            let finish_report = (*reporter)
+                .finish_report
+                .ok_or_else(|| "libsvn returned a reporter without finish_report".to_string())?;
+
+            let empty_path = CString::new("").unwrap();
+            svn_call(
+                set_path(
+                    report_baton,
+                    empty_path.as_ptr(),
+                    base_revision,
+                    SVN_DEPTH_INFINITY,
+                    start_empty,
+                    ptr::null(),
+                    pool,
+                ),
+                "svn_ra_reporter3_t.set_path",
+            )?;
+            svn_call(
+                finish_report(report_baton, pool),
+                "svn_ra_reporter3_t.finish_report",
+            )?;
+
+            baton.error.map_or(Ok(()), Err)
+        })
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     #[derive(Default)]
     struct RecordingEditorBaton {
         target_revision: c_long,
@@ -3029,6 +3137,71 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    struct FetchEditorUpdateBaton<'a> {
+        editor: &'a mut dyn FetchEditor,
+        active_file_path: Option<String>,
+        active_textdelta_buffer: *mut svn_stringbuf_t,
+        error: Option<String>,
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[derive(Default)]
+    struct RecordingFetchEditor {
+        events: Vec<String>,
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    impl FetchEditor for RecordingFetchEditor {
+        fn open_root(&mut self, revision: u32) -> Result<(), String> {
+            self.events.push(format!("open_root:{revision}"));
+            Ok(())
+        }
+
+        fn add_directory(
+            &mut self,
+            path: &str,
+            _copy_from: Option<(&str, u32)>,
+        ) -> Result<(), String> {
+            self.events.push(format!("add_directory:{path}"));
+            Ok(())
+        }
+
+        fn add_file(&mut self, path: &str, _copy_from: Option<(&str, u32)>) -> Result<(), String> {
+            self.events.push(format!("add_file:{path}"));
+            Ok(())
+        }
+
+        fn delete_entry(&mut self, path: &str, revision: u32) -> Result<(), String> {
+            self.events.push(format!("delete_entry:{path}@{revision}"));
+            Ok(())
+        }
+
+        fn change_file_prop(
+            &mut self,
+            path: &str,
+            name: &str,
+            value: Option<&str>,
+        ) -> Result<(), String> {
+            self.events.push(format!(
+                "change_file_prop:{path}:{name}={}",
+                value.unwrap_or_default()
+            ));
+            Ok(())
+        }
+
+        fn apply_textdelta(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
+            self.events
+                .push(format!("apply_textdelta:{path}:{}", content.len()));
+            Ok(())
+        }
+
+        fn close_edit(&mut self) -> Result<(), String> {
+            self.events.push("close_edit".to_string());
+            Ok(())
+        }
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_target_revision(
         edit_baton: *mut c_void,
         target_revision: c_long,
@@ -3036,6 +3209,170 @@ mod tests {
     ) -> *mut svn_error_t {
         let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
         baton.target_revision = target_revision;
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_set_target_revision(
+        edit_baton: *mut c_void,
+        target_revision: c_long,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        let baton = unsafe { &mut *(edit_baton as *mut FetchEditorUpdateBaton) };
+        let revision = match u32::try_from(target_revision) {
+            Ok(revision) => revision,
+            Err(_) => {
+                baton.error = Some(format!(
+                    "SVN target revision {target_revision} does not fit in u32"
+                ));
+                return ptr::null_mut();
+            }
+        };
+        if let Err(error) = baton.editor.open_root(revision) {
+            baton.error = Some(error);
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_open_root(
+        edit_baton: *mut c_void,
+        _base_revision: c_long,
+        _dir_pool: *mut AprPoolT,
+        root_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        unsafe {
+            *root_baton = edit_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_add_directory(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        _copyfrom_path: *const c_char,
+        _copyfrom_revision: c_long,
+        _dir_pool: *mut AprPoolT,
+        child_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        if !parent_baton.is_null() {
+            let baton = unsafe { &mut *(parent_baton as *mut FetchEditorUpdateBaton) };
+            let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+            if let Err(error) = baton.editor.add_directory(&path, None) {
+                baton.error = Some(error);
+            }
+        }
+        unsafe {
+            *child_baton = parent_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_open_directory(
+        _path: *const c_char,
+        parent_baton: *mut c_void,
+        _base_revision: c_long,
+        _dir_pool: *mut AprPoolT,
+        child_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        unsafe {
+            *child_baton = parent_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_add_file(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        _copyfrom_path: *const c_char,
+        _copyfrom_revision: c_long,
+        file_pool: *mut AprPoolT,
+        file_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        if !parent_baton.is_null() {
+            let baton = unsafe { &mut *(parent_baton as *mut FetchEditorUpdateBaton) };
+            let path = unsafe { CStr::from_ptr(path) }
+                .to_string_lossy()
+                .into_owned();
+            if let Err(error) = baton.editor.add_file(&path, None) {
+                baton.error = Some(error);
+            }
+            baton.active_file_path = Some(path);
+            baton.active_textdelta_buffer = unsafe { svn_stringbuf_create_empty(file_pool) };
+        }
+        unsafe {
+            *file_baton = parent_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_apply_textdelta(
+        file_baton: *mut c_void,
+        _base_checksum: *const c_char,
+        result_pool: *mut AprPoolT,
+        handler: *mut SvnTxdeltaWindowHandlerFunc,
+        handler_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        if file_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(file_baton as *mut FetchEditorUpdateBaton) };
+        if baton.active_textdelta_buffer.is_null() {
+            baton.error = Some("libsvn textdelta callback had no active file buffer".to_string());
+            return ptr::null_mut();
+        }
+        let source_stream = unsafe { svn_stream_empty(result_pool) };
+        let target_stream =
+            unsafe { svn_stream_from_stringbuf(baton.active_textdelta_buffer, result_pool) };
+        unsafe {
+            svn_txdelta_apply(
+                source_stream,
+                target_stream,
+                ptr::null_mut(),
+                ptr::null(),
+                result_pool,
+                handler,
+                handler_baton,
+            );
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_close_file(
+        file_baton: *mut c_void,
+        _text_checksum: *const c_char,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        if file_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(file_baton as *mut FetchEditorUpdateBaton) };
+        if let Some(path) = baton.active_file_path.take()
+            && !baton.active_textdelta_buffer.is_null()
+        {
+            let content = unsafe { stringbuf_bytes(baton.active_textdelta_buffer) };
+            if let Err(error) = baton.editor.apply_textdelta(&path, &content) {
+                baton.error = Some(error);
+            }
+        }
+        baton.active_textdelta_buffer = ptr::null_mut();
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_close_edit(
+        edit_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        let baton = unsafe { &mut *(edit_baton as *mut FetchEditorUpdateBaton) };
+        if let Err(error) = baton.editor.close_edit() {
+            baton.error = Some(error);
+        }
         ptr::null_mut()
     }
 
