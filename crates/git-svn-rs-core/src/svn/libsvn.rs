@@ -2726,6 +2726,32 @@ mod tests {
 
     #[cfg(git_svn_rs_libsvn_linked)]
     #[test]
+    fn native_update_callbacks_drive_fetch_editor_for_directory_property_change() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut editor = RecordingFetchEditor::default();
+
+        drive_fetch_editor_update_report_for_test(&backend, "trunk", 5, 4, 0, &mut editor).unwrap();
+
+        assert!(editor.events.contains(&"open_root:5".to_string()));
+        assert!(
+            editor
+                .events
+                .contains(&"change_directory_prop:trunk:svn:ignore=target\n".to_string()),
+            "{:?}",
+            editor.events
+        );
+        assert!(editor.events.contains(&"close_edit".to_string()));
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
     fn default_delta_editor_accepts_patched_textdelta_stream_callback() {
         AprRuntime::initialize().unwrap();
         let apr = AprRuntime;
@@ -3093,6 +3119,7 @@ mod tests {
 
             let mut baton = FetchEditorUpdateBaton {
                 editor: fetch_editor,
+                active_directory_path: target.to_string(),
                 active_file_path: None,
                 active_textdelta_buffer: ptr::null_mut(),
                 error: None,
@@ -3104,6 +3131,7 @@ mod tests {
             (*editor).add_file = Some(fetch_add_file);
             (*editor).open_file = Some(fetch_open_file);
             (*editor).apply_textdelta = Some(fetch_apply_textdelta);
+            (*editor).change_dir_prop = Some(fetch_change_dir_prop);
             (*editor).change_file_prop = Some(fetch_change_file_prop);
             (*editor).close_file = Some(fetch_close_file);
             (*editor).close_edit = Some(fetch_close_edit);
@@ -3175,6 +3203,7 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     struct FetchEditorUpdateBaton<'a> {
         editor: &'a mut dyn FetchEditor,
+        active_directory_path: String,
         active_file_path: Option<String>,
         active_textdelta_buffer: *mut svn_stringbuf_t,
         error: Option<String>,
@@ -3220,6 +3249,19 @@ mod tests {
         ) -> Result<(), String> {
             self.events.push(format!(
                 "change_file_prop:{path}:{name}={}",
+                value.unwrap_or_default()
+            ));
+            Ok(())
+        }
+
+        fn change_directory_prop(
+            &mut self,
+            path: &str,
+            name: &str,
+            value: Option<&str>,
+        ) -> Result<(), String> {
+            self.events.push(format!(
+                "change_directory_prop:{path}:{name}={}",
                 value.unwrap_or_default()
             ));
             Ok(())
@@ -3424,6 +3466,34 @@ mod tests {
             Some(String::from_utf8_lossy(bytes).into_owned())
         };
         if let Err(error) = baton.editor.change_file_prop(path, &name, value.as_deref()) {
+            baton.error = Some(error);
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_change_dir_prop(
+        dir_baton: *mut c_void,
+        name: *const c_char,
+        value: *const svn_string_t,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        if dir_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(dir_baton as *mut FetchEditorUpdateBaton) };
+        let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+        let value = if value.is_null() {
+            None
+        } else {
+            let bytes = unsafe { slice::from_raw_parts((*value).data.cast::<u8>(), (*value).len) };
+            Some(String::from_utf8_lossy(bytes).into_owned())
+        };
+        if let Err(error) = baton.editor.change_directory_prop(
+            &baton.active_directory_path,
+            &name,
+            value.as_deref(),
+        ) {
             baton.error = Some(error);
         }
         ptr::null_mut()
