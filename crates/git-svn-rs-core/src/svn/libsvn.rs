@@ -577,6 +577,16 @@ type SvnDeltaApplyTextdeltaFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaChangeFilePropFunc = Option<
+    unsafe extern "C" fn(
+        file_baton: *mut c_void,
+        name: *const c_char,
+        value: *const svn_string_t,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 #[repr(C)]
 struct SvnDeltaEditorT {
@@ -591,7 +601,7 @@ struct SvnDeltaEditorT {
     add_file: SvnDeltaAddFileFunc,
     open_file: SvnDeltaOpenFileFunc,
     apply_textdelta: SvnDeltaApplyTextdeltaFunc,
-    change_file_prop: *mut c_void,
+    change_file_prop: SvnDeltaChangeFilePropFunc,
     close_file: SvnDeltaCloseFileFunc,
     absent_file: *mut c_void,
     close_edit: SvnDeltaCloseEditFunc,
@@ -2141,6 +2151,8 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     static OPENED_FILE_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     #[cfg(git_svn_rs_libsvn_linked)]
+    static FILE_PROP_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    #[cfg(git_svn_rs_libsvn_linked)]
     static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
@@ -2390,6 +2402,44 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_file_property_callback() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
+        FILE_PROP_CALLBACKS.lock().unwrap().clear();
+
+        drive_update_report_from_base(
+            &backend,
+            4,
+            3,
+            0,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).open_file = Some(record_open_file);
+                (*editor).change_file_prop = Some(record_change_file_prop);
+                (*editor).close_file = Some(record_close_file);
+            },
+        )
+        .unwrap();
+
+        assert!(
+            FILE_PROP_CALLBACKS
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|property| property == "svn:needs-lock=*")
+        );
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     fn drive_update_report(
         backend: &LibSvnBackend,
         revision: c_long,
@@ -2581,6 +2631,27 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_change_file_prop(
+        _file_baton: *mut c_void,
+        name: *const c_char,
+        value: *const svn_string_t,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+        let value = if value.is_null() {
+            String::new()
+        } else {
+            let bytes = unsafe { slice::from_raw_parts((*value).data.cast::<u8>(), (*value).len) };
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        FILE_PROP_CALLBACKS
+            .lock()
+            .unwrap()
+            .push(format!("{name}={value}"));
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_apply_textdelta(
         _file_baton: *mut c_void,
         _base_checksum: *const c_char,
@@ -2636,6 +2707,12 @@ mod tests {
         run(&wc, "svn", &["commit", "-m", "add file"])?;
         fs::write(trunk.join("file.txt"), b"hello again\n").map_err(|error| error.to_string())?;
         run(&wc, "svn", &["commit", "-m", "modify file"])?;
+        run(
+            &wc,
+            "svn",
+            &["propset", "svn:needs-lock", "x", "trunk/file.txt"],
+        )?;
+        run(&wc, "svn", &["commit", "-m", "set needs lock"])?;
 
         Ok((tmp, repo_url))
     }
