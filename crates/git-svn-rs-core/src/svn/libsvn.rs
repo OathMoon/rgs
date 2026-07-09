@@ -539,6 +539,15 @@ type SvnDeltaCloseDirectoryFunc =
     Option<unsafe extern "C" fn(dir_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t>;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaAbsentDirectoryFunc = Option<
+    unsafe extern "C" fn(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 type SvnDeltaAddDirectoryFunc = Option<
     unsafe extern "C" fn(
         path: *const c_char,
@@ -581,6 +590,15 @@ type SvnDeltaOpenFileFunc = Option<
         base_revision: c_long,
         file_pool: *mut AprPoolT,
         file_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaAbsentFileFunc = Option<
+    unsafe extern "C" fn(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        pool: *mut AprPoolT,
     ) -> *mut svn_error_t,
 >;
 
@@ -652,6 +670,10 @@ type SvnDeltaChangeFilePropFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaAbortEditFunc =
+    Option<unsafe extern "C" fn(edit_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 #[repr(C)]
 struct SvnDeltaEditorT {
@@ -662,15 +684,15 @@ struct SvnDeltaEditorT {
     open_directory: SvnDeltaOpenDirectoryFunc,
     change_dir_prop: SvnDeltaChangeDirPropFunc,
     close_directory: SvnDeltaCloseDirectoryFunc,
-    absent_directory: *mut c_void,
+    absent_directory: SvnDeltaAbsentDirectoryFunc,
     add_file: SvnDeltaAddFileFunc,
     open_file: SvnDeltaOpenFileFunc,
     apply_textdelta: SvnDeltaApplyTextdeltaFunc,
     change_file_prop: SvnDeltaChangeFilePropFunc,
     close_file: SvnDeltaCloseFileFunc,
-    absent_file: *mut c_void,
+    absent_file: SvnDeltaAbsentFileFunc,
     close_edit: SvnDeltaCloseEditFunc,
-    abort_edit: *mut c_void,
+    abort_edit: SvnDeltaAbortEditFunc,
     apply_textdelta_stream: SvnDeltaApplyTextdeltaStreamFunc,
 }
 
@@ -679,6 +701,29 @@ type SvnRaReporterSetPathFunc = Option<
     unsafe extern "C" fn(
         report_baton: *mut c_void,
         path: *const c_char,
+        revision: c_long,
+        depth: c_int,
+        start_empty: c_int,
+        lock_token: *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnRaReporterDeletePathFunc = Option<
+    unsafe extern "C" fn(
+        report_baton: *mut c_void,
+        path: *const c_char,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+type SvnRaReporterLinkPathFunc = Option<
+    unsafe extern "C" fn(
+        report_baton: *mut c_void,
+        path: *const c_char,
+        url: *const c_char,
         revision: c_long,
         depth: c_int,
         start_empty: c_int,
@@ -702,8 +747,8 @@ type SvnRaReporterAbortReportFunc = Option<
 #[repr(C)]
 struct SvnRaReporter3T {
     set_path: SvnRaReporterSetPathFunc,
-    delete_path: *mut c_void,
-    link_path: *mut c_void,
+    delete_path: SvnRaReporterDeletePathFunc,
+    link_path: SvnRaReporterLinkPathFunc,
     finish_report: SvnRaReporterFinishReportFunc,
     abort_report: SvnRaReporterAbortReportFunc,
 }
@@ -2241,6 +2286,12 @@ mod tests {
     static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_DONE_WINDOWS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static ABSENT_DIRECTORY_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static ABSENT_FILE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static ABORT_EDIT_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
 
     #[test]
     fn backend_without_url_reports_expected_error() {
@@ -2366,6 +2417,59 @@ mod tests {
                     .abort_report
                     .ok_or_else(|| "libsvn returned a reporter without abort_report".to_string())?;
 
+                svn_call(
+                    abort_report(report_baton, pool),
+                    "svn_ra_reporter3_t.abort_report",
+                )
+            })
+            .unwrap();
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_reporter_exposes_delete_and_link_path_callbacks() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+
+        backend
+            .with_session(|session, pool| unsafe {
+                let editor = svn_delta_default_editor(pool);
+                assert!(!editor.is_null());
+
+                let mut reporter: *const SvnRaReporter3T = ptr::null();
+                let mut report_baton: *mut c_void = ptr::null_mut();
+                let target = CString::new("trunk").unwrap();
+                svn_call(
+                    svn_ra_do_update3(
+                        session,
+                        &mut reporter,
+                        &mut report_baton,
+                        2,
+                        target.as_ptr(),
+                        SVN_DEPTH_INFINITY,
+                        1,
+                        0,
+                        editor,
+                        ptr::null_mut(),
+                        pool,
+                        pool,
+                    ),
+                    "svn_ra_do_update3",
+                )?;
+
+                assert!(!reporter.is_null());
+                assert!((*reporter).delete_path.is_some());
+                assert!((*reporter).link_path.is_some());
+
+                let abort_report = (*reporter)
+                    .abort_report
+                    .ok_or_else(|| "libsvn returned a reporter without abort_report".to_string())?;
                 svn_call(
                     abort_report(report_baton, pool),
                     "svn_ra_reporter3_t.abort_report",
@@ -2525,6 +2629,43 @@ mod tests {
 
         assert!(error.is_null());
         assert_eq!(APPLY_TEXTDELTA_STREAM_CALLBACKS.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn default_delta_editor_accepts_patched_absent_and_abort_callbacks() {
+        AprRuntime::initialize().unwrap();
+        let apr = AprRuntime;
+        let pool = apr.create_pool().unwrap();
+        let editor = unsafe { svn_delta_default_editor(pool.as_ptr()) };
+        ABSENT_DIRECTORY_CALLBACKS.store(0, Ordering::SeqCst);
+        ABSENT_FILE_CALLBACKS.store(0, Ordering::SeqCst);
+        ABORT_EDIT_CALLBACKS.store(0, Ordering::SeqCst);
+
+        assert!(!editor.is_null());
+        let error = unsafe {
+            (*editor).absent_directory = Some(record_absent_directory);
+            (*editor).absent_file = Some(record_absent_file);
+            (*editor).abort_edit = Some(record_abort_edit);
+
+            let absent_path = CString::new("trunk/missing").unwrap();
+            let absent_directory = (*editor).absent_directory.unwrap();
+            let absent_error =
+                absent_directory(absent_path.as_ptr(), ptr::null_mut(), pool.as_ptr());
+            assert!(absent_error.is_null());
+
+            let absent_file = (*editor).absent_file.unwrap();
+            let absent_error = absent_file(absent_path.as_ptr(), ptr::null_mut(), pool.as_ptr());
+            assert!(absent_error.is_null());
+
+            let abort_edit = (*editor).abort_edit.unwrap();
+            abort_edit(ptr::null_mut(), pool.as_ptr())
+        };
+
+        assert!(error.is_null());
+        assert_eq!(ABSENT_DIRECTORY_CALLBACKS.load(Ordering::SeqCst), 1);
+        assert_eq!(ABSENT_FILE_CALLBACKS.load(Ordering::SeqCst), 1);
+        assert_eq!(ABORT_EDIT_CALLBACKS.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -3070,6 +3211,35 @@ mod tests {
         unsafe {
             *txdelta_stream = ptr::null_mut();
         }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_absent_directory(
+        _path: *const c_char,
+        _parent_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        ABSENT_DIRECTORY_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_absent_file(
+        _path: *const c_char,
+        _parent_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        ABSENT_FILE_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_abort_edit(
+        _edit_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        ABORT_EDIT_CALLBACKS.fetch_add(1, Ordering::SeqCst);
         ptr::null_mut()
     }
 
