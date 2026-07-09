@@ -2780,6 +2780,32 @@ mod tests {
 
     #[cfg(git_svn_rs_libsvn_linked)]
     #[test]
+    fn native_update_callbacks_drive_fetch_editor_for_nested_directory_property_change() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut editor = RecordingFetchEditor::default();
+
+        drive_fetch_editor_update_report_for_test(&backend, "trunk", 9, 8, 0, &mut editor).unwrap();
+
+        assert!(editor.events.contains(&"open_root:9".to_string()));
+        assert!(
+            editor.events.contains(
+                &"change_directory_prop:trunk/subdir:svn:ignore=nested-target\n".to_string()
+            ),
+            "{:?}",
+            editor.events
+        );
+        assert!(editor.events.contains(&"close_edit".to_string()));
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
     fn default_delta_editor_accepts_patched_textdelta_stream_callback() {
         AprRuntime::initialize().unwrap();
         let apr = AprRuntime;
@@ -3149,7 +3175,7 @@ mod tests {
 
             let mut baton = FetchEditorUpdateBaton {
                 editor: fetch_editor,
-                active_directory_path: target.to_string(),
+                active_directory_paths: vec![target.to_string()],
                 active_file_path: None,
                 active_textdelta_buffer: ptr::null_mut(),
                 error: None,
@@ -3159,6 +3185,7 @@ mod tests {
             (*editor).delete_entry = Some(fetch_delete_entry);
             (*editor).add_directory = Some(fetch_add_directory);
             (*editor).open_directory = Some(fetch_open_directory);
+            (*editor).close_directory = Some(fetch_close_directory);
             (*editor).add_file = Some(fetch_add_file);
             (*editor).open_file = Some(fetch_open_file);
             (*editor).apply_textdelta = Some(fetch_apply_textdelta);
@@ -3234,7 +3261,7 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     struct FetchEditorUpdateBaton<'a> {
         editor: &'a mut dyn FetchEditor,
-        active_directory_path: String,
+        active_directory_paths: Vec<String>,
         active_file_path: Option<String>,
         active_textdelta_buffer: *mut svn_stringbuf_t,
         error: Option<String>,
@@ -3394,10 +3421,13 @@ mod tests {
     ) -> *mut svn_error_t {
         if !parent_baton.is_null() {
             let baton = unsafe { &mut *(parent_baton as *mut FetchEditorUpdateBaton) };
-            let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+            let path = unsafe { CStr::from_ptr(path) }
+                .to_string_lossy()
+                .into_owned();
             if let Err(error) = baton.editor.add_directory(&path, None) {
                 baton.error = Some(error);
             }
+            baton.active_directory_paths.push(path);
         }
         unsafe {
             *child_baton = parent_baton;
@@ -3407,15 +3437,36 @@ mod tests {
 
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn fetch_open_directory(
-        _path: *const c_char,
+        path: *const c_char,
         parent_baton: *mut c_void,
         _base_revision: c_long,
         _dir_pool: *mut AprPoolT,
         child_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
+        if !parent_baton.is_null() {
+            let baton = unsafe { &mut *(parent_baton as *mut FetchEditorUpdateBaton) };
+            baton.active_directory_paths.push(
+                unsafe { CStr::from_ptr(path) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+        }
         unsafe {
             *child_baton = parent_baton;
         }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_close_directory(
+        dir_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        if dir_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(dir_baton as *mut FetchEditorUpdateBaton) };
+        baton.active_directory_paths.pop();
         ptr::null_mut()
     }
 
@@ -3548,7 +3599,11 @@ mod tests {
             Some(String::from_utf8_lossy(bytes).into_owned())
         };
         if let Err(error) = baton.editor.change_directory_prop(
-            &baton.active_directory_path,
+            baton
+                .active_directory_paths
+                .last()
+                .map(String::as_str)
+                .unwrap_or_default(),
             &name,
             value.as_deref(),
         ) {
@@ -3942,6 +3997,13 @@ mod tests {
             .map_err(|error| error.to_string())?;
         run(&wc, "svn", &["add", "trunk/subdir/nested.txt"])?;
         run(&wc, "svn", &["commit", "-m", "add nested file"])?;
+        run(&wc, "svn", &["update", "trunk/subdir"])?;
+        run(
+            &wc,
+            "svn",
+            &["propset", "svn:ignore", "nested-target", "trunk/subdir"],
+        )?;
+        run(&wc, "svn", &["commit", "-m", "set nested directory ignore"])?;
 
         Ok((tmp, repo_url))
     }
