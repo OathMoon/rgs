@@ -2692,6 +2692,40 @@ mod tests {
 
     #[cfg(git_svn_rs_libsvn_linked)]
     #[test]
+    fn native_update_callbacks_drive_fetch_editor_for_file_property_change() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut editor = RecordingFetchEditor::default();
+
+        drive_fetch_editor_update_report_for_test(&backend, "trunk", 4, 3, 0, &mut editor).unwrap();
+
+        assert!(editor.events.contains(&"open_root:4".to_string()));
+        assert!(
+            editor
+                .events
+                .contains(&"change_file_prop:trunk/file.txt:svn:needs-lock=*".to_string()),
+            "{:?}",
+            editor.events
+        );
+        assert!(
+            !editor
+                .events
+                .iter()
+                .any(|event| event.starts_with("apply_textdelta:trunk/file.txt:")),
+            "{:?}",
+            editor.events
+        );
+        assert!(editor.events.contains(&"close_edit".to_string()));
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
     fn default_delta_editor_accepts_patched_textdelta_stream_callback() {
         AprRuntime::initialize().unwrap();
         let apr = AprRuntime;
@@ -3068,7 +3102,9 @@ mod tests {
             (*editor).add_directory = Some(fetch_add_directory);
             (*editor).open_directory = Some(fetch_open_directory);
             (*editor).add_file = Some(fetch_add_file);
+            (*editor).open_file = Some(fetch_open_file);
             (*editor).apply_textdelta = Some(fetch_apply_textdelta);
+            (*editor).change_file_prop = Some(fetch_change_file_prop);
             (*editor).close_file = Some(fetch_close_file);
             (*editor).close_edit = Some(fetch_close_edit);
 
@@ -3310,6 +3346,29 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_open_file(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        _base_revision: c_long,
+        _file_pool: *mut AprPoolT,
+        file_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        if !parent_baton.is_null() {
+            let baton = unsafe { &mut *(parent_baton as *mut FetchEditorUpdateBaton) };
+            baton.active_file_path = Some(
+                unsafe { CStr::from_ptr(path) }
+                    .to_string_lossy()
+                    .into_owned(),
+            );
+            baton.active_textdelta_buffer = ptr::null_mut();
+        }
+        unsafe {
+            *file_baton = parent_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn fetch_apply_textdelta(
         file_baton: *mut c_void,
         _base_checksum: *const c_char,
@@ -3338,6 +3397,34 @@ mod tests {
                 handler,
                 handler_baton,
             );
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_change_file_prop(
+        file_baton: *mut c_void,
+        name: *const c_char,
+        value: *const svn_string_t,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        if file_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(file_baton as *mut FetchEditorUpdateBaton) };
+        let Some(path) = baton.active_file_path.as_deref() else {
+            baton.error = Some("libsvn file property callback had no active file path".to_string());
+            return ptr::null_mut();
+        };
+        let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
+        let value = if value.is_null() {
+            None
+        } else {
+            let bytes = unsafe { slice::from_raw_parts((*value).data.cast::<u8>(), (*value).len) };
+            Some(String::from_utf8_lossy(bytes).into_owned())
+        };
+        if let Err(error) = baton.editor.change_file_prop(path, &name, value.as_deref()) {
+            baton.error = Some(error);
         }
         ptr::null_mut()
     }
