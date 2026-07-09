@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `4a096aa feat: bridge native deletes to fetch editor`
+- Latest implementation commit: `3b880aa feat: track native directory paths in fetch adapter`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -106,6 +106,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `1cef794`: linked libsvn native update adapter scaffolding now bridges `open_file` and `change_file_prop` callbacks into `FetchEditor`, with property-only file change coverage that avoids synthetic textdelta output.
 - `838ab16`: linked libsvn native update adapter scaffolding now bridges `change_dir_prop` callbacks into `FetchEditor`, with directory property change coverage for `svn:ignore` on the update target.
 - `4a096aa`: linked libsvn native update adapter scaffolding now bridges `delete_entry` callbacks into `FetchEditor`, with file deletion coverage and serialized native update callback smoke helpers to avoid shared recorder races.
+- `3b880aa`: linked libsvn native update adapter scaffolding now tracks nested directory paths with a directory stack and closes directory batons, so nested `change_dir_prop` callbacks reach the correct `FetchEditor` path.
 
 ## Completed Capabilities
 
@@ -173,6 +174,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn native update adapter scaffolding now also covers file property changes through native `open_file`/`change_file_prop` callbacks.
 - Linked libsvn native update adapter scaffolding now also covers update-target directory property changes through native `change_dir_prop` callbacks.
 - Linked libsvn native update adapter scaffolding now also covers file deletions through native `delete_entry` callbacks.
+- Linked libsvn native update adapter scaffolding now tracks nested directory paths for directory property callbacks.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
@@ -274,10 +276,7 @@ Important targeted suites recorded as passing during recent work:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_ -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::default_delta_editor_ -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_textdelta_windows_can_be_applied_to_fulltext_buffer -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_callbacks_drive_fetch_editor_for_initial_file_add -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_callbacks_drive_fetch_editor_for_file_property_change -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_callbacks_drive_fetch_editor_for_directory_property_change -- --nocapture`
-- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_callbacks_drive_fetch_editor_for_delete_entry -- --nocapture`
+- With the same vcpkg environment: targeted native `FetchEditor` adapter smoke tests for initial file add, file property change, directory property change, delete entry, and nested directory property change.
 - `cargo test -p git-svn-rs-core --test libsvn_backend linked_backend_prompts_for_authenticated_svnserve_credentials -- --nocapture` (default build compiles the test target and filters out the linked-only test)
 - `cargo test -p git-svn-rs-core --test auth_prompt`
 - `cargo test -p git-svn-rs-core --test fetch_editor`
