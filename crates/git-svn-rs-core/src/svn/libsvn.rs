@@ -693,6 +693,11 @@ type SvnRaReporterFinishReportFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnRaReporterAbortReportFunc = Option<
+    unsafe extern "C" fn(report_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 #[repr(C)]
 struct SvnRaReporter3T {
@@ -700,7 +705,7 @@ struct SvnRaReporter3T {
     delete_path: *mut c_void,
     link_path: *mut c_void,
     finish_report: SvnRaReporterFinishReportFunc,
-    abort_report: *mut c_void,
+    abort_report: SvnRaReporterAbortReportFunc,
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -2316,6 +2321,57 @@ mod tests {
         let backend = LibSvnBackend::for_url(repo_url);
 
         drive_update_report(&backend, 2, ptr::null_mut(), |_| {}).unwrap();
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_reporter_can_abort_default_delta_editor_report() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+
+        backend
+            .with_session(|session, pool| unsafe {
+                let editor = svn_delta_default_editor(pool);
+                assert!(!editor.is_null());
+
+                let mut reporter: *const SvnRaReporter3T = ptr::null();
+                let mut report_baton: *mut c_void = ptr::null_mut();
+                let target = CString::new("trunk").unwrap();
+                svn_call(
+                    svn_ra_do_update3(
+                        session,
+                        &mut reporter,
+                        &mut report_baton,
+                        2,
+                        target.as_ptr(),
+                        SVN_DEPTH_INFINITY,
+                        1,
+                        0,
+                        editor,
+                        ptr::null_mut(),
+                        pool,
+                        pool,
+                    ),
+                    "svn_ra_do_update3",
+                )?;
+
+                assert!(!reporter.is_null());
+                let abort_report = (*reporter)
+                    .abort_report
+                    .ok_or_else(|| "libsvn returned a reporter without abort_report".to_string())?;
+
+                svn_call(
+                    abort_report(report_baton, pool),
+                    "svn_ra_reporter3_t.abort_report",
+                )
+            })
+            .unwrap();
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
