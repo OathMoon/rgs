@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `38ee416 feat: type libsvn open file callback`
+- Latest implementation commit: `ed05d51 feat: type libsvn file property callback`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -93,6 +93,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `37b3e89`: linked libsvn delta-editor scaffolding now types the `add_file` and `close_file` callback slots and validates file lifecycle callbacks during a native update report.
 - `174ce0b`: linked libsvn delta-editor scaffolding now types the `apply_textdelta` callback and window handler surface, validating native textdelta windows and the terminating null window during an update report.
 - `38ee416`: linked libsvn delta-editor scaffolding now types the `open_file` callback slot and validates an incremental native update from r2 to r3 opens the modified file with the expected base revision.
+- `ed05d51`: linked libsvn delta-editor scaffolding now types the `change_file_prop` callback slot and validates an incremental native update from r3 to r4 emits the `svn:needs-lock` file property callback.
 
 ## Completed Capabilities
 
@@ -147,6 +148,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn native update scaffolding can also patch and observe file lifecycle callbacks (`add_file` and `close_file`) during a real `svn_ra_do_update3()` report, including the native callback path shape.
 - Linked libsvn native update scaffolding can now patch and observe `apply_textdelta` and its txdelta window handler, including the terminating null window.
 - Linked libsvn native update scaffolding now covers an incremental update path as well as an empty-base update path, including `open_file` callbacks for modified files.
+- Linked libsvn native update scaffolding now also covers file property callbacks, including a real `svn:needs-lock` property change on an incremental update.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
