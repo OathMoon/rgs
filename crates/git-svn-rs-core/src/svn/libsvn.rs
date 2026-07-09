@@ -551,6 +551,17 @@ type SvnDeltaAddDirectoryFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaOpenDirectoryFunc = Option<
+    unsafe extern "C" fn(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        base_revision: c_long,
+        dir_pool: *mut AprPoolT,
+        child_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 type SvnDeltaAddFileFunc = Option<
     unsafe extern "C" fn(
         path: *const c_char,
@@ -626,7 +637,7 @@ struct SvnDeltaEditorT {
     open_root: SvnDeltaOpenRootFunc,
     delete_entry: SvnDeltaDeleteEntryFunc,
     add_directory: SvnDeltaAddDirectoryFunc,
-    open_directory: *mut c_void,
+    open_directory: SvnDeltaOpenDirectoryFunc,
     change_dir_prop: SvnDeltaChangeDirPropFunc,
     close_directory: SvnDeltaCloseDirectoryFunc,
     absent_directory: *mut c_void,
@@ -2191,6 +2202,8 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     static ADDED_DIRECTORY_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     #[cfg(git_svn_rs_libsvn_linked)]
+    static OPENED_DIRECTORY_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    #[cfg(git_svn_rs_libsvn_linked)]
     static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
@@ -2583,6 +2596,45 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_open_directory_callback() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
+        OPENED_DIRECTORY_CALLBACKS.lock().unwrap().clear();
+
+        drive_update_report_from_base(
+            &backend,
+            8,
+            7,
+            0,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).open_directory = Some(record_open_directory);
+                (*editor).add_file = Some(record_add_file);
+                (*editor).close_file = Some(record_close_file);
+                (*editor).close_directory = Some(record_close_directory);
+            },
+        )
+        .unwrap();
+
+        assert!(
+            OPENED_DIRECTORY_CALLBACKS
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|directory| directory == "trunk/subdir@7")
+        );
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     fn drive_update_report(
         backend: &LibSvnBackend,
         revision: c_long,
@@ -2745,6 +2797,25 @@ mod tests {
             .to_string_lossy()
             .into_owned();
         ADDED_DIRECTORY_CALLBACKS.lock().unwrap().push(path);
+        unsafe {
+            *child_baton = parent_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_open_directory(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        base_revision: c_long,
+        _dir_pool: *mut AprPoolT,
+        child_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        OPENED_DIRECTORY_CALLBACKS
+            .lock()
+            .unwrap()
+            .push(format!("{path}@{base_revision}"));
         unsafe {
             *child_baton = parent_baton;
         }
@@ -2918,6 +2989,10 @@ mod tests {
         run(&wc, "svn", &["commit", "-m", "delete file"])?;
         run(&wc, "svn", &["mkdir", "trunk/subdir"])?;
         run(&wc, "svn", &["commit", "-m", "add subdir"])?;
+        fs::write(trunk.join("subdir").join("nested.txt"), b"nested\n")
+            .map_err(|error| error.to_string())?;
+        run(&wc, "svn", &["add", "trunk/subdir/nested.txt"])?;
+        run(&wc, "svn", &["commit", "-m", "add nested file"])?;
 
         Ok((tmp, repo_url))
     }
