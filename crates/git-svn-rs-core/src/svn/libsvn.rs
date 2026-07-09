@@ -1844,6 +1844,18 @@ unsafe extern "C" {
         buffer: *mut svn_stringbuf_t,
         pool: *mut AprPoolT,
     ) -> *mut SvnStreamT;
+    #[allow(dead_code)]
+    fn svn_stream_empty(pool: *mut AprPoolT) -> *mut SvnStreamT;
+    #[allow(dead_code)]
+    fn svn_txdelta_apply(
+        source: *mut SvnStreamT,
+        target: *mut SvnStreamT,
+        result_digest: *mut c_char,
+        error_info: *const c_char,
+        pool: *mut AprPoolT,
+        handler: *mut SvnTxdeltaWindowHandlerFunc,
+        handler_baton: *mut *mut c_void,
+    );
     fn svn_subr_version() -> *const svn_version_t;
     fn svn_err_best_message(
         error: *const svn_error_t,
@@ -2281,6 +2293,8 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
+    static TEXTDELTA_APPLIED_TO_BUFFER: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
     static APPLY_TEXTDELTA_STREAM_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
@@ -2602,6 +2616,49 @@ mod tests {
         assert_eq!(APPLY_TEXTDELTA_CALLBACKS.load(Ordering::SeqCst), 1);
         assert!(TEXTDELTA_WINDOWS.load(Ordering::SeqCst) > 0);
         assert_eq!(TEXTDELTA_DONE_WINDOWS.load(Ordering::SeqCst), 1);
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_textdelta_windows_can_be_applied_to_fulltext_buffer() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        AprRuntime::initialize().unwrap();
+        let apr = AprRuntime;
+        let pool = apr.create_pool().unwrap();
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton {
+            textdelta_buffer: unsafe { svn_stringbuf_create_empty(pool.as_ptr()) },
+            ..RecordingEditorBaton::default()
+        };
+        TEXTDELTA_APPLIED_TO_BUFFER.store(0, Ordering::SeqCst);
+
+        assert!(!baton.textdelta_buffer.is_null());
+        drive_update_report(
+            &backend,
+            2,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).add_directory = Some(record_add_directory);
+                (*editor).open_directory = Some(record_open_directory);
+                (*editor).add_file = Some(record_add_file);
+                (*editor).apply_textdelta = Some(record_apply_textdelta_to_buffer);
+                (*editor).close_file = Some(record_close_file);
+            },
+        )
+        .unwrap();
+
+        assert_eq!(TEXTDELTA_APPLIED_TO_BUFFER.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            unsafe { stringbuf_bytes(baton.textdelta_buffer) },
+            b"hello\n"
+        );
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2968,6 +3025,7 @@ mod tests {
         closed_directories: usize,
         added_files: Vec<String>,
         closed_files: usize,
+        textdelta_buffer: *mut svn_stringbuf_t,
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -3183,6 +3241,38 @@ mod tests {
         unsafe {
             *handler = Some(record_textdelta_window);
             *handler_baton = ptr::null_mut();
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_apply_textdelta_to_buffer(
+        file_baton: *mut c_void,
+        _base_checksum: *const c_char,
+        result_pool: *mut AprPoolT,
+        handler: *mut SvnTxdeltaWindowHandlerFunc,
+        handler_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        assert!(!file_baton.is_null());
+        assert!(!result_pool.is_null());
+        let baton = unsafe { &mut *(file_baton as *mut RecordingEditorBaton) };
+        assert!(!baton.textdelta_buffer.is_null());
+        let source_stream = unsafe { svn_stream_empty(result_pool) };
+        assert!(!source_stream.is_null());
+        let target_stream =
+            unsafe { svn_stream_from_stringbuf(baton.textdelta_buffer, result_pool) };
+        assert!(!target_stream.is_null());
+        TEXTDELTA_APPLIED_TO_BUFFER.fetch_add(1, Ordering::SeqCst);
+        unsafe {
+            svn_txdelta_apply(
+                source_stream,
+                target_stream,
+                ptr::null_mut(),
+                ptr::null(),
+                result_pool,
+                handler,
+                handler_baton,
+            );
         }
         ptr::null_mut()
     }
