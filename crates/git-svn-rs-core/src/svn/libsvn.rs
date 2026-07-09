@@ -541,6 +541,17 @@ type SvnDeltaAddFileFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaOpenFileFunc = Option<
+    unsafe extern "C" fn(
+        path: *const c_char,
+        parent_baton: *mut c_void,
+        base_revision: c_long,
+        file_pool: *mut AprPoolT,
+        file_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 type SvnDeltaCloseFileFunc = Option<
     unsafe extern "C" fn(
         file_baton: *mut c_void,
@@ -578,7 +589,7 @@ struct SvnDeltaEditorT {
     close_directory: SvnDeltaCloseDirectoryFunc,
     absent_directory: *mut c_void,
     add_file: SvnDeltaAddFileFunc,
-    open_file: *mut c_void,
+    open_file: SvnDeltaOpenFileFunc,
     apply_textdelta: SvnDeltaApplyTextdeltaFunc,
     change_file_prop: *mut c_void,
     close_file: SvnDeltaCloseFileFunc,
@@ -2128,6 +2139,8 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     static CLOSED_FILE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
+    static OPENED_FILE_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    #[cfg(git_svn_rs_libsvn_linked)]
     static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
@@ -2227,7 +2240,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        CLOSED_DIRECTORY_CALLBACKS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2256,8 +2268,7 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        ADDED_FILE_CALLBACKS.lock().unwrap().clear();
-        CLOSED_FILE_CALLBACKS.store(0, Ordering::SeqCst);
+        CLOSED_DIRECTORY_CALLBACKS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2287,6 +2298,8 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
+        ADDED_FILE_CALLBACKS.lock().unwrap().clear();
+        CLOSED_FILE_CALLBACKS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2342,9 +2355,56 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_open_file_callback_for_incremental_edit() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
+        OPENED_FILE_CALLBACKS.lock().unwrap().clear();
+
+        drive_update_report_from_base(
+            &backend,
+            3,
+            2,
+            0,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).open_file = Some(record_open_file);
+                (*editor).apply_textdelta = Some(record_apply_textdelta);
+                (*editor).close_file = Some(record_close_file);
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            OPENED_FILE_CALLBACKS.lock().unwrap().as_slice(),
+            ["trunk/file.txt@2"]
+        );
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     fn drive_update_report(
         backend: &LibSvnBackend,
         revision: c_long,
+        update_baton: *mut c_void,
+        configure_editor: impl FnOnce(*mut SvnDeltaEditorT),
+    ) -> Result<(), String> {
+        drive_update_report_from_base(backend, revision, 0, 1, update_baton, configure_editor)
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    fn drive_update_report_from_base(
+        backend: &LibSvnBackend,
+        revision: c_long,
+        base_revision: c_long,
+        start_empty: c_int,
         update_baton: *mut c_void,
         configure_editor: impl FnOnce(*mut SvnDeltaEditorT),
     ) -> Result<(), String> {
@@ -2387,9 +2447,9 @@ mod tests {
                 set_path(
                     report_baton,
                     empty_path.as_ptr(),
-                    0,
+                    base_revision,
                     SVN_DEPTH_INFINITY,
-                    1,
+                    start_empty,
                     ptr::null(),
                     pool,
                 ),
@@ -2502,6 +2562,25 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_open_file(
+        path: *const c_char,
+        _parent_baton: *mut c_void,
+        base_revision: c_long,
+        _file_pool: *mut AprPoolT,
+        file_baton: *mut *mut c_void,
+    ) -> *mut svn_error_t {
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        OPENED_FILE_CALLBACKS
+            .lock()
+            .unwrap()
+            .push(format!("{path}@{base_revision}"));
+        unsafe {
+            *file_baton = ptr::null_mut();
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_apply_textdelta(
         _file_baton: *mut c_void,
         _base_checksum: *const c_char,
@@ -2555,6 +2634,8 @@ mod tests {
         fs::write(trunk.join("file.txt"), b"hello\n").map_err(|error| error.to_string())?;
         run(&wc, "svn", &["add", "trunk/file.txt"])?;
         run(&wc, "svn", &["commit", "-m", "add file"])?;
+        fs::write(trunk.join("file.txt"), b"hello again\n").map_err(|error| error.to_string())?;
+        run(&wc, "svn", &["commit", "-m", "modify file"])?;
 
         Ok((tmp, repo_url))
     }
