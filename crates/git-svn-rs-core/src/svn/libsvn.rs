@@ -525,6 +525,16 @@ type SvnDeltaOpenRootFunc = Option<
 >;
 
 #[cfg(git_svn_rs_libsvn_linked)]
+type SvnDeltaDeleteEntryFunc = Option<
+    unsafe extern "C" fn(
+        path: *const c_char,
+        revision: c_long,
+        parent_baton: *mut c_void,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t,
+>;
+
+#[cfg(git_svn_rs_libsvn_linked)]
 type SvnDeltaCloseDirectoryFunc =
     Option<unsafe extern "C" fn(dir_baton: *mut c_void, pool: *mut AprPoolT) -> *mut svn_error_t>;
 
@@ -602,7 +612,7 @@ type SvnDeltaChangeFilePropFunc = Option<
 struct SvnDeltaEditorT {
     set_target_revision: SvnDeltaSetTargetRevisionFunc,
     open_root: SvnDeltaOpenRootFunc,
-    delete_entry: *mut c_void,
+    delete_entry: SvnDeltaDeleteEntryFunc,
     add_directory: *mut c_void,
     open_directory: *mut c_void,
     change_dir_prop: SvnDeltaChangeDirPropFunc,
@@ -2165,6 +2175,8 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     static DIR_PROP_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
     #[cfg(git_svn_rs_libsvn_linked)]
+    static DELETE_ENTRY_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+    #[cfg(git_svn_rs_libsvn_linked)]
     static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
@@ -2489,6 +2501,40 @@ mod tests {
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn native_update_invokes_patched_delete_entry_callback() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut baton = RecordingEditorBaton::default();
+        DELETE_ENTRY_CALLBACKS.lock().unwrap().clear();
+
+        drive_update_report_from_base(
+            &backend,
+            6,
+            5,
+            0,
+            &mut baton as *mut RecordingEditorBaton as *mut c_void,
+            |editor| unsafe {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).delete_entry = Some(record_delete_entry);
+                (*editor).close_directory = Some(record_close_directory);
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            DELETE_ENTRY_CALLBACKS.lock().unwrap().as_slice(),
+            ["trunk/file.txt@6"]
+        );
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
     fn drive_update_report(
         backend: &LibSvnBackend,
         revision: c_long,
@@ -2620,6 +2666,21 @@ mod tests {
             let baton = unsafe { &mut *(dir_baton as *mut RecordingEditorBaton) };
             baton.closed_directories += 1;
         }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn record_delete_entry(
+        path: *const c_char,
+        revision: c_long,
+        _parent_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        DELETE_ENTRY_CALLBACKS
+            .lock()
+            .unwrap()
+            .push(format!("{path}@{revision}"));
         ptr::null_mut()
     }
 
@@ -2786,6 +2847,8 @@ mod tests {
         run(&wc, "svn", &["update", "trunk"])?;
         run(&wc, "svn", &["propset", "svn:ignore", "target", "trunk"])?;
         run(&wc, "svn", &["commit", "-m", "set directory ignore"])?;
+        run(&wc, "svn", &["delete", "trunk/file.txt"])?;
+        run(&wc, "svn", &["commit", "-m", "delete file"])?;
 
         Ok((tmp, repo_url))
     }
