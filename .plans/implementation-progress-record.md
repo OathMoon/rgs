@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `a24e2e0 feat: type remaining libsvn update callbacks`
+- Latest implementation commit: `48bd2119 feat: apply libsvn textdelta windows to buffer`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -101,6 +101,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `57f19d3`: linked libsvn delta-editor scaffolding now types the `apply_textdelta_stream` callback slot, including the txdelta stream-open callback surface, and validates the default editor accepts and invokes a patched typed stream callback.
 - `95086f8`: linked libsvn update-reporter scaffolding now types the `abort_report` callback slot and validates a native `svn_ra_do_update3()` report can be aborted without finishing.
 - `a24e2e0`: linked libsvn update scaffolding now types the remaining reporter `delete_path`/`link_path` slots plus delta-editor `absent_directory`/`absent_file`/`abort_edit` slots, with coverage for patched callback invocation and native reporter exposure.
+- `48bd2119`: linked libsvn native update scaffolding now binds `svn_stream_empty()` and `svn_txdelta_apply()` and validates native textdelta windows can be applied into a fulltext buffer for future `FetchEditor::apply_textdelta()` bridging.
 
 ## Completed Capabilities
 
@@ -163,6 +164,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn native delta-editor scaffolding now also types the `apply_textdelta_stream` tail callback and its txdelta stream-open callback surface; current native update coverage still uses the older window-handler `apply_textdelta` path.
 - Linked libsvn native update-reporter scaffolding now also types and validates the `abort_report` callback path for an unfinished `svn_ra_do_update3()` report.
 - Linked libsvn native update scaffolding now has typed Rust signatures for the remaining raw delta-editor/reporter callback slots (`absent_directory`, `absent_file`, `abort_edit`, `delete_path`, and `link_path`).
+- Linked libsvn native update scaffolding can now apply native txdelta windows into a fulltext buffer, closing the main content-reconstruction prerequisite for a native delta-editor-to-`FetchEditor` adapter.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
@@ -263,6 +265,7 @@ Important targeted suites recorded as passing during recent work:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_reporter_finishes_with_default_delta_editor -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_ -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::default_delta_editor_ -- --nocapture`
+- With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_textdelta_windows_can_be_applied_to_fulltext_buffer -- --nocapture`
 - `cargo test -p git-svn-rs-core --test libsvn_backend linked_backend_prompts_for_authenticated_svnserve_credentials -- --nocapture` (default build compiles the test target and filters out the linked-only test)
 - `cargo test -p git-svn-rs-core --test auth_prompt`
 - `cargo test -p git-svn-rs-core --test fetch_editor`
