@@ -2306,6 +2306,8 @@ mod tests {
     static ABSENT_FILE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
     #[cfg(git_svn_rs_libsvn_linked)]
     static ABORT_EDIT_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
+    #[cfg(git_svn_rs_libsvn_linked)]
+    static NATIVE_UPDATE_CALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn backend_without_url_reports_expected_error() {
@@ -2752,6 +2754,32 @@ mod tests {
 
     #[cfg(git_svn_rs_libsvn_linked)]
     #[test]
+    fn native_update_callbacks_drive_fetch_editor_for_delete_entry() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut editor = RecordingFetchEditor::default();
+
+        drive_fetch_editor_update_report_for_test(&backend, "trunk", 6, 5, 0, &mut editor).unwrap();
+
+        assert!(editor.events.contains(&"open_root:6".to_string()));
+        assert!(
+            editor
+                .events
+                .contains(&"delete_entry:trunk/file.txt@6".to_string()),
+            "{:?}",
+            editor.events
+        );
+        assert!(editor.events.contains(&"close_edit".to_string()));
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
     fn default_delta_editor_accepts_patched_textdelta_stream_callback() {
         AprRuntime::initialize().unwrap();
         let apr = AprRuntime;
@@ -3050,6 +3078,7 @@ mod tests {
         update_baton: *mut c_void,
         configure_editor: impl FnOnce(*mut SvnDeltaEditorT),
     ) -> Result<(), String> {
+        let _callback_lock = NATIVE_UPDATE_CALLBACK_LOCK.lock().unwrap();
         backend.with_session(|session, pool| unsafe {
             let editor = svn_delta_default_editor(pool);
             assert!(!editor.is_null());
@@ -3113,6 +3142,7 @@ mod tests {
         start_empty: c_int,
         fetch_editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
+        let _callback_lock = NATIVE_UPDATE_CALLBACK_LOCK.lock().unwrap();
         backend.with_session(|session, pool| unsafe {
             let editor = svn_delta_default_editor(pool);
             assert!(!editor.is_null());
@@ -3126,6 +3156,7 @@ mod tests {
             };
             (*editor).set_target_revision = Some(fetch_set_target_revision);
             (*editor).open_root = Some(fetch_open_root);
+            (*editor).delete_entry = Some(fetch_delete_entry);
             (*editor).add_directory = Some(fetch_add_directory);
             (*editor).open_directory = Some(fetch_open_directory);
             (*editor).add_file = Some(fetch_add_file);
@@ -3321,6 +3352,33 @@ mod tests {
     ) -> *mut svn_error_t {
         unsafe {
             *root_baton = edit_baton;
+        }
+        ptr::null_mut()
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    unsafe extern "C" fn fetch_delete_entry(
+        path: *const c_char,
+        revision: c_long,
+        parent_baton: *mut c_void,
+        _pool: *mut AprPoolT,
+    ) -> *mut svn_error_t {
+        if parent_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(parent_baton as *mut FetchEditorUpdateBaton) };
+        let revision = match u32::try_from(revision) {
+            Ok(revision) => revision,
+            Err(_) => {
+                baton.error = Some(format!(
+                    "SVN delete revision {revision} does not fit in u32"
+                ));
+                return ptr::null_mut();
+            }
+        };
+        let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
+        if let Err(error) = baton.editor.delete_entry(&path, revision) {
+            baton.error = Some(error);
         }
         ptr::null_mut()
     }
