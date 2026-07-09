@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `34c3284 feat: type libsvn delete entry callback`
+- Latest implementation commit: `9ea4376 feat: type libsvn add directory callback`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -96,6 +96,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `ed05d51`: linked libsvn delta-editor scaffolding now types the `change_file_prop` callback slot and validates an incremental native update from r3 to r4 emits the `svn:needs-lock` file property callback.
 - `8d698ea`: linked libsvn delta-editor scaffolding now types the `change_dir_prop` callback slot and validates an incremental native update from r4 to r5 emits the `svn:ignore` directory property callback.
 - `34c3284`: linked libsvn delta-editor scaffolding now types the `delete_entry` callback slot and validates an incremental native update from r5 to r6 emits a file deletion callback.
+- `9ea4376`: linked libsvn delta-editor scaffolding now types the `add_directory` callback slot and validates an incremental native update from r6 to r7 emits a directory-add callback.
 
 ## Completed Capabilities
 
@@ -153,6 +154,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - Linked libsvn native update scaffolding now also covers file property callbacks, including a real `svn:needs-lock` property change on an incremental update.
 - Linked libsvn native update scaffolding now also covers directory property callbacks, including a real `svn:ignore` property change on an incremental update.
 - Linked libsvn native update scaffolding now also covers delete-entry callbacks, including a real file deletion on an incremental update.
+- Linked libsvn native update scaffolding now also covers add-directory callbacks, including a real subdirectory add on an incremental update.
 - SVN CLI and linked libsvn log reads now include the supported `svn:needs-lock` file property alongside executable and special-link properties.
 - SVN CLI and linked libsvn log reads now include textual SVN file properties used by the golden harness: `svn:eol-style`, `svn:mime-type`, and `svn:keywords`.
 - Replay preserves executable files, symlinks, deleted-path history through peg revisions, branch/tag copy parents, empty-directory placeholders, include/ignore filters, ignored refs, authors mappings, rewritten metadata, `--no-metadata`, revision ranges, and incremental fetch anchors.
