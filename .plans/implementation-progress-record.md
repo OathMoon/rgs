@@ -6,7 +6,7 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 
 - Branch: `codex-execute-git-svn-rs-plans`
 - Base: `master` at `1284668 Add planning documents`
-- Latest implementation commit: `0285e5e feat: filter native internal directory props`
+- Latest implementation commit: `613efa8 feat: bridge native incremental file deltas`
 - Worktree before this update: clean after implementation commit; progress record updated afterward
 - Overall status: Phases 1-3 are complete; Phases 4/5 have strong local SVN CLI replay support; Phase 6 readonly commands are implemented for supported metadata/rev_map layouts; Phase 7 supports mock, local `file://`, and local `svn://` dcommit write-back; Phase 8 has a broad golden compatibility harness but still needs fuller strict Rust-vs-Perl validation.
 
@@ -102,12 +102,8 @@ Condensed handoff record for continuing the `.plans/` implementation work. Keep 
 - `95086f8`: linked libsvn update-reporter scaffolding now types the `abort_report` callback slot and validates a native `svn_ra_do_update3()` report can be aborted without finishing.
 - `a24e2e0`: linked libsvn update scaffolding now types the remaining reporter `delete_path`/`link_path` slots plus delta-editor `absent_directory`/`absent_file`/`abort_edit` slots, with coverage for patched callback invocation and native reporter exposure.
 - `48bd2119`: linked libsvn native update scaffolding now binds `svn_stream_empty()` and `svn_txdelta_apply()` and validates native textdelta windows can be applied into a fulltext buffer for future `FetchEditor::apply_textdelta()` bridging.
-- `8bf5258`: linked libsvn native update scaffolding now has a private adapter smoke test proving real `svn_ra_do_update3()` callbacks can drive a `FetchEditor` for an initial file add with fulltext content reconstruction.
-- `1cef794`: linked libsvn native update adapter scaffolding now bridges `open_file` and `change_file_prop` callbacks into `FetchEditor`, with property-only file change coverage that avoids synthetic textdelta output.
-- `838ab16`: linked libsvn native update adapter scaffolding now bridges `change_dir_prop` callbacks into `FetchEditor`, with directory property change coverage for `svn:ignore` on the update target.
-- `4a096aa`: linked libsvn native update adapter scaffolding now bridges `delete_entry` callbacks into `FetchEditor`, with file deletion coverage and serialized native update callback smoke helpers to avoid shared recorder races.
-- `3b880aa`: linked libsvn native update adapter scaffolding now tracks nested directory paths with a directory stack and closes directory batons, so nested `change_dir_prop` callbacks reach the correct `FetchEditor` path.
-- `0285e5e`: linked libsvn native update adapter scaffolding now filters internal `svn:entry:*` directory props before invoking `FetchEditor`.
+- `8bf5258`, `1cef794`, `838ab16`, `4a096aa`, `3b880aa`, `0285e5e`: the private native update adapter bridges initial file adds, file/directory properties, deletes, nested directory lifecycle, and internal directory-property filtering into `FetchEditor`.
+- `613efa8`: the private native update adapter preloads modified-file base content before `svn_ra_do_update3()`, applies incremental txdelta windows against that source, and emits reconstructed fulltext to `FetchEditor`.
 
 ## Completed Capabilities
 
@@ -278,7 +274,7 @@ Important targeted suites recorded as passing during recent work:
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_ -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::default_delta_editor_ -- --nocapture`
 - With the same vcpkg environment: `cargo test -p git-svn-rs-core --features svn-libsvn svn::libsvn::tests::native_update_textdelta_windows_can_be_applied_to_fulltext_buffer -- --nocapture`
-- With the same vcpkg environment: targeted native `FetchEditor` adapter smoke tests for initial file add, file property change, directory property change, delete entry, and nested directory property change.
+- With the same vcpkg environment: targeted native `FetchEditor` adapter smoke tests for initial/incremental file content, file/directory properties, deletes, and nested directory property changes.
 - `cargo test -p git-svn-rs-core --test libsvn_backend linked_backend_prompts_for_authenticated_svnserve_credentials -- --nocapture` (default build compiles the test target and filters out the linked-only test)
 - `cargo test -p git-svn-rs-core --test auth_prompt`
 - `cargo test -p git-svn-rs-core --test fetch_editor`
@@ -294,6 +290,6 @@ Compatibility notes:
 - Windows verification support exists through `scripts/verify.ps1` and the Windows GitHub Actions workflow, including manual strict compatibility mode.
 ## Recommended Next Steps
 
-1. Continue Phase 4/7 production backend work in the configured vcpkg/libsvn environment, likely with the next slice around native `svn_ra_do_update*` delta-editor integration, broader non-local remote validation, or remaining libsvn auth/provider prompt behavior.
+1. Promote the verified private native update adapter into the production `RaSession::do_update()` path, then continue broader non-local validation and remaining auth/provider behavior.
 2. Expand strict compatibility runs in environments with Perl git-svn, SVN CLI, and `svnserve`.
 3. Add remaining golden edge cases around remote layouts, refs/config metadata, rev_map records, command output, and property behavior.
