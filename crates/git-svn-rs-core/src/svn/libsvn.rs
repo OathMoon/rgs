@@ -1840,6 +1840,12 @@ unsafe extern "C" {
         value: *mut *mut c_void,
     );
     fn svn_stringbuf_create_empty(pool: *mut AprPoolT) -> *mut svn_stringbuf_t;
+    #[allow(dead_code)]
+    fn svn_stringbuf_ncreate(
+        bytes: *const c_char,
+        size: usize,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_stringbuf_t;
     fn svn_stream_from_stringbuf(
         buffer: *mut svn_stringbuf_t,
         pool: *mut AprPoolT,
@@ -2694,6 +2700,32 @@ mod tests {
 
     #[cfg(git_svn_rs_libsvn_linked)]
     #[test]
+    fn native_update_callbacks_drive_fetch_editor_for_incremental_file_edit() {
+        let (_tmp, repo_url) = match create_minimal_svn_repository() {
+            Ok(fixture) => fixture,
+            Err(error) => {
+                eprintln!("skipping: {error}");
+                return;
+            }
+        };
+        let backend = LibSvnBackend::for_url(repo_url);
+        let mut editor = RecordingFetchEditor::default();
+
+        drive_fetch_editor_update_report_for_test(&backend, "trunk", 3, 2, 0, &mut editor).unwrap();
+
+        assert!(editor.events.contains(&"open_root:3".to_string()));
+        assert!(
+            editor
+                .events
+                .contains(&"apply_textdelta:trunk/file.txt:12".to_string()),
+            "{:?}",
+            editor.events
+        );
+        assert!(editor.events.contains(&"close_edit".to_string()));
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
     fn native_update_callbacks_drive_fetch_editor_for_file_property_change() {
         let (_tmp, repo_url) = match create_minimal_svn_repository() {
             Ok(fixture) => fixture,
@@ -3176,8 +3208,27 @@ mod tests {
         start_empty: c_int,
         fetch_editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
+        let revision_number = u32::try_from(revision)
+            .map_err(|_| format!("SVN revision {revision} does not fit in u32"))?;
+        let base_file_paths = backend
+            .get_log(&[target], revision_number, revision_number)?
+            .into_iter()
+            .flat_map(|revision| revision.changed_paths)
+            .filter(|path| {
+                matches!(path.action, ChangeAction::Modify)
+                    && matches!(path.kind, NodeKind::File | NodeKind::Symlink)
+            })
+            .map(|path| path.path)
+            .collect::<Vec<_>>();
+
         let _callback_lock = NATIVE_UPDATE_CALLBACK_LOCK.lock().unwrap();
         backend.with_session(|session, pool| unsafe {
+            let mut base_file_contents = BTreeMap::new();
+            for path in &base_file_paths {
+                let (content, _) = get_file(session, pool, path, base_revision)?;
+                base_file_contents.insert(editor_path(path), content);
+            }
+
             let editor = svn_delta_default_editor(pool);
             assert!(!editor.is_null());
 
@@ -3185,6 +3236,8 @@ mod tests {
                 editor: fetch_editor,
                 active_directory_paths: vec![target.to_string()],
                 active_file_path: None,
+                base_file_contents,
+                active_textdelta_source_buffer: ptr::null_mut(),
                 active_textdelta_buffer: ptr::null_mut(),
                 error: None,
             };
@@ -3271,6 +3324,8 @@ mod tests {
         editor: &'a mut dyn FetchEditor,
         active_directory_paths: Vec<String>,
         active_file_path: Option<String>,
+        base_file_contents: BTreeMap<String, Vec<u8>>,
+        active_textdelta_source_buffer: *mut svn_stringbuf_t,
         active_textdelta_buffer: *mut svn_stringbuf_t,
         error: Option<String>,
     }
@@ -3496,6 +3551,7 @@ mod tests {
                 baton.error = Some(error);
             }
             baton.active_file_path = Some(path);
+            baton.active_textdelta_source_buffer = ptr::null_mut();
             baton.active_textdelta_buffer = unsafe { svn_stringbuf_create_empty(file_pool) };
         }
         unsafe {
@@ -3514,11 +3570,23 @@ mod tests {
     ) -> *mut svn_error_t {
         if !parent_baton.is_null() {
             let baton = unsafe { &mut *(parent_baton as *mut FetchEditorUpdateBaton) };
-            baton.active_file_path = Some(
-                unsafe { CStr::from_ptr(path) }
-                    .to_string_lossy()
-                    .into_owned(),
-            );
+            let path = unsafe { CStr::from_ptr(path) }
+                .to_string_lossy()
+                .into_owned();
+            baton.active_textdelta_source_buffer =
+                if let Some(content) = baton.base_file_contents.get(&path) {
+                    unsafe {
+                        svn_stringbuf_ncreate(
+                            content.as_ptr().cast::<c_char>(),
+                            content.len(),
+                            _file_pool,
+                        )
+                    }
+                } else {
+                    baton.error = Some(format!("libsvn update had no base content for {path}"));
+                    unsafe { svn_stringbuf_create_empty(_file_pool) }
+                };
+            baton.active_file_path = Some(path);
             baton.active_textdelta_buffer = ptr::null_mut();
         }
         unsafe {
@@ -3540,10 +3608,13 @@ mod tests {
         }
         let baton = unsafe { &mut *(file_baton as *mut FetchEditorUpdateBaton) };
         if baton.active_textdelta_buffer.is_null() {
-            baton.error = Some("libsvn textdelta callback had no active file buffer".to_string());
-            return ptr::null_mut();
+            baton.active_textdelta_buffer = unsafe { svn_stringbuf_create_empty(result_pool) };
         }
-        let source_stream = unsafe { svn_stream_empty(result_pool) };
+        let source_stream = if baton.active_textdelta_source_buffer.is_null() {
+            unsafe { svn_stream_empty(result_pool) }
+        } else {
+            unsafe { svn_stream_from_stringbuf(baton.active_textdelta_source_buffer, result_pool) }
+        };
         let target_stream =
             unsafe { svn_stream_from_stringbuf(baton.active_textdelta_buffer, result_pool) };
         unsafe {
