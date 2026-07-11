@@ -1,58 +1,142 @@
-# git-svn-rs 核心闭环替代品计划
+# git-svn-rs Core Compatibility Plan v2
 
-## Summary
+## Authority and Purpose
 
-- 从空目录 `E:\Repositories\gitsvn` 初始化 Rust + Git 项目，开发独立命令 `git-svn-rs`。
-- 默认不覆盖系统 `git-svn`；额外提供可选 `git-svn` shim，使用户可通过 `git svn ...` 调到新实现。
-- 第一版实现核心闭环：`clone`、`init`、`fetch`、`rebase`、`dcommit`、`log`、`info`、`find-rev`、`gc`、`reset`。
-- 参考依据：[git-svn 官方文档](https://git-scm.com/docs/git-svn)、[git-svn.perl](https://github.com/git/git/blob/master/git-svn.perl)、[raw git-svn.perl](https://raw.githubusercontent.com/git/git/master/git-svn.perl)、[perl 目录](https://github.com/git/git/tree/master/perl)、[Git.pm](https://raw.githubusercontent.com/git/git/master/perl/Git.pm)、[Git::SVN.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN.pm)、`subversion`/`subversion-sys` crates.io 元数据；详细参考索引见 `.plans/00-git-svn-rs-review-and-roadmap.md` 的 `Reference Sources`。
+This file is the product-level contract for `git-svn-rs`. The architecture and phase order are defined in `.plans/00-git-svn-rs-review-and-roadmap.md`; implementation handoff status is recorded in `.plans/implementation-progress-record.md`.
 
-## Key Changes
+The 2026-07-10 review in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md` supersedes earlier completion claims and long task recipes. A phase is complete only when its gate in the current phase plan passes; commit count, test count, parse-only CLI coverage, and dependency-skipped tests are not completion evidence.
 
-- 使用 Rust workspace：主 crate 输出 `git-svn-rs`，核心逻辑放入 library crate，CLI 用 `clap`，错误用 `thiserror`/`anyhow`。
-- SVN 后端绑定 `libsvn`：优先使用 `subversion` crate，不足处通过 `subversion-sys` 封装安全 FFI；所有 APR pool、auth、RA session、delta editor unsafe 代码隔离在 `svn_ffi` 模块。默认构建仍不依赖 libsvn，但 release 兼容门禁必须在安装 SVN/libsvn/Perl `git svn` 的环境中运行。
-- Git 后端调用原生 `git` 命令而不是 libgit2：使用 `git init/config/fast-import/rev-list/diff-tree/rebase/update-ref/cat-file`，保证行为贴近当前 Git。
-- Git 命令封装参考 `perl/Git.pm`：覆盖 repository/worktree 发现、config 单值/多值读取、stdout/stderr/exit-code 传播、pipe close、路径反引用、prompt fallback 和 temp lock 语义。
-- 完全兼容 `git-svn` 元数据：读写 `.git/config` 的 `[svn-remote "<name>"]`、`.git/svn/**/.rev_map.*`、`git-svn-id:` footer、`unhandled.log`。
-- 支持标准布局和自定义布局：`--stdlayout`、`--trunk/-T`、`--branches/-b`、`--tags/-t`、`--prefix`、多个 branches/tags mapping。
-- 支持核心选项：authors file/program、ignore/include paths、ignore refs、revision range、log-window-size、localtime、no-metadata、rewrite-root、rewrite-uuid、username、config-dir、no-auth-cache。
-- 路径过滤 regex 使用 Perl 兼容优先方案，至少覆盖官方文档中的 lookahead 示例；无法兼容的 Perl 特性返回明确错误。
-- `fetch/clone` 数据流：`RaSession` 用 `get_log` 发现变更窗口，用 `do_update`/`do_switch` 驱动 `SvnFetchEditor`，按 ref mapping 分流，处理 copy/delete/modify/absent/props，写入 Git 对象，更新 remote refs 和 rev_map。`FastImport` 只是字节安全的对象写入机制，不作为 SVN 行为模型。
-- SVN 属性处理：支持 `svn:executable`、`svn:special`/symlink、空目录 placeholder；其他属性记录到 `.git/svn/<ref>/unhandled.log`。
-- `dcommit` 第一版只支持线性提交：通过 `GitDiffPlanner` 解析 `git diff-tree -z -r -C`，通过 `SvnCommitEditor`/`PathEnsurer`/`PropertyMapper` 逐个将 Git commit diff 写回 SVN，支持 `--dry-run`、`--commit-url`、`--no-rebase`、显式 `--mergeinfo`；复杂 mergeinfo 自动生成暂不实现。
-- 未纳入核心闭环的命令，如 `branch`、`tag`、`set-tree`、`propget`、`propset`、`show-ignore`，CLI 可识别但返回 `unsupported in v1`。
+## Product Goal
 
-## Planning Rules
+Deliver a Rust implementation of the supported core `git svn` workflow:
 
-- `.plans/00-git-svn-rs-review-and-roadmap.md` 是架构总线；其他计划必须服从它的阶段依赖和门禁。
-- 各分计划里的兼容单元不是可选优化。`GlobSpec`、path/url utilities、rev_map lock/fsync、migration、RA session、fetch editor、commit editor、log formatter、auth prompt、golden comparison 都是对应阶段的必做内容。
-- 本地默认验证允许缺少 SVN/libsvn/Perl `git svn` 时显式 skip；release 兼容验证不允许 skip，缺依赖视为环境失败。
-- Golden tests 不接受“只比较数量/长度”的弱断言。必须比较归一化后的 config、ref 名和对象、`git-svn-id` footer、rev_map 记录、命令输出和关键文件模式。
+- read: `init`, `clone`, `fetch`, `rebase`, `log`, `info`, `find-rev`, `gc`, and `reset`;
+- write: safe linear `dcommit` with `--dry-run`, `--no-rebase`, `--commit-url`, and explicit `--mergeinfo`;
+- compatibility: Git config, `git-svn-id`, `.git/svn/**/.rev_map.*`, refs, commit graph, working-tree state, and user-visible output for the declared profiles;
+- packaging: `git-svn-rs` by default and an opt-in `git-svn` shim.
 
-## Public Interfaces
+The first compatibility release is not required to implement historical non-core commands such as branch/tag write-back, `set-tree`, `commit-diff`, property-editing commands, or automatic mergeinfo generation.
 
-- CLI:
-  - `git-svn-rs <command> [options] [arguments]`
-  - 可选 shim：`git svn <command> ...`
-- 核心类型:
-  - `SvnRemoteConfig`：表示 `[svn-remote]` 配置、URL、ref mapping 和兼容选项。
-  - `RefMapping`：SVN path/glob 到 Git ref 的映射。
-  - `RevMap`：SVN revision、UUID、Git object id 的双向索引。
-  - `SvnBackend` trait：封装 `log`、`replay/fetch revision`、`commit_delta`、`props`、`auth`。
-  - `GitBackend` trait：封装 Git plumbing 调用、object format、refs、fast-import、rebase。
-- 不暴露稳定 Rust API；library crate 主要服务测试和命令复用。
+## Frozen Compatibility Baseline
 
-## Test Plan
+The normative upstream baseline is Git `v2.54.0`, commit [`0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`](https://github.com/git/git/tree/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015).
 
-- 单元测试：config 解析、refspec/glob/brace expansion、rev_map 读写、`git-svn-id` 解析、authors 映射、路径过滤优先级。
-- 集成测试：用 `svnadmin` 创建临时 SVN 仓库，覆盖 `file://` 标准布局、自定义布局、分支、标签、copy、delete、rename、可执行位、symlink、空目录。
-- 兼容测试：在带原版 `git-svn` 的 CI 环境生成 golden fixture，对比 refs、commit message、rev_map、`find-rev`、`info`、`log` 输出。
-- 写回测试：线性 `dcommit` 写入 SVN 后再 `fetch/rebase`，验证 SVN revision、Git ref、rev_map 和工作区状态一致。
-- Windows 优先：首版在当前 Windows 环境构建；文档写明 SVN/libsvn 安装与 `PATH`/库路径要求。
+Normative sources are pinned to that commit:
 
-## Assumptions
+- [`Documentation/git-svn.adoc`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/Documentation/git-svn.adoc)
+- [`git-svn.perl`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/git-svn.perl)
+- [`perl/Git.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git.pm)
+- [`Git::SVN.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN.pm)
+- [`Ra.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Ra.pm)
+- [`Fetcher.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Fetcher.pm)
+- [`Editor.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Editor.pm)
+- [`Log.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Log.pm)
+- [`Migration.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Migration.pm)
+- [`Prompt.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Prompt.pm)
+- [`Utils.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Utils.pm)
+- [`GlobSpec.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/GlobSpec.pm)
 
-- 当前目录为空且不是 Git 仓库；实施第一步会执行 `git init`。
-- 首版目标是“可用核心闭环”，不是一次性覆盖 `git-svn` 的所有历史命令。
-- 不直接复制 Perl 代码；以官方文档、行为测试和脚本结构作为规格参考。
-- 默认命令名保持 `git-svn-rs`，只有用户显式安装 shim 时才启用精确 `git svn` 入口。
+The current [git-svn documentation](https://git-scm.com/docs/git-svn.html) and Git `master` are forward-compatibility observation sources only. Differences from the frozen baseline require a recorded compatibility decision and dedicated test.
+
+## Status Vocabulary
+
+Every phase and protocol profile uses one of these states:
+
+- `not-started`: no usable implementation exists;
+- `in-progress`: implementation is changing and no gate may be claimed;
+- `structural-pass`: types, parsing, and isolated units exist, but user behavior is not proven;
+- `behavior-pass`: declared local/integration scenarios pass without hiding semantic differences;
+- `release-pass`: strict upstream comparison and every required profile pass without skips.
+
+`complete`, `supported`, and `compatible` must not be used without naming the corresponding state and profile.
+
+## Compatibility Profiles
+
+| Profile | First-release target | Current status source |
+|---|---|---|
+| `file://` through SVN CLI | `release-pass` for single-path and standard layout read/write | progress record and Phase 5/7/8 gates |
+| local `svn://` through SVN CLI | `release-pass` for explicit credentials and linear read/write | progress record and Phase 5/7/8 gates |
+| linked libsvn over `file://` and local `svn://` | `behavior-pass` for RA/delta read; write requires an explicit later gate | Phase 4/5 |
+| `http://` and `https://` | no general support claim until authenticated read/write profiles reach `behavior-pass`; first general compatibility release requires a documented decision | Phase 4/7 |
+| `svn+ssh://` | deferred unless a repeatable fixture is added; accepted-but-unvalidated is not support | Phase 4/7 |
+| `mock://` | test infrastructure only | never a release profile |
+
+An unsupported or deferred combination must fail explicitly. Silently accepting an option or URL scheme is forbidden.
+
+## Core Compatibility Contract
+
+### CLI and configuration
+
+- Every parsed option is implemented, explicitly rejected, or documented as deferred; no inert option is allowed.
+- Configuration precedence is centralized and tested: command line, selected `[svn-remote]`, then global Git config where the upstream baseline uses it.
+- Multiple values, full layout URLs, prefixes, authors, filters, metadata modes, auth, and revision forms follow the frozen baseline.
+
+### Git object identity
+
+- SVN author, full message, timestamp, UTC/local offset, parent graph, tree, modes, and `git-svn-id` determine the same normalized commit identity as the baseline.
+- `clone` creates the expected local branch, resolves `HEAD`, and populates the working tree unless `--no-checkout` is set.
+- Golden tests compare object IDs or a complete graph fingerprint; replacing IDs with `<commit>` is not sufficient.
+
+### Fetch architecture
+
+- `get_log` discovers bounded revision windows; `do_update`/`do_switch` drive the sole `SvnFetchEditor` behavior model.
+- SVN CLI and libsvn may be different transport adapters, but neither may bypass the common editor contract to write Git changes directly.
+- The contract includes copy/delete/modify, base/result checksums, absent paths, properties, path encoding, persistent empty-directory placeholders, filters, and follow-parent behavior.
+
+### Dcommit safety
+
+- The target is resolved from the nearest first-parent `git-svn-id`/rev_map identity and validated against remote, UUID, repository root, and SVN path.
+- Ambiguous targets fail closed. Dirty worktrees, unsupported merge topology, and stale upstream state are rejected before the first SVN write.
+- Every production adapter executes the same `DcommitPlan`; full commit messages and property deletions are preserved.
+- Partial SVN success is recorded so fetch/rebase can resume without duplicate submission.
+
+### Metadata consistency
+
+- Read-only open and create are separate operations.
+- Ref updates and rev_map changes have a documented ordering, compare-and-swap precondition, validation, and recovery path.
+- Legacy metadata is migrated with backup/warning or rejected explicitly; inspection alone is not migration compatibility.
+
+### Native safety
+
+- No Rust panic or `unwrap()` may cross an `extern "C"` callback.
+- Callback state belongs to the operation baton, not process-global mutable recorders.
+- Unsafe APR/libsvn code is isolated from domain orchestration and covered by linked tests that pass under the default parallel harness.
+
+## Architecture Constraints
+
+- Keep the three-crate workspace: CLI, core, and opt-in shim.
+- Use Git CLI plumbing through one tested wrapper; do not scatter `Command::new("git")` through production modules.
+- Keep one remote/config resolver, one rev_map path implementation, one fetch behavior model, and one dcommit plan model.
+- Use structured error categories for auth, unsupported capability, ambiguity, metadata corruption, partial write, and external command failure.
+- Do not introduce an abstraction without at least two real implementations or a demonstrated safety/test boundary.
+
+## Execution Order
+
+1. Phase 1–3 contract corrections: CLI semantics, URL/config model, metadata state and resolver foundations.
+2. Phase 5 correctness closure: single-path clone, real timestamps, checkout, revision options, exact object tests.
+3. Phase 4/5 fetch unification: production native delta, CLI adapter convergence, complete Fetcher semantics.
+4. Phase 7 safe dcommit: first-parent target, clean/linear preflight, shared plan, recovery.
+5. Phase 6 metadata/read-only completion.
+6. Phase 8 non-skippable strict release gate.
+
+P0 correctness work takes precedence over additional callback, protocol, property, or command breadth.
+
+## Verification Policy
+
+- Developer gate: formatting, lint, unit/default workspace tests; missing external tools may be an explicit skip only here.
+- Backend gate: required SVN CLI/libsvn fixtures actually run; a filtered-out or skipped test is not a pass.
+- Release gate: Perl `git svn`, SVN CLI, linked libsvn, and required protocol profiles are present; no compatibility scenario may skip.
+- Verification output records tool versions, frozen Git commit, executed scenarios, skipped scenarios, elapsed time, and artifact location.
+
+## Release Definition
+
+The first compatibility release requires all of the following:
+
+- every Phase 1–8 behavioral gate passes;
+- Phase 8 reaches `release-pass` against the frozen baseline;
+- single-path and standard-layout clone/fetch compare exact commit graphs and working-tree state;
+- safe linear dcommit passes wrong-target, dirty-tree, full-message, property, partial-failure, fetch, and rebase scenarios;
+- required profile rows are explicitly marked `release-pass` or removed from the public support claim;
+- documentation states all deferred schemes, commands, options, migration limits, and auth limits.
+
+Current implementation status is intentionally not summarized here; use `.plans/implementation-progress-record.md` so this contract remains stable.

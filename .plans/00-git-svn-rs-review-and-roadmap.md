@@ -1,162 +1,251 @@
-# git-svn-rs Review and Roadmap Implementation Plan
+# git-svn-rs Architecture Roadmap v2
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+## Role of This File
 
-**Goal:** Use Git's Perl `git-svn` implementation as the compatibility map for staged Rust implementation.
+This is the architecture bus and execution order for all `.plans/01-*` through `.plans/08-*` files. The product contract is `.plans/git-svn-rs-plan.md`; the evidence-backed correction is `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
-**Architecture:** Treat this file as the architecture bus for all other `.plans` files. Implement compatibility units first (`GlobSpec`, path/url utilities, rev map, RA session, fetch editor, commit editor, log formatter, auth prompt, migration, golden tests), then wire user-facing commands to those units. A task named "optimization" in a split plan is mandatory when it provides one of these compatibility units.
+Old task-by-task recipes were removed because they mixed specification, sample implementation, and stale completion checkboxes. Current phase files define outcomes and gates; implementation details are chosen only after a failing compatibility test or a documented design decision.
 
-**Tech Stack:** Rust 1.95, Cargo workspace, Git CLI plumbing, Subversion CLI fixtures, optional `subversion`/`subversion-sys` behind `svn-libsvn`, Perl `git svn` golden fixtures when available.
+## Frozen Upstream Baseline
 
----
+- Git tag: `v2.54.0`
+- Commit: [`0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`](https://github.com/git/git/tree/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015)
+- Online latest documentation is advisory, not normative.
+- A forward-compatibility change must identify the newer Git commit, describe the behavior difference, and add a versioned test.
 
-## Perl Module Responsibility Map
+## Upstream Responsibility Map
 
-- `git-svn.perl` controls CLI command names, option spelling, dispatch, and legacy command compatibility.
-- `perl/Git.pm` controls the shared Perl Git command wrapper model: repository discovery, working-copy context, config lookup semantics, command output capture, pipe close/error propagation, prompt fallback, path quoting helpers, temp lock helpers, and object IO helpers. Rust `GitCli` must use this as the compatibility reference for Git plumbing wrappers, not only the `git-svn` submodules.
-- `Git::SVN.pm` controls repository metadata, `git-svn-id`, fetch range calculation, rev map format, commit creation, `noMetadata`, `useSvmProps`, `useSvnsyncProps`, `rewriteRoot`, and `rewriteUUID`.
-- `Git::SVN::GlobSpec` maps to Rust `glob_spec.rs`: refspec glob parsing, wildcard constraints, `{a,b}` pattern handling, depth, regex, and `full_path`.
-- `Git::SVN::Utils` maps to Rust `path_url.rs`: path canonicalization, URL canonicalization, path joining, and adding SVN paths to URLs.
-- `Git::SVN::Ra` maps to Rust `ra/session.rs` and `ra/fetch_loop.rs`: RA sessions, auth config setup, `check_path`, `get_dir`, `get_log`, windowed fetch, glob matching, URL minimization, unknown revision skipping, `do_update`, and `do_switch`.
-- `Git::SVN::Fetcher` maps to Rust `fetch_editor.rs`: SVN delta editor import, path filtering, `.git` rejection, path stripping, pathname encoding, `svn:executable`, `svn:special`, empty-directory placeholders, absent path recording, and unhandled property logging.
-- `Git::SVN::Editor` maps to Rust `commit_editor.rs`: linear `dcommit` write-back, `git diff-tree -z -r -C` parsing, `check_diff_paths`, `ensure_path`, `open_or_add_dir`, `D/C/R/A/M/T` operation ordering, autoprops, manual props, `svn:executable`, `svn:special`, and optional explicit mergeinfo.
-- `Git::SVN::Log` maps to Rust `log_formatter.rs`: `log`, `find-rev`, revision ranges, `--oneline`, `--incremental`, `--show-commit`, verbose changed paths, date formatting, and metadata extraction.
-- `Git::SVN::Migration` maps to Rust `migration.rs`: legacy metadata discovery, `.rev_db` to `.rev_map` migration policy, empty `[svn-remote]` detection, and one-way migration warnings.
-- `Git::SVN::Prompt` maps to Rust `auth/prompt.rs`: username/password prompts, `--username`, `--no-auth-cache`, SSL server trust, and client certificate prompts.
-- `Git::SVN::Memoize::YAML` maps to Rust `cache/yaml.rs`: stable on-disk cache shape for reusable compatibility data where a human-readable cache is useful.
+| Upstream source | Normative responsibility | Rust compatibility unit |
+|---|---|---|
+| [`git-svn.perl`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/git-svn.perl) | command/option surface, dispatch, command glue | `cli`, application commands |
+| [`Git.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git.pm) | Git wrapper, config cardinality, pipe/error, prompt, temp/lock | `GitCli`, config access, error model |
+| [`Git::SVN.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN.pm) | metadata, dates, revision ranges, commit creation, rev_map coordination | import coordinator, metadata state |
+| [`GlobSpec.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/GlobSpec.pm) | mapping glob/brace/depth rules | `GlobSpec`, `RefMapping` |
+| [`Utils.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Utils.pm) | canonical path/URL and URL path joining | URL/session path model |
+| [`Ra.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Ra.pm) | RA sessions, bounded logs, update/switch, auth, branch discovery | `RaSession`, revision source/driver |
+| [`Fetcher.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Fetcher.pm) | delta consumer, filters, properties, checksums, absent paths, placeholders | `SvnFetchEditor` |
+| [`Editor.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Editor.pm) | Git diff planning and SVN commit editor | `DcommitPlan`, commit sinks |
+| [`Log.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Log.pm) | log/find-rev formatting and selection | readonly query/formatter |
+| [`Migration.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Migration.pm) | legacy layouts, one-way migration, warnings | metadata migration policy |
+| [`Prompt.pm`](https://github.com/git/git/blob/0b13e48a3a30cdfa94e8ef842e24d6045ab3d015/perl/Git/SVN/Prompt.pm) | simple auth, SSL trust, client certificate | auth provider/prompt port |
 
-## Roadmap Principles
+## Target Architecture
 
-- Implement Perl-compatible units before command glue. A command task may call a compatibility unit, but must not invent a parallel shortcut that bypasses the unit.
-- Do not accept a phase gate while a required compatibility unit is still parked in a later "optimization" section. Move the unit into the phase's main path or mark the phase as incomplete.
-- `FastImport` can remain a Git object writing mechanism, but it is not the SVN behavior model. The behavior model for `fetch` is `SvnFetchEditor`, derived from `Fetcher.pm`.
-- `dcommit` must use an editor-driven path. The command may still enumerate local commits, but write-back behavior belongs in `GitDiffPlanner`, `SvnCommitEditor`, `PathEnsurer`, and `PropertyMapper`.
-- Keep v1 scope conservative: core read/write workflow only. Do not implement branch/tag write-back, automatic mergeinfo generation, `set-tree`, or `commit-diff`.
-- Golden compatibility tests are first-class acceptance criteria. If Perl `git svn` is unavailable, skip those tests with an explicit dependency message; do not silently weaken unit tests.
-- Default builds must not require libsvn. The `svn-libsvn` feature enables the real RA/editor backend; mock backends support most unit and command tests.
+```mermaid
+flowchart TB
+    CLI["CLI and optional shim"] --> APP["Application services"]
+    APP --> DOMAIN["Compatibility domain"]
+    DOMAIN --> GIT["GitRepository / GitCli"]
+    DOMAIN --> SOURCE["RevisionSource + EditorDriver"]
+    SOURCE --> CLIADAPTER["SVN CLI adapter"]
+    SOURCE --> RAADAPTER["libsvn RA/delta adapter"]
+    DOMAIN --> SINK["CommitSink"]
+    SINK --> WCCLI["working-copy adapter"]
+    SINK --> NATIVE["native commit-editor adapter"]
+    DOMAIN --> STATE["MetadataStateStore"]
+```
 
-## Perl Directory Review Impact
+The names are conceptual boundaries, not a requirement to add a trait for every box. A boundary is introduced only when it isolates two real adapters, a persistence transaction, or unsafe FFI.
 
-- The reference root is the full `perl` directory, not only `perl/Git/SVN`, because `git-svn.perl` relies on shared `Git.pm` behavior for Git command execution, config lookup, prompt fallback, path quoting, repository discovery, and lock/temp helpers.
-- `GitCli` must expose a small but explicit wrapper layer instead of scattered `std::process::Command` calls. Command modules may use convenience helpers, but process execution, config reads, object-format detection, and error normalization belong behind that wrapper.
-- Auth prompt behavior must cross-check both `Git::SVN::Prompt` and `Git.pm::prompt`, including askpass environment fallback and terminal prompt fallback.
-- Golden tests must record both `git-svn` module sources and the top-level Perl/Git wrapper source used for comparison so regressions in command/config/prompt behavior are traceable.
+## Non-Negotiable Architecture Rules
 
-## Replanned Dependency Order
+1. **One fetch behavior model.** Transport adapters may differ; only `SvnFetchEditor` defines SVN-to-Git semantics.
+2. **One dcommit plan.** Mock, working-copy, and native commit paths execute the same ordered plan.
+3. **One resolver.** Remote, ref, UUID, rev_map, URL, and first-parent selection are centralized and fail on ambiguity.
+4. **One metadata state boundary.** Open-read, create, lock, append, ref CAS, validation, and recovery are explicit operations.
+5. **Exact identity is behavior.** Timestamp, timezone, identities, parents, messages, trees, and modes are not golden-test noise.
+6. **No inert CLI.** Parse-only coverage never counts as implementation.
+7. **No panic across FFI.** C callbacks translate failure to SVN errors and use operation-owned batons.
+8. **No release by skip.** Dependency-skipped compatibility tests can pass only the developer gate.
 
-1. Foundation: workspace, CLI parsing, unsupported-command diagnostics, and feature diagnostics.
-2. Pure compatibility units: `GlobSpec`, path/url canonicalization, ref mapping, authors, filters, metadata options, and migration inspection.
-3. Git metadata: `GitCli`, `GitSvnId`, `.git/svn` paths, `.rev_map` binary IO, lock/fsync behavior, object format detection, and metadata conflict validation.
-4. SVN access: fixtures, auth prompt abstraction, `RaSession`, `FetchEditor`/`CommitEditor` traits, `do_update`, `do_switch`, mock RA/editor sessions, and feature-gated libsvn shell.
-5. Import: byte-safe Git object writer, `SvnFetchEditor`, branch/tag discovery, `init`, `fetch`, and `clone`.
-6. Read-only commands: `GitSvnLogFormatter`, bidirectional `find-rev`, `info`, `log`, `gc`, `reset`, and `rebase`.
-7. Write-back: `GitDiffPlanner`, `SvnCommitEditor`, `PathEnsurer`, `PropertyMapper`, linear `dcommit`, and optional shim.
-8. Compatibility gate: Perl `git svn` golden fixture capture and strict normalized comparison.
+## Status Model
 
-## Parallel Development Lanes
+Each phase has exactly one current state: `not-started`, `in-progress`, `structural-pass`, `behavior-pass`, or `release-pass`. Profile-specific qualification may be added, for example `behavior-pass(file://-cli)`.
 
-- Lane A can implement Phase 1 CLI and diagnostics immediately.
-- Lane B can implement `GlobSpec`, path/url helpers, authors, filters, and config serialization after CLI argument names are stable.
-- Lane C can implement Git metadata and rev_map independently from Lane B once workspace scaffolding exists.
-- Lane D can implement SVN fixtures, auth prompt, RA/editor traits, and mock sessions in parallel with Lane B/C.
-- Lane E can implement byte-safe Git object writing in parallel, but real `fetch` must wait for Lane B/C/D compatibility interfaces.
-- Lane F can implement log formatting and bidirectional `find-rev` after rev_map and `git-svn-id` are stable.
-- Lane G can implement dcommit diff planning and property mapping while fetch is being finalized; production `dcommit` waits for fetch and commit editor wiring.
-- Lane H can build the golden harness early, but strict comparisons become required only after clone/fetch and dcommit are functional.
+Current audited state:
 
-## Verification Modes
+| Phase | Current state | Why it is not further along |
+|---|---|---|
+| 1 workspace/CLI | `structural-pass` | global verbosity and inert-option policy are incomplete |
+| 2 config/mapping | `structural-pass` | URL/session path model, full layout URLs, metadata runtime semantics are incomplete |
+| 3 metadata/rev_map | `structural-pass` | migration, ambiguity, transaction, and recovery are incomplete |
+| 4 SVN backend | `in-progress` | public libsvn update is log replay; native adapter is test-only; parallel FFI tests are unstable |
+| 5 clone/fetch | `in-progress` | single-path clone, timestamps, checkout, option semantics, and unified Fetcher behavior are incomplete |
+| 6 readonly | `in-progress` | supported subset works; multi-ref scope, optional tree-ish, and remaining Log modes are incomplete |
+| 7 dcommit | `in-progress` | local prototype bypasses shared editor plan and target resolution is unsafe |
+| 8 golden/release | `structural-pass` | strict Perl run skips and object/clone state differences are normalized away |
 
-- Developer mode: `cargo test --workspace` must pass; SVN/libsvn/Perl-dependent tests may skip only with explicit messages.
-- Compatibility mode: run on an environment with Git, SVN CLI tools, libsvn development libraries, and Perl `git svn`; no golden, fetch, or dcommit compatibility test may skip.
-- Release mode: compatibility mode plus `cargo fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D warnings`, default build, and `svn-libsvn` feature build.
+The progress record may move a state only when it cites the exact gate command and result.
 
-## Split Plan Files
+## Capability Matrix
 
-- `.plans/01-foundation-cli-workspace.md`: Create Git/Rust workspace, CLI shape, unsupported command behavior, logging, and diagnostics.
-- `.plans/02-config-mapping-authors-filters.md`: Implement `GlobSpec`, path/url utilities, config parsing, layout mapping, authors resolution, and filter precedence.
-- `.plans/03-git-metadata-revmap.md`: Implement Git plumbing, `git-svn-id`, `.git/svn` metadata, `.rev_map`, migration, and metadata option compatibility.
-- `.plans/04-svn-fixtures-and-backend.md`: Implement fixtures, `RaSession`, RA cache, auth prompt mocks, editor traits, mock backend, and feature-gated libsvn backend.
-- `.plans/05-import-clone-fetch.md`: Implement `init`, `clone`, `fetch`, `SvnFetchEditor`, branch/tag discovery, properties, empty directories, absent paths, and Git object writing.
-- `.plans/06-readonly-commands-rebase-reset.md`: Implement `GitSvnLogFormatter`, `find-rev`, `info`, `log`, `gc`, `reset`, and `rebase`.
-- `.plans/07-dcommit-shim-ci.md`: Implement linear `dcommit` through `GitDiffPlanner` and `SvnCommitEditor`, optional `git-svn` shim, and Windows-first verification.
-- `.plans/08-compatibility-golden-tests.md`: Generate Perl `git svn` golden fixtures and compare Rust output for metadata, refs, rev maps, logs, import edge cases, and linear `dcommit`.
+| Profile | Read target | Write target | Required gate before support claim |
+|---|---|---|---|
+| `file://` + SVN CLI | single-path and stdlayout | linear dcommit | strict Perl graph/state/write comparison |
+| local `svn://` + SVN CLI | explicit/authenticated fetch | authenticated linear dcommit | strict fixture comparison and recovery scenarios |
+| linked libsvn `file://`/`svn://` | true RA delta, not log replay | deferred until CommitSink plan exists | default-parallel linked integration gate |
+| `http://`/`https://` | authenticated remote read | commiturl/pushurl write | repeatable remote fixture or declared environment gate |
+| `svn+ssh://` | deferred | deferred | explicit support decision and repeatable fixture |
+| `mock://` | test only | test only | never user-facing support |
 
-## Delivery Gates
+## Corrected Execution Order
 
-- Phase 1 gate: `cargo test --workspace` passes and `git-svn-rs --help` lists core and known unsupported commands.
-- Phase 2 gate: `GlobSpec` golden tests match `GlobSpec.pm`, path/url canonicalization matches `Utils.pm`, config serialization preserves all core options, and filter precedence rejects `.git` paths before regex checks.
-- Phase 3 gate: `.rev_map` tests cover SHA-1/SHA-256 sizes, all-zero records, `rev_map_max(want_commit)`, lock/fsync behavior, metadata migration inspection, object-format detection, and metadata option conflicts.
-- Phase 4 gate: `RaSession` mock tests cover `check_path`, `get_dir`, `get_log`, `do_update`, `do_switch`, auth prompts, fixture creation, and feature-gated libsvn diagnostics.
-- Phase 5 gate: `SvnFetchEditor` imports fixture revisions with symlinks, executable bits, copy-from, empty dirs, placeholders, absent paths, byte-safe file contents, branch/tag discovery, and `git-svn-id` footers.
-- Phase 6 gate: read-only command output matches golden fixtures for `log`, bidirectional `find-rev`, `info`, `reset`, and `rebase --dry-run`.
-- Phase 7 gate: linear `dcommit` writes `A/M/D/C/R/T` changes through `SvnCommitEditor`, fetches the new SVN revision, updates rev maps, and optionally rebases.
-- Phase 8 gate: Perl `git svn` and Rust `git-svn-rs` produce matching normalized golden artifacts for all v1 compatibility scenarios; count-only or length-only assertions are not sufficient.
+### Stage 0: Contract and Status Reset
 
-## dcommit Implementation Path
+Covered by this roadmap and the v2 phase plans.
 
-- Keep the v1 command scope linear: only commits in `<configured-svn-tracking-ref>..HEAD` on one upstream are eligible.
-- `LinearDcommitCommand` resolves the configured SVN-tracking ref from `[svn-remote]` metadata, enumerates commits, checks cleanliness, handles `--dry-run`, calls `GitDiffPlanner`, calls `SvnCommitEditor`, fetches the returned revision, and rebases unless `--no-rebase` is set.
-- `GitDiffPlanner` runs `git diff-tree -z -r -C` and parses `A`, `M`, `D`, `C`, `R`, and `T` records with old/new modes, object IDs, and paths.
-- `SvnCommitEditor` preloads SVN path types with `check_diff_paths`, opens the SVN commit editor, applies operations in `D/C/R/A/M/T` order, and aborts if no changes and no explicit mergeinfo exist.
-- `PathEnsurer` implements `ensure_path` and `open_or_add_dir` so nested additions and copies create missing parent directories correctly.
-- `PropertyMapper` handles `svn:executable`, `svn:special`, symlink toggles, autoprops, and `.gitattributes svn-properties`.
-- Explicit `--mergeinfo` may be accepted later; automatic mergeinfo generation is not part of v1.
+Exit conditions:
+
+- baseline is pinned;
+- capability and state vocabularies are present;
+- every phase has behavioral and release gates;
+- stale completion claims are removed from the progress record.
+
+### Stage 1: Core Identity and Clone Closure
+
+Primary phases: 1, 2, 3, 5, and 8.
+
+Order:
+
+1. URL/session/repository-relative path model;
+2. single-subdirectory clone/fetch;
+3. SVN date and `--localtime` object identity;
+4. default checkout and `--no-checkout`;
+5. revision forms and explicit inert-option rejection;
+6. exact graph/working-tree golden artifacts.
+
+Exit condition: single-path and stdlayout `file://` clones match the frozen baseline in graph, refs, metadata, HEAD, local branch, and working tree.
+
+### Stage 2: Fetch Model Unification
+
+Primary phases: 4 and 5.
+
+Order:
+
+1. move native update adapter out of tests;
+2. replace global FFI recorder state with operation batons;
+3. make default parallel linked tests stable;
+4. route both CLI and libsvn through the same editor contract;
+5. add windowing, checksum, absent, property log, pathname encoding, placeholder persistence, and follow-parent behavior;
+6. remove direct log-to-Git production behavior.
+
+Exit condition: default and linked adapters produce the same exact Git graph for the same supported fixture.
+
+### Stage 3: Safe Dcommit
+
+Primary phases: 3 and 7.
+
+Order:
+
+1. first-parent target resolver with UUID/root/path validation;
+2. dirty/stale/merge preflight before any SVN write;
+3. full message/author semantics;
+4. shared `DcommitPlan` for mock and production sinks;
+5. property deletion and operation-order parity;
+6. partial-success journal and idempotent resume;
+7. protocol/auth expansion only after the safety gate.
+
+Exit condition: wrong-target, dirty-tree, unsupported merge, full-message, A/M/D/C/R/T, property, partial failure, fetch, and rebase tests pass against real SVN and the frozen baseline.
+
+### Stage 4: Readonly and Metadata Completion
+
+Primary phases: 3 and 6.
+
+- scoped `find-rev` with optional tree-ish;
+- shared multi-remote resolver;
+- remaining `Log.pm` modes;
+- migration backup/warning or explicit rejection;
+- `noMetadata` one-shot limitations;
+- reset/rebase recovery behavior.
+
+### Stage 5: Strict Release Gate
+
+Primary phase: 8.
+
+- no Perl/SVN/libsvn/profile skip;
+- exact object graph and clone state;
+- profile matrix execution;
+- linked tests pass in default parallel mode and a serial diagnostic job;
+- release documentation names all deferred capabilities.
+
+## Phase Dependencies
+
+```text
+Phase 1 ─┬─> Phase 2 ─┬─> Phase 5 ─┬─> Phase 6
+         │            │            └─> Phase 7
+         └─> Phase 3 ─┘                 │
+Phase 4 ───────────────> Phase 5 ───────┤
+                                        └─> Phase 8
+```
+
+- Phase 5 cannot pass before Phase 2 URL semantics and Phase 3 metadata state are behavior-ready.
+- Phase 7 cannot pass before the shared resolver and fetch synchronization are behavior-ready.
+- Phase 8 may build fixtures early but cannot reach release-pass before every declared profile gate.
+
+## Gate Definitions
+
+### Structural gate
+
+- types and module boundaries compile;
+- isolated unit tests pass;
+- no production support claim is made.
+
+### Behavioral gate
+
+- user-facing scenario runs with real Git/SVN tooling;
+- semantic assertions include failure behavior and persistent state;
+- no relevant artifact is normalized away;
+- required external tool actually ran.
+
+### Release gate
+
+- frozen Perl baseline comparison runs without skip;
+- required protocol profiles run;
+- object graph, metadata, worktree, output, and recovery match;
+- format/lint/default/linked builds all pass.
+
+## Verification Commands
+
+Developer gate:
+
+```powershell
+cargo fmt --all -- --check
+cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+```
+
+Linked backend gate uses the documented vcpkg environment and runs both default parallel and serial diagnostic forms:
+
+```powershell
+cargo test -p git-svn-rs-core --features svn-libsvn
+cargo test -p git-svn-rs-core --features svn-libsvn -- --test-threads=1
+```
+
+Strict release gate:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\verify.ps1 -StrictCompat
+```
+
+The strict command is a pass only if its output records that Perl `git-svn`, SVN CLI, linked libsvn, and every required scenario executed.
+
+## libsvn Binding Decision
+
+Before expanding handwritten FFI, record an ADR comparing current bindings with [`subversion` 0.1.10](https://docs.rs/subversion/0.1.10/subversion/) and [`subversion-sys`](https://docs.rs/subversion-sys/latest/subversion_sys/):
+
+- required RA/delta/auth coverage;
+- Windows/vcpkg build behavior;
+- pool and callback lifetime safety;
+- error-chain fidelity;
+- maintenance cost and ABI/version validation.
+
+The decision may retain handwritten FFI, adopt the safe crate, or use a narrow hybrid. It must not be inferred from the existing implementation.
 
 ## Execution Rules
 
-- Implement phases in order and commit after each task group.
-- Keep `svn-libsvn` feature optional until CI has libsvn installed.
-- Prefer Git CLI plumbing over `libgit2`; every Git command wrapper must be tested with a temp repository.
-- When a plan mentions Perl behavior, add a unit or golden test that captures the behavior before implementation.
-- Do not add branch/tag write-back, automatic mergeinfo generation, `commit-diff`, `set-tree`, or property editing commands to v1.
-
-## Reference Sources
-
-### Git documentation and command entry points
-
-- [git-svn official documentation](https://git-scm.com/docs/git-svn)
-- [git-svn.perl on GitHub](https://github.com/git/git/blob/master/git-svn.perl)
-- [raw git-svn.perl](https://raw.githubusercontent.com/git/git/master/git-svn.perl)
-- [Git::SVN.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN.pm)
-
-### Perl implementation modules
-
-- [perl directory](https://github.com/git/git/tree/master/perl)
-- [Git.pm](https://raw.githubusercontent.com/git/git/master/perl/Git.pm)
-- [Editor.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Editor.pm)
-- [Fetcher.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Fetcher.pm)
-- [GlobSpec.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/GlobSpec.pm)
-- [Log.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Log.pm)
-- [Migration.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Migration.pm)
-- [Prompt.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Prompt.pm)
-- [Ra.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Ra.pm)
-- [Utils.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Utils.pm)
-- [Memoize/YAML.pm](https://raw.githubusercontent.com/git/git/master/perl/Git/SVN/Memoize/YAML.pm)
-
-### Rust and SVN dependency references
-
-- [subversion crate](https://crates.io/crates/subversion)
-- [subversion docs](https://docs.rs/subversion)
-- [subversion-sys crate](https://crates.io/crates/subversion-sys)
-- [subversion-sys docs](https://docs.rs/subversion-sys)
-- [svn crate](https://crates.io/crates/svn)
-- [svn docs](https://docs.rs/svn)
-- [subversion-rs repository](https://github.com/jelmer/subversion-rs)
-- [svn-rs repository](https://github.com/lvillis/svn-rs)
-
-## Reference Usage By Phase
-
-- Phase 1 uses the git-svn documentation and `git-svn.perl` for command names, option spelling, and unsupported-command compatibility.
-- Phase 2 uses `GlobSpec.pm`, `Utils.pm`, and the git-svn documentation for refspec expansion, path normalization, URL canonicalization, authors, and filters.
-- Phase 3 uses `Git.pm`, `Git::SVN.pm`, `Migration.pm`, and `git-svn.perl` for Git command wrapper behavior, config reads, repository discovery, `git-svn-id`, `.git/svn` paths, `.rev_map` records, and legacy metadata migration.
-- Phase 4 uses `Git.pm`, `Ra.pm`, `Prompt.pm`, `subversion`, and `subversion-sys` for RA sessions, authentication, prompt fallback, SVN config directories, and libsvn feature gating.
-- Phase 5 uses `Fetcher.pm`, `Ra.pm`, and `Git::SVN.pm` for SVN delta import, branch/tag glob discovery, empty-directory placeholder handling, and commit creation.
-- Phase 6 uses `Log.pm`, `Git::SVN.pm`, and the git-svn documentation for `log`, `find-rev`, `info`, `reset`, and `rebase` behavior.
-- Phase 7 uses `Editor.pm`, `Ra.pm`, and `Prompt.pm` for linear `dcommit`, SVN commit editor behavior, path creation, properties, and authentication.
-- Phase 8 uses `perl/Git.pm`, all relevant `Git::SVN` Perl modules, and `git-svn.perl` as golden fixture authorities and records every fixture source in the test output.
-
-## Self Review
-
-- Spec coverage: the roadmap now maps every referenced Perl module to Rust implementation units and phase gates.
-- Placeholder scan: no phase relies on an unnamed compatibility layer; `fetch`, `dcommit`, and golden tests have explicit implementation paths.
-- Type consistency: shared names are fixed across files: `SvnRemoteConfig`, `GlobSpec`, `RevMap`, `RaSession`, `SvnFetchEditor`, `GitSvnLogFormatter`, `GitDiffPlanner`, `SvnCommitEditor`, and `GitSvnId`.
+- Read `.plans/implementation-progress-record.md` before implementation.
+- Start from the highest-priority unmet behavioral gate, not the next unchecked code task.
+- Add the failing compatibility test before changing semantics.
+- Keep changes scoped to one gate and record final evidence only.
+- Do not mark a phase complete while a required path remains mock-only, log-replay-only, skipped, or normalized away.
+- Do not expand commands or protocols while a P0 correctness or target-safety gate is open.
