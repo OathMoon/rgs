@@ -2,10 +2,11 @@
 mod golden_fixtures;
 
 use golden_fixtures::{
-    CompatDecision, FileModeArtifact, FilePropertyArtifact, GoldenArtifactCapture,
-    GoldenComparisonArtifacts, GoldenFixture, GoldenFixtureStep, RevMapArtifactRecord,
-    RevMapByteLengthArtifact, ToolAvailability, compare_supported_subset,
-    missing_perl_git_svn_policy, perl_git_svn_available, require_golden_tools, require_svn_tools,
+    CloneStateArtifact, CommitGraphArtifact, CompatDecision, FileModeArtifact,
+    FilePropertyArtifact, GoldenArtifactCapture, GoldenComparisonArtifacts, GoldenFixture,
+    GoldenFixtureStep, RefTipArtifact, RevMapArtifactRecord, RevMapByteLengthArtifact,
+    ToolAvailability, compare_supported_subset, missing_perl_git_svn_policy,
+    perl_git_svn_available, require_golden_tools, require_svn_tools,
     run_rust_stdlayout_ref_artifacts, run_standard_trunk_golden_comparison,
 };
 
@@ -165,12 +166,43 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             "trunk:refs/remotes/origin/trunk".to_string(),
         )],
         refs: vec!["refs/remotes/origin/trunk".to_string()],
+        ref_tips: vec![RefTipArtifact {
+            name: "refs/remotes/origin/trunk".to_string(),
+            object_id: "11".repeat(20),
+        }],
+        commit_graph: vec![CommitGraphArtifact {
+            object_id: "11".repeat(20),
+            parents: Vec::new(),
+            tree_id: "22".repeat(20),
+            author_name: "Alice".to_string(),
+            author_email: "alice@example.com".to_string(),
+            author_epoch: 1_700_000_000,
+            author_offset: "+0000".to_string(),
+            committer_name: "Alice".to_string(),
+            committer_email: "alice@example.com".to_string(),
+            committer_epoch: 1_700_000_000,
+            committer_offset: "+0000".to_string(),
+            message: "add files\n".to_string(),
+        }],
+        clone_state: CloneStateArtifact {
+            head_symbolic_ref: Some("refs/heads/master".to_string()),
+            head_object_id: Some("11".repeat(20)),
+            local_branches: vec![format!("refs/heads/master\t{}\t", "11".repeat(20))],
+            index_entries: vec![format!("100644 {} 0\tfile", "22".repeat(20))],
+            worktree_entries: vec!["file\t666f6f".to_string()],
+            status_porcelain_v2: "# branch.head master\n".to_string(),
+        },
+        no_checkout_clone_state: CloneStateArtifact {
+            head_symbolic_ref: Some("refs/heads/master".to_string()),
+            head_object_id: Some("11".repeat(20)),
+            ..CloneStateArtifact::default()
+        },
         git_svn_id_footers: vec!["git-svn-id: file:///repo/trunk@2 uuid".to_string()],
         rev_map: vec![RevMapArtifactRecord {
             source_ref: "refs/remotes/origin/trunk".to_string(),
             uuid: "uuid".to_string(),
             revision: 2,
-            has_commit: true,
+            object_id: Some("11".repeat(20)),
         }],
         rev_map_byte_lengths: vec![RevMapByteLengthArtifact {
             source_ref: "refs/remotes/origin/trunk".to_string(),
@@ -213,12 +245,32 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
             ":refs/remotes/git-svn".to_string(),
         )],
         refs: vec!["refs/remotes/git-svn".to_string()],
+        ref_tips: vec![RefTipArtifact {
+            name: "refs/remotes/git-svn".to_string(),
+            object_id: "33".repeat(20),
+        }],
+        commit_graph: vec![CommitGraphArtifact {
+            object_id: "33".repeat(20),
+            parents: vec!["44".repeat(20)],
+            tree_id: "55".repeat(20),
+            author_name: "Bob".to_string(),
+            author_email: "bob@example.com".to_string(),
+            author_epoch: 1_800_000_000,
+            author_offset: "+0800".to_string(),
+            committer_name: "Bob".to_string(),
+            committer_email: "bob@example.com".to_string(),
+            committer_epoch: 1_800_000_000,
+            committer_offset: "+0800".to_string(),
+            message: "different\n".to_string(),
+        }],
+        clone_state: CloneStateArtifact::default(),
+        no_checkout_clone_state: CloneStateArtifact::default(),
         git_svn_id_footers: vec!["git-svn-id: file:///repo@2 uuid".to_string()],
         rev_map: vec![RevMapArtifactRecord {
             source_ref: "refs/remotes/git-svn".to_string(),
             uuid: "other-uuid".to_string(),
             revision: 2,
-            has_commit: false,
+            object_id: None,
         }],
         rev_map_byte_lengths: vec![RevMapByteLengthArtifact {
             source_ref: "refs/remotes/git-svn".to_string(),
@@ -260,6 +312,10 @@ fn artifact_comparison_reports_supported_subset_mismatches() {
 
     assert!(err.contains("config differs"));
     assert!(err.contains("refs differ"));
+    assert!(err.contains("ref tips differ"));
+    assert!(err.contains("commit graph differs"));
+    assert!(err.contains("clone state differs"));
+    assert!(err.contains("--no-checkout clone state differs"));
     assert!(err.contains("git-svn-id footers differ"));
     assert!(err.contains("rev_map records differ"));
     assert!(err.contains("rev_map byte lengths differ"));

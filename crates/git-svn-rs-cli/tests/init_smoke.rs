@@ -15,8 +15,6 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             "--stdlayout",
             "--ignore-paths",
             "^vendor/",
-            "--log-window-size",
-            "42",
             "--localtime",
             "--username",
             "alice",
@@ -51,12 +49,6 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             .unwrap()
             .as_deref(),
         Some("^vendor/")
-    );
-    assert_eq!(
-        git.config_get("svn-remote.svn.log-window-size")
-            .unwrap()
-            .as_deref(),
-        Some("42")
     );
     assert_eq!(
         git.config_get("svn-remote.svn.localtime")
@@ -103,4 +95,24 @@ fn init_reports_invalid_layout_without_creating_repo() {
         .stderr(predicate::str::contains("Only one set of wildcards"));
 
     assert!(!work.exists());
+}
+
+#[test]
+fn init_rejects_fetch_only_or_unimplemented_options_before_mutation() {
+    for (option, value, message) in [
+        ("--revision", "1", "init --revision is not supported"),
+        ("--password", "secret", "passwords are never persisted"),
+        ("--log-window-size", "42", "not implemented"),
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(["init", "file:///svn/repo", "work", option, value])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+        assert!(!work.exists());
+    }
 }

@@ -1,7 +1,6 @@
 use crate::cli::{FetchArgs, SharedFetchArgs};
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
-#[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
 use crate::import::import_ra_revisions;
 use crate::import::{ImportOptions, import_mock_revisions};
 use crate::mapping::{MappingKind, RefMapping};
@@ -20,6 +19,9 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: FetchArgs,
 ) -> Result<(), String> {
+    if args.parent {
+        return Err("fetch --parent is not implemented".to_string());
+    }
     let git = GitCli::new(work_tree.into());
     let remotes = if args.fetch_all {
         svn_remote_names(&git)?
@@ -38,8 +40,14 @@ fn fetch_remote(git: &GitCli, remote: &str, shared: &SharedFetchArgs) -> Result<
 
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
-        let start_revision = next_revision(git, &config, "mock-uuid")?;
-        let import_options = import_options(start_revision, shared.revision.as_deref())?;
+        let base_revision = imported_base_revision(git, &config, "mock-uuid")?;
+        let config = effective_fetch_config(config, shared, base_revision)?;
+        let start_revision = base_revision.saturating_add(1);
+        let import_options = import_options(
+            start_revision,
+            session.latest_revnum()?,
+            shared.revision.as_deref(),
+        )?;
         import_mock_revisions(
             &MockBackendFromSession(&session),
             git,
@@ -51,10 +59,80 @@ fn fetch_remote(git: &GitCli, remote: &str, shared: &SharedFetchArgs) -> Result<
 
     let backend = configured_backend(&config, shared)?;
     let uuid = backend.uuid()?;
-    let start_revision = next_revision(git, &config, &uuid)?;
-    let import_options = import_options(start_revision, shared.revision.as_deref())?;
+    let base_revision = imported_base_revision(git, &config, &uuid)?;
+    let config = effective_fetch_config(config, shared, base_revision)?;
+    let start_revision = base_revision.saturating_add(1);
+    let import_options = import_options(
+        start_revision,
+        backend.latest_revnum()?,
+        shared.revision.as_deref(),
+    )?;
     backend.import_revisions(git, &config, import_options)?;
     Ok(())
+}
+
+fn effective_fetch_config(
+    mut config: SvnRemoteConfig,
+    shared: &SharedFetchArgs,
+    base_revision: u32,
+) -> Result<SvnRemoteConfig, String> {
+    if config.log_window_size.is_some() || shared.log_window_size.is_some() {
+        return Err("--log-window-size is not implemented".to_string());
+    }
+    if let Some(value) = &shared.authors_file {
+        config.authors_file = Some(value.clone());
+    }
+    if let Some(value) = &shared.authors_prog {
+        config.authors_prog = Some(value.clone());
+    }
+    config.ignore_paths = combine_regex(config.ignore_paths, shared.ignore_paths.as_deref());
+    config.include_paths = combine_regex(config.include_paths, shared.include_paths.as_deref());
+    if let Some(value) = &shared.ignore_refs {
+        config.ignore_refs = Some(value.clone());
+    }
+    if shared.localtime && !config.localtime {
+        reject_identity_change(base_revision, "--localtime")?;
+        config.localtime = true;
+    }
+    if shared.no_metadata && !config.no_metadata {
+        reject_identity_change(base_revision, "--no-metadata")?;
+        config.no_metadata = true;
+    }
+    if let Some(value) = &shared.rewrite_root
+        && config.rewrite_root.as_ref() != Some(value)
+    {
+        reject_identity_change(base_revision, "--rewrite-root")?;
+        config.rewrite_root = Some(value.clone());
+    }
+    if let Some(value) = &shared.rewrite_uuid
+        && config.rewrite_uuid.as_ref() != Some(value)
+    {
+        reject_identity_change(base_revision, "--rewrite-uuid")?;
+        config.rewrite_uuid = Some(value.clone());
+    }
+    if shared.preserve_empty_dirs {
+        config.preserve_empty_dirs = true;
+        config.placeholder_filename = shared.placeholder_filename.clone();
+    }
+    Ok(config)
+}
+
+fn combine_regex(persisted: Option<String>, runtime: Option<&str>) -> Option<String> {
+    match (persisted, runtime) {
+        (Some(persisted), Some(runtime)) => Some(format!("(?:{persisted})|(?:{runtime})")),
+        (persisted, None) => persisted,
+        (None, Some(runtime)) => Some(runtime.to_string()),
+    }
+}
+
+fn reject_identity_change(base_revision: u32, option: &str) -> Result<(), String> {
+    if base_revision == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "{option} cannot change after SVN history has been imported"
+        ))
+    }
 }
 
 enum ConfiguredBackend {
@@ -80,7 +158,7 @@ impl ConfiguredBackend {
     #[cfg(test)]
     fn import_mode(&self) -> &'static str {
         match self {
-            Self::Cli(_) => "log-replay",
+            Self::Cli(_) => "ra-editor",
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(_) => "ra-editor",
         }
@@ -121,7 +199,7 @@ impl ConfiguredBackend {
     ) -> Result<(), String> {
         match self {
             Self::Cli(backend) => {
-                import_mock_revisions(backend, git, config, options)?;
+                import_ra_revisions(backend, git, config, options)?;
             }
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(backend) => {
@@ -135,7 +213,7 @@ impl ConfiguredBackend {
 impl SvnBackend for ConfiguredBackend {
     fn uuid(&self) -> Result<String, String> {
         match self {
-            Self::Cli(backend) => backend.uuid(),
+            Self::Cli(backend) => SvnBackend::uuid(backend),
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(backend) => SvnBackend::uuid(backend),
         }
@@ -143,7 +221,7 @@ impl SvnBackend for ConfiguredBackend {
 
     fn latest_revnum(&self) -> Result<u32, String> {
         match self {
-            Self::Cli(backend) => backend.latest_revnum(),
+            Self::Cli(backend) => SvnBackend::latest_revnum(backend),
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(backend) => SvnBackend::latest_revnum(backend),
         }
@@ -219,52 +297,83 @@ fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
-fn import_options(next_revision: u32, revision: Option<&str>) -> Result<ImportOptions, String> {
+fn import_options(
+    next_revision: u32,
+    head_revision: u32,
+    revision: Option<&str>,
+) -> Result<ImportOptions, String> {
     let Some(revision) = revision else {
         return Ok(ImportOptions {
             start_revision: next_revision,
             end_revision: None,
         });
     };
-    let range = parse_revision_range(revision)?;
+    let base_revision = next_revision.saturating_sub(1);
+    let range = parse_revision_argument(revision)?.resolve(base_revision, head_revision);
     Ok(ImportOptions {
         start_revision: cmp::max(next_revision, range.start.unwrap_or(next_revision)),
         end_revision: range.end,
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct RevisionRange {
     start: Option<u32>,
     end: Option<u32>,
 }
 
-fn parse_revision_range(value: &str) -> Result<RevisionRange, String> {
-    if let Some((start, end)) = value.split_once(':') {
-        return Ok(RevisionRange {
-            start: parse_optional_revision(start)?,
-            end: parse_optional_revision(end)?,
-        });
-    }
-    let revision = parse_revision(value)?;
-    Ok(RevisionRange {
-        start: Some(revision),
-        end: Some(revision),
-    })
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RevisionArgument {
+    Number(u32),
+    Range(u32, u32),
+    Head,
+    BaseTo(u32),
+    ToHead(u32),
+    BaseToHead,
 }
 
-fn parse_optional_revision(value: &str) -> Result<Option<u32>, String> {
-    if value.trim().is_empty() {
-        return Ok(None);
+impl RevisionArgument {
+    fn resolve(self, base: u32, head: u32) -> RevisionRange {
+        let (start, end) = match self {
+            Self::Number(revision) => (revision, revision),
+            Self::Range(start, end) => (start, end),
+            Self::Head => (head, head),
+            Self::BaseTo(end) => (base, end),
+            Self::ToHead(start) => (start, head),
+            Self::BaseToHead => (base, head),
+        };
+        RevisionRange {
+            start: Some(start),
+            end: Some(end),
+        }
     }
-    parse_revision(value).map(Some)
 }
 
-fn parse_revision(value: &str) -> Result<u32, String> {
-    let trimmed = value.trim();
-    let revision = trimmed.strip_prefix('r').unwrap_or(trimmed);
-    revision
-        .parse()
-        .map_err(|_| format!("invalid SVN revision: {value}"))
+fn parse_revision_argument(value: &str) -> Result<RevisionArgument, String> {
+    let parsed = if value == "HEAD" {
+        Some(RevisionArgument::Head)
+    } else if value == "BASE:HEAD" {
+        Some(RevisionArgument::BaseToHead)
+    } else if let Some(end) = value.strip_prefix("BASE:") {
+        parse_numeric_revision(end).map(RevisionArgument::BaseTo)
+    } else if let Some(start) = value.strip_suffix(":HEAD") {
+        parse_numeric_revision(start).map(RevisionArgument::ToHead)
+    } else if let Some((start, end)) = value.split_once(':') {
+        match (parse_numeric_revision(start), parse_numeric_revision(end)) {
+            (Some(start), Some(end)) => Some(RevisionArgument::Range(start, end)),
+            _ => None,
+        }
+    } else {
+        parse_numeric_revision(value).map(RevisionArgument::Number)
+    };
+    parsed.ok_or_else(|| format!("revision argument: {value} not understood by git-svn"))
+}
+
+fn parse_numeric_revision(value: &str) -> Option<u32> {
+    if value.is_empty() || !value.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    value.parse().ok()
 }
 
 fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
@@ -340,24 +449,54 @@ fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
     })
 }
 
-fn next_revision(git: &GitCli, config: &SvnRemoteConfig, uuid: &str) -> Result<u32, String> {
-    let Some(mapping) = config.fetch.first() else {
-        return Ok(1);
-    };
+fn imported_base_revision(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    uuid: &str,
+) -> Result<u32, String> {
     let git_dir = git.git_dir()?;
-    let short_ref = mapping
-        .git_ref
-        .strip_prefix("refs/remotes/")
-        .unwrap_or(&mapping.git_ref)
-        .replace('/', ".");
-    let rev_map_path = git
-        .work_tree()
-        .join(git_dir)
-        .join("svn")
-        .join(short_ref)
-        .join(format!(".rev_map.{uuid}"));
-    let rev_map = RevMap::open(rev_map_path, git.object_format()?)?;
-    Ok(rev_map.max_revision(false)?.unwrap_or(0) + 1)
+    let svn_dir = git.work_tree().join(git_dir).join("svn");
+    let mut refnames = config
+        .fetch
+        .iter()
+        .map(|mapping| mapping.git_ref.clone())
+        .collect::<Vec<_>>();
+    let remote_refs = git.refs_under("refs/remotes")?;
+    for mapping in config.branches.iter().chain(config.tags.iter()) {
+        let Some((prefix, suffix)) = mapping.git_ref.split_once('*') else {
+            refnames.push(mapping.git_ref.clone());
+            continue;
+        };
+        refnames.extend(
+            remote_refs
+                .iter()
+                .filter(|refname| refname.starts_with(prefix) && refname.ends_with(suffix))
+                .cloned(),
+        );
+    }
+    refnames.sort();
+    refnames.dedup();
+    if refnames.is_empty() {
+        return Ok(0);
+    }
+
+    let object_format = git.object_format()?;
+    let mut base = u32::MAX;
+    for refname in refnames {
+        let short_ref = refname
+            .strip_prefix("refs/remotes/")
+            .unwrap_or(&refname)
+            .replace('/', ".");
+        let path = svn_dir.join(short_ref).join(format!(".rev_map.{uuid}"));
+        if !path.exists() {
+            return Ok(0);
+        }
+        let revision = RevMap::open(path, object_format)?
+            .max_revision(false)?
+            .unwrap_or(0);
+        base = base.min(revision);
+    }
+    Ok(base)
 }
 
 struct MockBackendFromSession<'a>(&'a MockRaSession);
@@ -395,16 +534,10 @@ mod tests {
     }
 
     #[test]
-    fn configured_backend_uses_ra_editor_import_only_when_linked_libsvn_is_available() {
+    fn configured_backend_uses_ra_editor_import_for_every_backend() {
         let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
         let backend = configured_backend(&config, &default_shared_args()).unwrap();
-        let expected = if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
-            "ra-editor"
-        } else {
-            "log-replay"
-        };
-
-        assert_eq!(backend.import_mode(), expected);
+        assert_eq!(backend.import_mode(), "ra-editor");
     }
 
     #[test]
@@ -440,6 +573,154 @@ mod tests {
         let backend = configured_backend(&config, &shared).unwrap();
 
         assert_eq!(backend.configured_password(), Some("secret"));
+    }
+
+    #[test]
+    fn revision_ranges_resolve_head_base_and_numeric_forms() {
+        assert_eq!(
+            import_options(6, 10, Some("5:HEAD")).unwrap(),
+            ImportOptions {
+                start_revision: 6,
+                end_revision: Some(10),
+            }
+        );
+        assert_eq!(
+            import_options(6, 10, Some("BASE:8")).unwrap(),
+            ImportOptions {
+                start_revision: 6,
+                end_revision: Some(8),
+            }
+        );
+        assert_eq!(
+            import_options(6, 10, Some("BASE:HEAD")).unwrap(),
+            ImportOptions {
+                start_revision: 6,
+                end_revision: Some(10),
+            }
+        );
+        assert_eq!(
+            import_options(6, 10, Some("HEAD")).unwrap(),
+            ImportOptions {
+                start_revision: 10,
+                end_revision: Some(10),
+            }
+        );
+        assert_eq!(
+            import_options(6, 10, Some("007")).unwrap(),
+            ImportOptions {
+                start_revision: 7,
+                end_revision: Some(7),
+            }
+        );
+    }
+
+    #[test]
+    fn invalid_revision_keyword_is_rejected() {
+        for invalid in [
+            "BASE",
+            "HEAD:7",
+            ":7",
+            "7:",
+            ":",
+            "r7",
+            " 7",
+            "7 ",
+            "head",
+            "base:7",
+            "1:2:3",
+            "-1",
+            "4294967296",
+            "PREV:HEAD",
+        ] {
+            assert!(
+                import_options(1, 10, Some(invalid)).is_err(),
+                "{invalid} should be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn base_revision_uses_slowest_rev_map_for_uuid() {
+        let tmp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(tmp.path());
+        git.init().unwrap();
+        let mut config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        config.fetch = vec![
+            RefMapping {
+                kind: MappingKind::Fetch,
+                svn_path: "trunk".to_string(),
+                git_ref: "refs/remotes/origin/trunk".to_string(),
+            },
+            RefMapping {
+                kind: MappingKind::Fetch,
+                svn_path: "branches/main".to_string(),
+                git_ref: "refs/remotes/origin/branch".to_string(),
+            },
+        ];
+        let git_dir = tmp.path().join(".git/svn");
+        let object_id = "11".repeat(20);
+        for (short_ref, revision) in [("origin.trunk", 10), ("origin.branch", 5)] {
+            let mut rev_map = RevMap::open(
+                git_dir.join(short_ref).join(".rev_map.uuid"),
+                crate::rev_map::ObjectFormat::Sha1,
+            )
+            .unwrap();
+            rev_map.append(revision, &object_id).unwrap();
+        }
+
+        assert_eq!(imported_base_revision(&git, &config, "uuid").unwrap(), 5);
+    }
+
+    #[test]
+    fn runtime_fetch_options_overlay_persisted_config_without_writing_it() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""))
+            .with_ignore_paths("persisted")
+            .with_include_paths("included");
+        let mut shared = default_shared_args();
+        shared.ignore_paths = Some("runtime".to_string());
+        shared.include_paths = Some("more".to_string());
+        shared.authors_file = Some("authors.txt".to_string());
+        shared.preserve_empty_dirs = true;
+        shared.placeholder_filename = ".keep".to_string();
+
+        let effective = effective_fetch_config(config, &shared, 0).unwrap();
+
+        assert_eq!(
+            effective.ignore_paths.as_deref(),
+            Some("(?:persisted)|(?:runtime)")
+        );
+        assert_eq!(
+            effective.include_paths.as_deref(),
+            Some("(?:included)|(?:more)")
+        );
+        assert_eq!(effective.authors_file.as_deref(), Some("authors.txt"));
+        assert!(effective.preserve_empty_dirs);
+        assert_eq!(effective.placeholder_filename, ".keep");
+    }
+
+    #[test]
+    fn metadata_identity_overrides_fail_after_import() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        let mut shared = default_shared_args();
+        shared.rewrite_root = Some("file:///other".to_string());
+
+        assert!(
+            effective_fetch_config(config, &shared, 1)
+                .unwrap_err()
+                .contains("cannot change")
+        );
+    }
+
+    #[test]
+    fn log_window_size_is_explicitly_rejected() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        let mut shared = default_shared_args();
+        shared.log_window_size = Some(100);
+
+        assert_eq!(
+            effective_fetch_config(config, &shared, 0).unwrap_err(),
+            "--log-window-size is not implemented"
+        );
     }
 
     fn default_shared_args() -> SharedFetchArgs {

@@ -1,10 +1,12 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
 use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::config::SvnRemoteConfig;
 use crate::fast_import::{FastImportCommit, FastImportStream, FileChange};
-use crate::fetch_editor::{FetchCommitPlan, SvnFetchEditor, TreeEntry};
+use crate::fetch_editor::{FetchCommitPlan, SvnFetchEditor, TreeEntry, UnhandledMetadata};
 use crate::filters::{FilterDecision, PathFilters};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
@@ -12,8 +14,9 @@ use crate::glob_spec::GlobSpec;
 use crate::mapping::RefMapping;
 use crate::rev_map::RevMap;
 use crate::svn::editor::FetchEditor;
-use crate::svn::ra::RaSession;
+use crate::svn::ra::{RaSession, UpdateRequest};
 use crate::svn::{ChangeAction, NodeKind, RevisionEvent, SvnBackend};
+use chrono::{DateTime, Local};
 use fancy_regex::Regex;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,7 +137,7 @@ fn import_revisions_for_mapping(
         .map(|commit| commit.trim().to_string());
     let authors = author_mapper(config)?;
 
-    for (index, revision) in revisions.iter().enumerate() {
+    for revision in revisions {
         if revision.revision <= max_imported_revision {
             continue;
         }
@@ -153,12 +156,14 @@ fn import_revisions_for_mapping(
         } else {
             None
         };
+        let timestamp = svn_git_timestamp(&revision.timestamp, config.localtime)?;
         stream = stream.commit(&FastImportCommit {
             mark: imported_revisions.len() as u32,
             refname: mapping.git_ref.clone(),
             author: author_ident(&revision.author, Some(&authors))?,
             committer: author_ident(&revision.author, Some(&authors))?,
-            timestamp: index as i64,
+            timestamp: timestamp.seconds,
+            timezone_offset: timestamp.offset,
             message: commit_message(config, revision, uuid, &strip_prefix),
             parent_mark: (imported_revisions.len() > 1)
                 .then_some(imported_revisions.len() as u32 - 1),
@@ -189,6 +194,7 @@ fn import_ra_revisions_for_mapping(
     let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
     let mut stream = FastImportStream::new();
     let mut imported_revisions = Vec::new();
+    let mut unhandled_revisions = Vec::new();
     let max_imported_revision = max_imported_revision(git, &mapping.git_ref, uuid)?;
     let existing_parent_ref = git
         .rev_parse(&mapping.git_ref)
@@ -196,7 +202,7 @@ fn import_ra_revisions_for_mapping(
         .map(|commit| commit.trim().to_string());
     let authors = author_mapper(config)?;
 
-    for (index, revision) in revisions.iter().enumerate() {
+    for revision in revisions {
         if revision.revision <= max_imported_revision {
             continue;
         }
@@ -215,18 +221,24 @@ fn import_ra_revisions_for_mapping(
         } else {
             None
         };
+        let timestamp = svn_git_timestamp(&revision.timestamp, config.localtime)?;
         let plan = FetchCommitPlan {
             mark: imported_revisions.len() as u32 + 1,
             refname: mapping.git_ref.clone(),
             author: author_ident(&revision.author, Some(&authors))?,
             committer: author_ident(&revision.author, Some(&authors))?,
-            timestamp: index as i64,
+            timestamp: timestamp.seconds,
+            timezone_offset: timestamp.offset,
             message: commit_message(config, revision, uuid, &strip_prefix),
             parent_mark,
             parent_ref,
         };
         let mut editor = if let Some(copy_parent) = copy_parent {
-            let entries = prefixed_tree_entries(git, &copy_parent.commit, &copy_parent.svn_path)?;
+            let mut entries =
+                prefixed_tree_entries(git, &copy_parent.commit, &copy_parent.svn_path)?;
+            if !mapping.svn_path.trim_matches('/').is_empty() {
+                entries.extend(prefixed_tree_entries(git, &copy_parent.commit, "")?);
+            }
             SvnFetchEditor::with_base_tree(plan, entries)
         } else if existing_parent_ref.is_some() && imported_revisions.is_empty() {
             SvnFetchEditor::from_git_ref(git, plan, &mapping.git_ref)?
@@ -240,14 +252,27 @@ fn import_ra_revisions_for_mapping(
             inner: &mut editor,
             filters: &filters,
         };
-        session.do_update(&mapping.svn_path, revision.revision, &mut filtered_editor)?;
-        let mut commit = editor.into_commit()?;
+        let base_revision = imported_revisions
+            .last()
+            .copied()
+            .or((max_imported_revision > 0).then_some(max_imported_revision));
+        session.do_update_from(
+            &mapping.svn_path,
+            UpdateRequest {
+                target_revision: revision.revision,
+                base_revision,
+            },
+            &mut filtered_editor,
+        )?;
+        let result = editor.into_result()?;
+        let mut commit = result.commit;
         commit.changes = finalize_ra_changes(commit.changes, revision, &strip_prefix, config)?;
-        if commit.changes.is_empty() {
+        if commit.changes.is_empty() && result.unhandled.is_empty() {
             continue;
         }
 
         imported_revisions.push(revision.revision);
+        unhandled_revisions.push((revision.revision, result.unhandled));
         stream = stream.commit(&commit);
     }
 
@@ -257,6 +282,7 @@ fn import_ra_revisions_for_mapping(
 
     git.fast_import(&stream.finish())?;
     write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
+    append_unhandled_log(git, &mapping.git_ref, &unhandled_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
 }
@@ -317,6 +343,18 @@ impl FetchEditor for FilteredFetchEditor<'_> {
         self.inner.change_file_prop(path, name, value)
     }
 
+    fn change_directory_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.change_directory_prop(path, name, value)
+    }
+
     fn apply_textdelta(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
         if !self.path_is_included(path)? {
             return Ok(());
@@ -324,8 +362,26 @@ impl FetchEditor for FilteredFetchEditor<'_> {
         self.inner.apply_textdelta(path, content)
     }
 
+    fn absent_directory(&mut self, path: &str) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.absent_directory(path)
+    }
+
+    fn absent_file(&mut self, path: &str) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.absent_file(path)
+    }
+
     fn close_edit(&mut self) -> Result<(), String> {
         self.inner.close_edit()
+    }
+
+    fn abort_edit(&mut self) -> Result<(), String> {
+        self.inner.abort_edit()
     }
 }
 
@@ -463,7 +519,13 @@ fn copy_parent_source(
     if !path.exists() {
         return Ok(None);
     };
-    let Some(commit) = RevMap::open(path, git.object_format()?)?.get(copy_source_revision)? else {
+    let rev_map = RevMap::open(&path, git.object_format()?)?;
+    let Some(commit) = resolve_copy_commit(
+        &rev_map,
+        copy_source_revision,
+        revision.revision.saturating_sub(1),
+    )?
+    else {
         return Ok(None);
     };
 
@@ -471,6 +533,19 @@ fn copy_parent_source(
         commit,
         svn_path: source_mapping.svn_path.trim_matches('/').to_string(),
     }))
+}
+
+fn resolve_copy_commit(
+    rev_map: &RevMap,
+    declared_revision: u32,
+    last_revision: u32,
+) -> Result<Option<String>, String> {
+    for revision in declared_revision..=last_revision.max(declared_revision) {
+        if let Some(commit) = rev_map.get(revision)? {
+            return Ok(Some(commit));
+        }
+    }
+    Ok(None)
 }
 
 fn prefixed_tree_entries(
@@ -900,15 +975,52 @@ fn strip_prefix_for(config: &SvnRemoteConfig, svn_path: &str) -> String {
     if !svn_path.is_empty() {
         return svn_path.trim_matches('/').to_string();
     }
+    if config.url.starts_with("mock://") {
+        return config
+            .url
+            .strip_prefix("mock://")
+            .and_then(|rest| rest.split_once('/').map(|(_, path)| path))
+            .unwrap_or_default()
+            .trim_matches('/')
+            .to_string();
+    }
+    String::new()
+}
 
-    config
-        .url
-        .split("://")
-        .nth(1)
-        .and_then(|rest| rest.split_once('/').map(|(_, path)| path))
-        .unwrap_or_default()
-        .trim_matches('/')
-        .to_string()
+struct GitTimestamp {
+    seconds: i64,
+    offset: String,
+}
+
+fn svn_git_timestamp(value: &str, localtime: bool) -> Result<GitTimestamp, String> {
+    let parsed = DateTime::parse_from_rfc3339(value)
+        .map_err(|error| format!("invalid SVN revision date {value:?}: {error}"))?;
+    let seconds = parsed.timestamp();
+    let offset = if localtime {
+        parsed.with_timezone(&Local).format("%z").to_string()
+    } else {
+        "+0000".to_string()
+    };
+    Ok(GitTimestamp { seconds, offset })
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod timestamp_tests {
+    use super::svn_git_timestamp;
+
+    #[test]
+    fn parses_svn_rfc3339_date_with_fractional_seconds() {
+        let timestamp = svn_git_timestamp("2026-01-01T00:00:00.123456Z", false).unwrap();
+        assert_eq!(timestamp.seconds, 1_767_225_600);
+        assert_eq!(timestamp.offset, "+0000");
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_svn_dates() {
+        assert!(svn_git_timestamp("", false).is_err());
+        assert!(svn_git_timestamp("not-a-date", false).is_err());
+    }
 }
 
 fn write_rev_map(git: &GitCli, refname: &str, uuid: &str, revisions: &[u32]) -> Result<(), String> {
@@ -945,4 +1057,32 @@ fn rev_map_path(git: &GitCli, refname: &str, uuid: &str) -> Result<PathBuf, Stri
         .join("svn")
         .join(short_ref)
         .join(format!(".rev_map.{uuid}")))
+}
+
+fn append_unhandled_log(
+    git: &GitCli,
+    refname: &str,
+    revisions: &[(u32, UnhandledMetadata)],
+) -> Result<(), String> {
+    if revisions.is_empty() {
+        return Ok(());
+    }
+
+    let metadata_dir = rev_map_path(git, refname, "metadata")?
+        .parent()
+        .ok_or_else(|| "rev_map path has no parent directory".to_string())?
+        .to_path_buf();
+    std::fs::create_dir_all(&metadata_dir).map_err(|error| error.to_string())?;
+    let mut log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(metadata_dir.join("unhandled.log"))
+        .map_err(|error| error.to_string())?;
+    for (revision, metadata) in revisions {
+        writeln!(log, "r{revision}").map_err(|error| error.to_string())?;
+        for line in metadata.lines() {
+            writeln!(log, "{line}").map_err(|error| error.to_string())?;
+        }
+    }
+    Ok(())
 }

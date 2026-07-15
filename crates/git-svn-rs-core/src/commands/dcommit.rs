@@ -18,6 +18,9 @@ pub fn run_in_work_tree(
     args: DcommitArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
+    if tracked.git.range_has_merges(&tracked.refname, "HEAD")? {
+        return Err("dcommit does not support merge commits in the local commit range".to_string());
+    }
     let revision = tracked
         .max_record()?
         .map(|record| record.revision)
@@ -172,7 +175,8 @@ fn dcommit_file_svn(
         if let Some(mergeinfo) = ctx.mergeinfo {
             apply_mergeinfo(&temp.wc, mergeinfo, &ctx.svn_options)?;
         }
-        let revision = svn_commit(&temp.wc, &commit.subject, &ctx.svn_options)?;
+        let message = ctx.git.commit_message(&commit.id)?;
+        let revision = svn_commit(&temp.wc, &message, &ctx.svn_options)?;
         fetch::run_in_work_tree(
             ctx.git.work_tree().to_path_buf(),
             fetch_args(ctx.post_commit_fetch_shared.clone()),
@@ -226,13 +230,21 @@ fn apply_file_svn_change(
                     path.replace('\\', "/"),
                 ],
             )?;
-            apply_file_props(wc.git, wc.wc, commit, path, "000000", wc.svn_options)?;
+            apply_file_props(wc.git, wc.wc, commit, path, "000000", None, wc.svn_options)?;
         }
         "M" | "T" => {
             std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             let old_mode = wc.git.ls_tree_file(base, path)?.mode;
-            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.svn_options)?;
+            apply_file_props(
+                wc.git,
+                wc.wc,
+                commit,
+                path,
+                &old_mode,
+                Some((base, path)),
+                wc.svn_options,
+            )?;
         }
         "D" => {
             run_svn(
@@ -256,7 +268,15 @@ fn apply_file_svn_change(
             std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.svn_options)?;
+            apply_file_props(
+                wc.git,
+                wc.wc,
+                commit,
+                path,
+                &old_mode,
+                Some((base, old_path)),
+                wc.svn_options,
+            )?;
         }
         status if status.starts_with('C') => {
             let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
@@ -273,7 +293,15 @@ fn apply_file_svn_change(
             std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
                 .map_err(|e| e.to_string())?;
             let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(wc.git, wc.wc, commit, path, &old_mode, wc.svn_options)?;
+            apply_file_props(
+                wc.git,
+                wc.wc,
+                commit,
+                path,
+                &old_mode,
+                Some((base, old_path)),
+                wc.svn_options,
+            )?;
         }
         other => {
             return Err(format!(
@@ -349,6 +377,7 @@ fn apply_file_props(
     commit: &str,
     path: &str,
     old_mode: &str,
+    old_file: Option<(&str, &str)>,
     svn_options: &DcommitSvnOptions,
 ) -> Result<(), String> {
     let new_mode = git.ls_tree_file(commit, path)?.mode;
@@ -400,7 +429,29 @@ fn apply_file_props(
             ],
         )?;
     }
-    for (property, value) in svn_file_attributes_for_path(git, commit, path)? {
+    let old_properties = match old_file {
+        Some((old_commit, old_path)) => svn_file_attributes_for_path(git, old_commit, old_path)?,
+        None => Vec::new(),
+    };
+    let new_properties = svn_file_attributes_for_path(git, commit, path)?;
+    for (property, _) in &old_properties {
+        if new_properties
+            .iter()
+            .all(|(new_property, _)| new_property != property)
+        {
+            run_svn(
+                Some(wc),
+                svn_options,
+                &[
+                    "propdel".to_string(),
+                    "--non-interactive".to_string(),
+                    property.clone(),
+                    path.replace('\\', "/"),
+                ],
+            )?;
+        }
+    }
+    for (property, value) in new_properties {
         run_svn(
             Some(wc),
             svn_options,
@@ -712,7 +763,7 @@ fn dcommit_mock(
         let planned = planner.plan(changes)?;
         let record = CommitRecord {
             author: git.commit_author(&commit.id)?,
-            message: commit.subject.clone(),
+            message: git.commit_message(&commit.id)?,
             base_revision,
         };
         let revision = {

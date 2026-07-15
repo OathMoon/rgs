@@ -1,6 +1,62 @@
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DcommitPlan {
+    pub target: DcommitTarget,
+    pub base_revision: u32,
+    pub git_commit: String,
+    pub message: String,
+    pub author: Option<String>,
+    pub root_properties: Vec<PropertyChange>,
+    pub changes: Vec<PlannedChange>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DcommitTarget {
+    pub url: String,
+    pub repository_root: String,
+    pub repository_uuid: String,
+    pub git_ref: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyChange {
+    pub name: String,
+    pub value: Option<String>,
+}
+
+impl PropertyChange {
+    pub fn set(name: impl Into<String>, value: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: Some(value.into()),
+        }
+    }
+
+    pub fn delete(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            value: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CopySource {
+    pub path: String,
+    pub revision: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChangeMetadata {
+    pub old_mode: String,
+    pub new_mode: String,
+    pub old_oid: String,
+    pub new_oid: String,
+    pub similarity: Option<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedCommit {
     pub changes: Vec<PlannedChange>,
 }
@@ -12,6 +68,9 @@ pub struct PlannedChange {
     pub content: Option<Vec<u8>>,
     pub executable: bool,
     pub symlink: bool,
+    pub source: Option<CopySource>,
+    pub properties: Vec<PropertyChange>,
+    pub metadata: Option<ChangeMetadata>,
 }
 
 impl PlannedChange {
@@ -39,6 +98,42 @@ impl PlannedChange {
         Self::new(path, PlannedChangeKind::Delete, None)
     }
 
+    pub fn copy_file(
+        source_path: impl Into<String>,
+        source_revision: u32,
+        path: impl Into<String>,
+        content: impl AsRef<[u8]>,
+    ) -> Self {
+        let mut change = Self::new(
+            path,
+            PlannedChangeKind::CopyFile,
+            Some(content.as_ref().to_vec()),
+        );
+        change.source = Some(CopySource {
+            path: source_path.into(),
+            revision: source_revision,
+        });
+        change
+    }
+
+    pub fn move_entry(
+        source_path: impl Into<String>,
+        source_revision: u32,
+        path: impl Into<String>,
+        content: impl AsRef<[u8]>,
+    ) -> Self {
+        let mut change = Self::new(
+            path,
+            PlannedChangeKind::Move,
+            Some(content.as_ref().to_vec()),
+        );
+        change.source = Some(CopySource {
+            path: source_path.into(),
+            revision: source_revision,
+        });
+        change
+    }
+
     pub fn with_executable(mut self, executable: bool) -> Self {
         self.executable = executable;
         self
@@ -49,6 +144,16 @@ impl PlannedChange {
         self
     }
 
+    pub fn with_property(mut self, property: PropertyChange) -> Self {
+        self.properties.push(property);
+        self
+    }
+
+    pub fn with_metadata(mut self, metadata: ChangeMetadata) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
     fn new(path: impl Into<String>, kind: PlannedChangeKind, content: Option<Vec<u8>>) -> Self {
         Self {
             path: path.into(),
@@ -56,6 +161,9 @@ impl PlannedChange {
             content,
             executable: false,
             symlink: false,
+            source: None,
+            properties: Vec::new(),
+            metadata: None,
         }
     }
 }
@@ -66,6 +174,8 @@ pub enum PlannedChangeKind {
     AddFile,
     ModifyFile,
     Delete,
+    CopyFile,
+    Move,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

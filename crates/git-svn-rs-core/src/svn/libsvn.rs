@@ -4,7 +4,7 @@ use super::auth::AuthRequest;
 use super::editor::FetchEditor;
 #[cfg(git_svn_rs_libsvn_linked)]
 use super::ra::DirEntry;
-use super::ra::{DirListing, RaSession, SvnNodeKind};
+use super::ra::{DirListing, RaSession, SvnNodeKind, UpdateRequest};
 #[cfg(git_svn_rs_libsvn_linked)]
 use super::{ChangeAction, ChangedPath, NodeKind};
 use super::{RevisionEvent, SvnBackend};
@@ -16,12 +16,17 @@ use std::ffi::{CStr, CString};
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::os::raw::{c_char, c_int, c_long, c_uint, c_void};
 #[cfg(git_svn_rs_libsvn_linked)]
+use std::panic::{AssertUnwindSafe, catch_unwind};
+#[cfg(git_svn_rs_libsvn_linked)]
 use std::ptr;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::slice;
 use std::sync::Arc;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::sync::OnceLock;
+
+#[cfg(git_svn_rs_libsvn_linked)]
+mod native_delta;
 
 pub const LIBSVN_NOT_LINKED_MESSAGE: &str =
     "libsvn backend is enabled but not linked: no libsvn FFI bindings are compiled into this build";
@@ -298,33 +303,6 @@ impl LibSvnBackend {
 
             operation(session, pool.as_ptr())
         }
-    }
-
-    #[cfg(git_svn_rs_libsvn_linked)]
-    fn replay_log_update(
-        &self,
-        source_path: &str,
-        target_path: &str,
-        revision: u32,
-        editor: &mut dyn FetchEditor,
-    ) -> Result<(), String> {
-        let session_path = self.session_repository_path();
-        let replay_source_path = join_ra_paths(&session_path, source_path);
-        self.with_session(|session, pool| unsafe {
-            let revisions = get_log(
-                session,
-                pool,
-                &session_path,
-                &[source_path],
-                revision,
-                revision,
-            )?;
-            let revision_event = revisions
-                .iter()
-                .find(|event| event.revision == revision)
-                .ok_or_else(|| format!("SVN revision r{revision} was not found"))?;
-            replay_revision(revision_event, &replay_source_path, target_path, editor)
-        })
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -946,14 +924,16 @@ unsafe extern "C" fn prompt_simple_credentials(
                 .into_owned(),
         )
     };
-    let credentials = match prompt.simple(AuthRequest {
-        realm,
-        default_username,
-        may_save: may_save != 0,
-        no_auth_cache: prompt_baton.no_auth_cache,
-    }) {
-        Ok(credentials) => credentials,
-        Err(_) => {
+    let credentials = match catch_unwind(AssertUnwindSafe(|| {
+        prompt.simple(AuthRequest {
+            realm,
+            default_username,
+            may_save: may_save != 0,
+            no_auth_cache: prompt_baton.no_auth_cache,
+        })
+    })) {
+        Ok(Ok(credentials)) => credentials,
+        Ok(Err(_)) | Err(_) => {
             unsafe {
                 *cred = ptr::null_mut();
             }
@@ -1483,138 +1463,10 @@ fn pool_c_string(pool: *mut AprPoolT, value: &str, label: &str) -> Result<*const
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
-fn replay_revision(
-    revision: &RevisionEvent,
-    source_path: &str,
-    target_path: &str,
-    editor: &mut dyn FetchEditor,
-) -> Result<(), String> {
-    let normalized_source_path = normalize_ra_path(source_path);
-    let normalized_target_path = normalize_ra_path(target_path);
-    editor.open_root(revision.revision)?;
-    for changed_path in &revision.changed_paths {
-        if !path_matches(&changed_path.path, &normalized_source_path) {
-            continue;
-        }
-        let editor_path = remapped_editor_path(
-            &changed_path.path,
-            &normalized_source_path,
-            &normalized_target_path,
-        );
-        match changed_path.action {
-            ChangeAction::Delete => {
-                editor.delete_entry(&editor_path, revision.revision.saturating_sub(1))?;
-            }
-            ChangeAction::Add | ChangeAction::Replace => match changed_path.kind {
-                NodeKind::Directory => {
-                    let copy_from =
-                        editor_copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev);
-                    editor.add_directory(
-                        &editor_path,
-                        copy_from
-                            .as_ref()
-                            .map(|(path, revision)| (path.as_str(), *revision)),
-                    )?;
-                    replay_directory_details(&editor_path, changed_path, editor, true)?
-                }
-                NodeKind::File | NodeKind::Symlink => {
-                    let copy_from =
-                        editor_copy_from(&changed_path.copy_from_path, changed_path.copy_from_rev);
-                    editor.add_file(
-                        &editor_path,
-                        copy_from
-                            .as_ref()
-                            .map(|(path, revision)| (path.as_str(), *revision)),
-                    )?;
-                    replay_file_details(&editor_path, changed_path, editor, true, true)?;
-                }
-            },
-            ChangeAction::Modify => {
-                if matches!(changed_path.kind, NodeKind::File | NodeKind::Symlink) {
-                    replay_file_details(
-                        &editor_path,
-                        changed_path,
-                        editor,
-                        changed_path.properties_modified,
-                        changed_path.content_modified,
-                    )?;
-                } else if changed_path.kind == NodeKind::Directory {
-                    replay_directory_details(
-                        &editor_path,
-                        changed_path,
-                        editor,
-                        changed_path.properties_modified,
-                    )?;
-                }
-            }
-        }
-    }
-    editor.close_edit()
-}
-
-#[cfg(git_svn_rs_libsvn_linked)]
-fn replay_directory_details(
-    editor_path: &str,
-    changed_path: &ChangedPath,
-    editor: &mut dyn FetchEditor,
-    include_properties: bool,
-) -> Result<(), String> {
-    if include_properties {
-        for (name, value) in &changed_path.properties {
-            editor.change_directory_prop(editor_path, name, Some(value))?;
-        }
-    }
-    Ok(())
-}
-
-#[cfg(git_svn_rs_libsvn_linked)]
-fn replay_file_details(
-    editor_path: &str,
-    changed_path: &ChangedPath,
-    editor: &mut dyn FetchEditor,
-    include_properties: bool,
-    include_content: bool,
-) -> Result<(), String> {
-    if include_properties {
-        for &name in SUPPORTED_FILE_PROPS_WITH_REMOVALS {
-            editor.change_file_prop(
-                editor_path,
-                name,
-                changed_path.properties.get(name).map(String::as_str),
-            )?;
-        }
-        for (name, value) in &changed_path.properties {
-            if !SUPPORTED_FILE_PROPS_WITH_REMOVALS.contains(&name.as_str()) {
-                editor.change_file_prop(editor_path, name, Some(value))?;
-            }
-        }
-    }
-    if include_content && let Some(content) = &changed_path.content {
-        editor.apply_textdelta(editor_path, content)?;
-    }
-    Ok(())
-}
-
-#[cfg(git_svn_rs_libsvn_linked)]
-const SUPPORTED_FILE_PROPS_WITH_REMOVALS: &[&str] = &[
-    "svn:executable",
-    "svn:special",
-    "svn:eol-style",
-    "svn:mime-type",
-    "svn:keywords",
-    "svn:needs-lock",
-];
-
-#[cfg(git_svn_rs_libsvn_linked)]
 fn editor_copy_from(path: &Option<String>, revision: Option<u32>) -> Option<(String, u32)> {
     path.as_ref()
         .zip(revision)
         .map(|(path, revision)| (editor_path(path), revision))
-}
-
-#[cfg(git_svn_rs_libsvn_linked)]
-fn normalize_ra_path(path: &str) -> String {
-    path.trim_matches('/').to_string()
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1641,12 +1493,6 @@ fn remapped_editor_path(changed_path: &str, source_path: &str, target_path: &str
     } else {
         format!("{target_path}/{relative_path}")
     }
-}
-
-#[cfg(git_svn_rs_libsvn_linked)]
-fn path_matches(changed_path: &str, path: &str) -> bool {
-    let changed_path = changed_path.trim_matches('/');
-    path.is_empty() || changed_path == path || changed_path.starts_with(&format!("{path}/"))
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1869,6 +1715,11 @@ unsafe extern "C" {
         buffer_size: usize,
     ) -> *const c_char;
     fn svn_error_clear(error: *mut svn_error_t);
+    fn svn_error_create(
+        apr_err: c_int,
+        child: *mut svn_error_t,
+        message: *const c_char,
+    ) -> *mut svn_error_t;
     #[allow(dead_code)]
     fn svn_delta_default_editor(pool: *mut AprPoolT) -> *mut SvnDeltaEditorT;
     #[allow(dead_code)]
@@ -1883,6 +1734,21 @@ unsafe extern "C" {
         ignore_ancestry: c_int,
         update_editor: *const SvnDeltaEditorT,
         update_baton: *mut c_void,
+        result_pool: *mut AprPoolT,
+        scratch_pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
+    fn svn_ra_do_switch3(
+        session: *mut SvnRaSessionT,
+        reporter: *mut *const SvnRaReporter3T,
+        report_baton: *mut *mut c_void,
+        revision_to_switch_to: c_long,
+        switch_target: *const c_char,
+        depth: c_int,
+        switch_url: *const c_char,
+        send_copyfrom_args: c_int,
+        ignore_ancestry: c_int,
+        switch_editor: *const SvnDeltaEditorT,
+        switch_baton: *mut c_void,
         result_pool: *mut AprPoolT,
         scratch_pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
@@ -1937,6 +1803,11 @@ unsafe extern "C" {
     fn svn_ra_get_latest_revnum(
         session: *mut SvnRaSessionT,
         latest_revnum: *mut c_long,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
+    fn svn_ra_reparent(
+        session: *mut SvnRaSessionT,
+        url: *const c_char,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
     fn svn_ra_check_path(
@@ -2165,14 +2036,30 @@ impl RaSession for LibSvnBackend {
         revision: u32,
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
+        self.do_update_from(
+            path,
+            UpdateRequest {
+                target_revision: revision,
+                base_revision: revision.checked_sub(1),
+            },
+            editor,
+        )
+    }
+
+    fn do_update_from(
+        &self,
+        path: &str,
+        request: UpdateRequest,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
         #[cfg(git_svn_rs_libsvn_linked)]
         {
-            self.replay_log_update(path, path, revision, editor)
+            native_delta::drive_update(self, path, request, editor)
         }
 
         #[cfg(not(git_svn_rs_libsvn_linked))]
         {
-            let _ = (path, revision, editor);
+            let _ = (path, request, editor);
             Err(Self::unavailable_message().to_string())
         }
     }
@@ -2187,7 +2074,17 @@ impl RaSession for LibSvnBackend {
         #[cfg(git_svn_rs_libsvn_linked)]
         {
             let source_path = switch_url_path_in_repository(self.url.as_deref(), switch_url)?;
-            self.replay_log_update(&source_path, path, revision, editor)
+            native_delta::drive_switch(
+                self,
+                path,
+                UpdateRequest {
+                    target_revision: revision,
+                    base_revision: None,
+                },
+                switch_url,
+                &source_path,
+                editor,
+            )
         }
 
         #[cfg(not(git_svn_rs_libsvn_linked))]
@@ -2235,18 +2132,6 @@ fn url_path_in_repository(
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
-fn join_ra_paths(base: &str, path: &str) -> String {
-    let base = base.trim_matches('/');
-    let path = path.trim_matches('/');
-    match (base.is_empty(), path.is_empty()) {
-        (true, true) => String::new(),
-        (true, false) => path.to_string(),
-        (false, true) => base.to_string(),
-        (false, false) => format!("{base}/{path}"),
-    }
-}
-
-#[cfg(git_svn_rs_libsvn_linked)]
 fn session_relative_path(session_path: &str, repository_path: &str) -> String {
     let session_path = session_path.trim_matches('/');
     let repository_path = repository_path.trim_matches('/');
@@ -2273,47 +2158,6 @@ mod tests {
     use std::path::Path;
     #[cfg(git_svn_rs_libsvn_linked)]
     use std::process::Command;
-    #[cfg(git_svn_rs_libsvn_linked)]
-    use std::sync::Mutex;
-    #[cfg(git_svn_rs_libsvn_linked)]
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static CLOSED_DIRECTORY_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static ADDED_FILE_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static CLOSED_FILE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static OPENED_FILE_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static FILE_PROP_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static DIR_PROP_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static DELETE_ENTRY_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static ADDED_DIRECTORY_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static OPENED_DIRECTORY_CALLBACKS: Mutex<Vec<String>> = Mutex::new(Vec::new());
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static APPLY_TEXTDELTA_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static TEXTDELTA_APPLIED_TO_BUFFER: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static APPLY_TEXTDELTA_STREAM_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static TEXTDELTA_WINDOWS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static TEXTDELTA_DONE_WINDOWS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static ABSENT_DIRECTORY_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static ABSENT_FILE_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static ABORT_EDIT_CALLBACKS: AtomicUsize = AtomicUsize::new(0);
-    #[cfg(git_svn_rs_libsvn_linked)]
-    static NATIVE_UPDATE_CALLBACK_LOCK: Mutex<()> = Mutex::new(());
 
     #[test]
     fn backend_without_url_reports_expected_error() {
@@ -2330,6 +2174,44 @@ mod tests {
             SvnBackend::uuid(&backend).unwrap_err(),
             LibSvnBackend::unavailable_message()
         );
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn auth_prompt_panic_does_not_cross_ffi_boundary() {
+        struct PanicPrompt;
+
+        impl AuthPrompt for PanicPrompt {
+            fn simple(
+                &self,
+                _request: AuthRequest,
+            ) -> Result<super::super::auth::Credentials, String> {
+                panic!("prompt panic")
+            }
+        }
+
+        AprRuntime::initialize().unwrap();
+        let pool = AprRuntime.create_pool().unwrap();
+        let prompt: Arc<dyn AuthPrompt> = Arc::new(PanicPrompt);
+        let mut baton = SimplePromptBaton {
+            prompt: &prompt,
+            no_auth_cache: true,
+        };
+        let mut credentials = ptr::dangling_mut::<svn_auth_cred_simple_t>();
+
+        let error = unsafe {
+            prompt_simple_credentials(
+                &mut credentials,
+                (&mut baton as *mut SimplePromptBaton).cast::<c_void>(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                pool.as_ptr(),
+            )
+        };
+
+        assert!(error.is_null());
+        assert!(credentials.is_null());
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2540,7 +2422,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        CLOSED_DIRECTORY_CALLBACKS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2555,7 +2436,7 @@ mod tests {
 
         assert!(baton.root_opened);
         assert_eq!(baton.root_base_revision, 0);
-        assert!(CLOSED_DIRECTORY_CALLBACKS.load(Ordering::SeqCst) > 0);
+        assert!(baton.closed_directories > 0);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2570,8 +2451,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        ADDED_FILE_CALLBACKS.lock().unwrap().clear();
-        CLOSED_FILE_CALLBACKS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2585,11 +2464,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            ADDED_FILE_CALLBACKS.lock().unwrap().as_slice(),
-            ["trunk/file.txt"]
-        );
-        assert_eq!(CLOSED_FILE_CALLBACKS.load(Ordering::SeqCst), 1);
+        assert_eq!(baton.added_files, ["trunk/file.txt"]);
+        assert_eq!(baton.closed_files, 1);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2604,9 +2480,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        APPLY_TEXTDELTA_CALLBACKS.store(0, Ordering::SeqCst);
-        TEXTDELTA_WINDOWS.store(0, Ordering::SeqCst);
-        TEXTDELTA_DONE_WINDOWS.store(0, Ordering::SeqCst);
 
         drive_update_report(
             &backend,
@@ -2621,9 +2494,9 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(APPLY_TEXTDELTA_CALLBACKS.load(Ordering::SeqCst), 1);
-        assert!(TEXTDELTA_WINDOWS.load(Ordering::SeqCst) > 0);
-        assert_eq!(TEXTDELTA_DONE_WINDOWS.load(Ordering::SeqCst), 1);
+        assert_eq!(baton.apply_textdelta_callbacks, 1);
+        assert!(baton.textdelta_windows > 0);
+        assert_eq!(baton.textdelta_done_windows, 1);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2644,7 +2517,6 @@ mod tests {
             textdelta_buffer: unsafe { svn_stringbuf_create_empty(pool.as_ptr()) },
             ..RecordingEditorBaton::default()
         };
-        TEXTDELTA_APPLIED_TO_BUFFER.store(0, Ordering::SeqCst);
 
         assert!(!baton.textdelta_buffer.is_null());
         drive_update_report(
@@ -2662,7 +2534,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(TEXTDELTA_APPLIED_TO_BUFFER.load(Ordering::SeqCst), 1);
+        assert_eq!(baton.textdelta_applied_to_buffer, 1);
         assert_eq!(
             unsafe { stringbuf_bytes(baton.textdelta_buffer) },
             b"hello\n"
@@ -2851,7 +2723,6 @@ mod tests {
         let apr = AprRuntime;
         let pool = apr.create_pool().unwrap();
         let editor = unsafe { svn_delta_default_editor(pool.as_ptr()) };
-        APPLY_TEXTDELTA_STREAM_CALLBACKS.store(0, Ordering::SeqCst);
 
         assert!(!editor.is_null());
         let error = unsafe {
@@ -2868,7 +2739,6 @@ mod tests {
         };
 
         assert!(error.is_null());
-        assert_eq!(APPLY_TEXTDELTA_STREAM_CALLBACKS.load(Ordering::SeqCst), 1);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2878,9 +2748,8 @@ mod tests {
         let apr = AprRuntime;
         let pool = apr.create_pool().unwrap();
         let editor = unsafe { svn_delta_default_editor(pool.as_ptr()) };
-        ABSENT_DIRECTORY_CALLBACKS.store(0, Ordering::SeqCst);
-        ABSENT_FILE_CALLBACKS.store(0, Ordering::SeqCst);
-        ABORT_EDIT_CALLBACKS.store(0, Ordering::SeqCst);
+        let mut baton = RecordingEditorBaton::default();
+        let baton_ptr = (&mut baton as *mut RecordingEditorBaton).cast::<c_void>();
 
         assert!(!editor.is_null());
         let error = unsafe {
@@ -2890,22 +2759,21 @@ mod tests {
 
             let absent_path = CString::new("trunk/missing").unwrap();
             let absent_directory = (*editor).absent_directory.unwrap();
-            let absent_error =
-                absent_directory(absent_path.as_ptr(), ptr::null_mut(), pool.as_ptr());
+            let absent_error = absent_directory(absent_path.as_ptr(), baton_ptr, pool.as_ptr());
             assert!(absent_error.is_null());
 
             let absent_file = (*editor).absent_file.unwrap();
-            let absent_error = absent_file(absent_path.as_ptr(), ptr::null_mut(), pool.as_ptr());
+            let absent_error = absent_file(absent_path.as_ptr(), baton_ptr, pool.as_ptr());
             assert!(absent_error.is_null());
 
             let abort_edit = (*editor).abort_edit.unwrap();
-            abort_edit(ptr::null_mut(), pool.as_ptr())
+            abort_edit(baton_ptr, pool.as_ptr())
         };
 
         assert!(error.is_null());
-        assert_eq!(ABSENT_DIRECTORY_CALLBACKS.load(Ordering::SeqCst), 1);
-        assert_eq!(ABSENT_FILE_CALLBACKS.load(Ordering::SeqCst), 1);
-        assert_eq!(ABORT_EDIT_CALLBACKS.load(Ordering::SeqCst), 1);
+        assert_eq!(baton.absent_directories, 1);
+        assert_eq!(baton.absent_files, 1);
+        assert_eq!(baton.aborted_edits, 1);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2920,7 +2788,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        OPENED_FILE_CALLBACKS.lock().unwrap().clear();
 
         drive_update_report_from_base(
             &backend,
@@ -2937,10 +2804,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            OPENED_FILE_CALLBACKS.lock().unwrap().as_slice(),
-            ["trunk/file.txt@2"]
-        );
+        assert_eq!(baton.opened_files, ["trunk/file.txt@2"]);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -2955,7 +2819,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        FILE_PROP_CALLBACKS.lock().unwrap().clear();
 
         drive_update_report_from_base(
             &backend,
@@ -2973,9 +2836,8 @@ mod tests {
         .unwrap();
 
         assert!(
-            FILE_PROP_CALLBACKS
-                .lock()
-                .unwrap()
+            baton
+                .file_properties
                 .iter()
                 .any(|property| property == "svn:needs-lock=*")
         );
@@ -2993,7 +2855,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        DIR_PROP_CALLBACKS.lock().unwrap().clear();
 
         drive_update_report_from_base(
             &backend,
@@ -3010,9 +2871,8 @@ mod tests {
         .unwrap();
 
         assert!(
-            DIR_PROP_CALLBACKS
-                .lock()
-                .unwrap()
+            baton
+                .directory_properties
                 .iter()
                 .any(|property| property == "svn:ignore=target\n")
         );
@@ -3030,7 +2890,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        DELETE_ENTRY_CALLBACKS.lock().unwrap().clear();
 
         drive_update_report_from_base(
             &backend,
@@ -3046,10 +2905,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            DELETE_ENTRY_CALLBACKS.lock().unwrap().as_slice(),
-            ["trunk/file.txt@6"]
-        );
+        assert_eq!(baton.deleted_entries, ["trunk/file.txt@6"]);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -3064,7 +2920,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        ADDED_DIRECTORY_CALLBACKS.lock().unwrap().clear();
 
         drive_update_report_from_base(
             &backend,
@@ -3080,10 +2935,7 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(
-            ADDED_DIRECTORY_CALLBACKS.lock().unwrap().as_slice(),
-            ["trunk/subdir"]
-        );
+        assert_eq!(baton.added_directories, ["trunk/subdir"]);
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
@@ -3098,7 +2950,6 @@ mod tests {
         };
         let backend = LibSvnBackend::for_url(repo_url);
         let mut baton = RecordingEditorBaton::default();
-        OPENED_DIRECTORY_CALLBACKS.lock().unwrap().clear();
 
         drive_update_report_from_base(
             &backend,
@@ -3117,9 +2968,8 @@ mod tests {
         .unwrap();
 
         assert!(
-            OPENED_DIRECTORY_CALLBACKS
-                .lock()
-                .unwrap()
+            baton
+                .opened_directories
                 .iter()
                 .any(|directory| directory == "trunk/subdir@7")
         );
@@ -3144,15 +2994,23 @@ mod tests {
         update_baton: *mut c_void,
         configure_editor: impl FnOnce(*mut SvnDeltaEditorT),
     ) -> Result<(), String> {
-        let _callback_lock = NATIVE_UPDATE_CALLBACK_LOCK.lock().unwrap();
         backend.with_session(|session, pool| unsafe {
             let editor = svn_delta_default_editor(pool);
-            assert!(!editor.is_null());
+            if editor.is_null() {
+                return Err("svn_delta_default_editor returned null".to_string());
+            }
+            if !update_baton.is_null() {
+                (*editor).open_root = Some(record_open_root);
+                (*editor).add_directory = Some(record_add_directory);
+                (*editor).open_directory = Some(record_open_directory);
+                (*editor).add_file = Some(record_add_file);
+                (*editor).open_file = Some(record_open_file);
+            }
             configure_editor(editor);
 
             let mut reporter: *const SvnRaReporter3T = ptr::null();
             let mut report_baton: *mut c_void = ptr::null_mut();
-            let target = CString::new("trunk").unwrap();
+            let target = CString::new("trunk").map_err(|_| "static update target contains NUL")?;
             svn_call(
                 svn_ra_do_update3(
                     session,
@@ -3171,7 +3029,9 @@ mod tests {
                 "svn_ra_do_update3",
             )?;
 
-            assert!(!reporter.is_null());
+            if reporter.is_null() {
+                return Err("libsvn returned a null update reporter".to_string());
+            }
             let set_path = (*reporter)
                 .set_path
                 .ok_or_else(|| "libsvn returned a reporter without set_path".to_string())?;
@@ -3179,7 +3039,7 @@ mod tests {
                 .finish_report
                 .ok_or_else(|| "libsvn returned a reporter without finish_report".to_string())?;
 
-            let empty_path = CString::new("").unwrap();
+            let empty_path = CString::new("").map_err(|_| "static empty path contains NUL")?;
             svn_call(
                 set_path(
                     report_baton,
@@ -3221,7 +3081,6 @@ mod tests {
             .map(|path| path.path)
             .collect::<Vec<_>>();
 
-        let _callback_lock = NATIVE_UPDATE_CALLBACK_LOCK.lock().unwrap();
         backend.with_session(|session, pool| unsafe {
             let mut base_file_contents = BTreeMap::new();
             for path in &base_file_paths {
@@ -3230,7 +3089,9 @@ mod tests {
             }
 
             let editor = svn_delta_default_editor(pool);
-            assert!(!editor.is_null());
+            if editor.is_null() {
+                return Err("svn_delta_default_editor returned null".to_string());
+            }
 
             let mut baton = FetchEditorUpdateBaton {
                 editor: fetch_editor,
@@ -3276,7 +3137,9 @@ mod tests {
                 "svn_ra_do_update3",
             )?;
 
-            assert!(!reporter.is_null());
+            if reporter.is_null() {
+                return Err("libsvn returned a null update reporter".to_string());
+            }
             let set_path = (*reporter)
                 .set_path
                 .ok_or_else(|| "libsvn returned a reporter without set_path".to_string())?;
@@ -3284,7 +3147,7 @@ mod tests {
                 .finish_report
                 .ok_or_else(|| "libsvn returned a reporter without finish_report".to_string())?;
 
-            let empty_path = CString::new("").unwrap();
+            let empty_path = CString::new("").map_err(|_| "static empty path contains NUL")?;
             svn_call(
                 set_path(
                     report_baton,
@@ -3316,6 +3179,19 @@ mod tests {
         closed_directories: usize,
         added_files: Vec<String>,
         closed_files: usize,
+        opened_files: Vec<String>,
+        file_properties: Vec<String>,
+        directory_properties: Vec<String>,
+        deleted_entries: Vec<String>,
+        added_directories: Vec<String>,
+        opened_directories: Vec<String>,
+        apply_textdelta_callbacks: usize,
+        textdelta_applied_to_buffer: usize,
+        textdelta_windows: usize,
+        textdelta_done_windows: usize,
+        absent_directories: usize,
+        absent_files: usize,
+        aborted_edits: usize,
         textdelta_buffer: *mut svn_stringbuf_t,
     }
 
@@ -3406,6 +3282,9 @@ mod tests {
         target_revision: c_long,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
+        if edit_baton.is_null() {
+            return ptr::null_mut();
+        }
         let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
         baton.target_revision = target_revision;
         ptr::null_mut()
@@ -3733,6 +3612,9 @@ mod tests {
         edit_baton: *mut c_void,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
+        if edit_baton.is_null() {
+            return ptr::null_mut();
+        }
         let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
         baton.closed = true;
         ptr::null_mut()
@@ -3745,12 +3627,18 @@ mod tests {
         _dir_pool: *mut AprPoolT,
         root_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
-        let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
-        baton.root_opened = true;
-        baton.root_base_revision = base_revision;
+        if root_baton.is_null() {
+            return ptr::null_mut();
+        }
         unsafe {
             *root_baton = edit_baton;
         }
+        if edit_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
+        baton.root_opened = true;
+        baton.root_base_revision = base_revision;
         ptr::null_mut()
     }
 
@@ -3759,7 +3647,6 @@ mod tests {
         dir_baton: *mut c_void,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
-        CLOSED_DIRECTORY_CALLBACKS.fetch_add(1, Ordering::SeqCst);
         if !dir_baton.is_null() {
             let baton = unsafe { &mut *(dir_baton as *mut RecordingEditorBaton) };
             baton.closed_directories += 1;
@@ -3771,14 +3658,15 @@ mod tests {
     unsafe extern "C" fn record_delete_entry(
         path: *const c_char,
         revision: c_long,
-        _parent_baton: *mut c_void,
+        parent_baton: *mut c_void,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
+        if path.is_null() || parent_baton.is_null() {
+            return ptr::null_mut();
+        }
         let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
-        DELETE_ENTRY_CALLBACKS
-            .lock()
-            .unwrap()
-            .push(format!("{path}@{revision}"));
+        let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+        baton.deleted_entries.push(format!("{path}@{revision}"));
         ptr::null_mut()
     }
 
@@ -3791,10 +3679,14 @@ mod tests {
         _dir_pool: *mut AprPoolT,
         child_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
+        if path.is_null() || parent_baton.is_null() || child_baton.is_null() {
+            return ptr::null_mut();
+        }
         let path = unsafe { CStr::from_ptr(path) }
             .to_string_lossy()
             .into_owned();
-        ADDED_DIRECTORY_CALLBACKS.lock().unwrap().push(path);
+        let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+        baton.added_directories.push(path);
         unsafe {
             *child_baton = parent_baton;
         }
@@ -3809,10 +3701,13 @@ mod tests {
         _dir_pool: *mut AprPoolT,
         child_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
+        if path.is_null() || parent_baton.is_null() || child_baton.is_null() {
+            return ptr::null_mut();
+        }
         let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
-        OPENED_DIRECTORY_CALLBACKS
-            .lock()
-            .unwrap()
+        let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+        baton
+            .opened_directories
             .push(format!("{path}@{base_revision}"));
         unsafe {
             *child_baton = parent_baton;
@@ -3829,14 +3724,14 @@ mod tests {
         _file_pool: *mut AprPoolT,
         file_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
+        if path.is_null() || parent_baton.is_null() || file_baton.is_null() {
+            return ptr::null_mut();
+        }
         let path = unsafe { CStr::from_ptr(path) }
             .to_string_lossy()
             .into_owned();
-        ADDED_FILE_CALLBACKS.lock().unwrap().push(path.clone());
-        if !parent_baton.is_null() {
-            let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
-            baton.added_files.push(path);
-        }
+        let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+        baton.added_files.push(path);
         unsafe {
             *file_baton = parent_baton;
         }
@@ -3849,7 +3744,6 @@ mod tests {
         _text_checksum: *const c_char,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
-        CLOSED_FILE_CALLBACKS.fetch_add(1, Ordering::SeqCst);
         if !file_baton.is_null() {
             let baton = unsafe { &mut *(file_baton as *mut RecordingEditorBaton) };
             baton.closed_files += 1;
@@ -3860,29 +3754,33 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_open_file(
         path: *const c_char,
-        _parent_baton: *mut c_void,
+        parent_baton: *mut c_void,
         base_revision: c_long,
         _file_pool: *mut AprPoolT,
         file_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
+        if path.is_null() || parent_baton.is_null() || file_baton.is_null() {
+            return ptr::null_mut();
+        }
         let path = unsafe { CStr::from_ptr(path) }.to_string_lossy();
-        OPENED_FILE_CALLBACKS
-            .lock()
-            .unwrap()
-            .push(format!("{path}@{base_revision}"));
+        let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+        baton.opened_files.push(format!("{path}@{base_revision}"));
         unsafe {
-            *file_baton = ptr::null_mut();
+            *file_baton = parent_baton;
         }
         ptr::null_mut()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_change_file_prop(
-        _file_baton: *mut c_void,
+        file_baton: *mut c_void,
         name: *const c_char,
         value: *const svn_string_t,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
+        if file_baton.is_null() || name.is_null() {
+            return ptr::null_mut();
+        }
         let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
         let value = if value.is_null() {
             String::new()
@@ -3890,20 +3788,21 @@ mod tests {
             let bytes = unsafe { slice::from_raw_parts((*value).data.cast::<u8>(), (*value).len) };
             String::from_utf8_lossy(bytes).into_owned()
         };
-        FILE_PROP_CALLBACKS
-            .lock()
-            .unwrap()
-            .push(format!("{name}={value}"));
+        let baton = unsafe { &mut *(file_baton as *mut RecordingEditorBaton) };
+        baton.file_properties.push(format!("{name}={value}"));
         ptr::null_mut()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_change_dir_prop(
-        _dir_baton: *mut c_void,
+        dir_baton: *mut c_void,
         name: *const c_char,
         value: *const svn_string_t,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
+        if dir_baton.is_null() || name.is_null() {
+            return ptr::null_mut();
+        }
         let name = unsafe { CStr::from_ptr(name) }.to_string_lossy();
         let value = if value.is_null() {
             String::new()
@@ -3911,25 +3810,27 @@ mod tests {
             let bytes = unsafe { slice::from_raw_parts((*value).data.cast::<u8>(), (*value).len) };
             String::from_utf8_lossy(bytes).into_owned()
         };
-        DIR_PROP_CALLBACKS
-            .lock()
-            .unwrap()
-            .push(format!("{name}={value}"));
+        let baton = unsafe { &mut *(dir_baton as *mut RecordingEditorBaton) };
+        baton.directory_properties.push(format!("{name}={value}"));
         ptr::null_mut()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_apply_textdelta(
-        _file_baton: *mut c_void,
+        file_baton: *mut c_void,
         _base_checksum: *const c_char,
         _result_pool: *mut AprPoolT,
         handler: *mut SvnTxdeltaWindowHandlerFunc,
         handler_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
-        APPLY_TEXTDELTA_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        if file_baton.is_null() || handler.is_null() || handler_baton.is_null() {
+            return ptr::null_mut();
+        }
+        let baton = unsafe { &mut *(file_baton as *mut RecordingEditorBaton) };
+        baton.apply_textdelta_callbacks += 1;
         unsafe {
             *handler = Some(record_textdelta_window);
-            *handler_baton = ptr::null_mut();
+            *handler_baton = file_baton;
         }
         ptr::null_mut()
     }
@@ -3942,16 +3843,24 @@ mod tests {
         handler: *mut SvnTxdeltaWindowHandlerFunc,
         handler_baton: *mut *mut c_void,
     ) -> *mut svn_error_t {
-        assert!(!file_baton.is_null());
-        assert!(!result_pool.is_null());
+        if file_baton.is_null()
+            || result_pool.is_null()
+            || handler.is_null()
+            || handler_baton.is_null()
+        {
+            return ptr::null_mut();
+        }
         let baton = unsafe { &mut *(file_baton as *mut RecordingEditorBaton) };
-        assert!(!baton.textdelta_buffer.is_null());
+        if baton.textdelta_buffer.is_null() {
+            return ptr::null_mut();
+        }
         let source_stream = unsafe { svn_stream_empty(result_pool) };
-        assert!(!source_stream.is_null());
         let target_stream =
             unsafe { svn_stream_from_stringbuf(baton.textdelta_buffer, result_pool) };
-        assert!(!target_stream.is_null());
-        TEXTDELTA_APPLIED_TO_BUFFER.fetch_add(1, Ordering::SeqCst);
+        if source_stream.is_null() || target_stream.is_null() {
+            return ptr::null_mut();
+        }
+        baton.textdelta_applied_to_buffer += 1;
         unsafe {
             svn_txdelta_apply(
                 source_stream,
@@ -3975,8 +3884,9 @@ mod tests {
         _open_baton: *mut c_void,
         _scratch_pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
-        assert!(open_func.is_some());
-        APPLY_TEXTDELTA_STREAM_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        if open_func.is_none() {
+            return ptr::null_mut();
+        }
         ptr::null_mut()
     }
 
@@ -3996,41 +3906,53 @@ mod tests {
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_absent_directory(
         _path: *const c_char,
-        _parent_baton: *mut c_void,
+        parent_baton: *mut c_void,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
-        ABSENT_DIRECTORY_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        if !parent_baton.is_null() {
+            let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+            baton.absent_directories += 1;
+        }
         ptr::null_mut()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_absent_file(
         _path: *const c_char,
-        _parent_baton: *mut c_void,
+        parent_baton: *mut c_void,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
-        ABSENT_FILE_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        if !parent_baton.is_null() {
+            let baton = unsafe { &mut *(parent_baton as *mut RecordingEditorBaton) };
+            baton.absent_files += 1;
+        }
         ptr::null_mut()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_abort_edit(
-        _edit_baton: *mut c_void,
+        edit_baton: *mut c_void,
         _pool: *mut AprPoolT,
     ) -> *mut svn_error_t {
-        ABORT_EDIT_CALLBACKS.fetch_add(1, Ordering::SeqCst);
+        if !edit_baton.is_null() {
+            let baton = unsafe { &mut *(edit_baton as *mut RecordingEditorBaton) };
+            baton.aborted_edits += 1;
+        }
         ptr::null_mut()
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
     unsafe extern "C" fn record_textdelta_window(
         window: *mut SvnTxdeltaWindowT,
-        _baton: *mut c_void,
+        baton: *mut c_void,
     ) -> *mut svn_error_t {
-        if window.is_null() {
-            TEXTDELTA_DONE_WINDOWS.fetch_add(1, Ordering::SeqCst);
-        } else {
-            TEXTDELTA_WINDOWS.fetch_add(1, Ordering::SeqCst);
+        if !baton.is_null() {
+            let baton = unsafe { &mut *(baton as *mut RecordingEditorBaton) };
+            if window.is_null() {
+                baton.textdelta_done_windows += 1;
+            } else {
+                baton.textdelta_windows += 1;
+            }
         }
         ptr::null_mut()
     }

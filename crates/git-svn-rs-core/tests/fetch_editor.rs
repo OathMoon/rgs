@@ -10,6 +10,7 @@ fn plan() -> FetchCommitPlan {
         author: "Ada <ada@example.com>".to_string(),
         committer: "Ada <ada@example.com>".to_string(),
         timestamp: 1_704_067_200,
+        timezone_offset: "+0000".to_string(),
         message: "import r3".to_string(),
         parent_mark: Some(2),
         parent_ref: None,
@@ -138,6 +139,42 @@ fn special_property_changes_file_to_symlink() {
             mode: "120000".to_string(),
             content: b"target.txt".to_vec(),
         }]
+    );
+}
+
+#[test]
+fn unhandled_metadata_matches_git_svn_log_format() {
+    let mut editor = SvnFetchEditor::new(plan());
+
+    editor.open_root(3).unwrap();
+    editor
+        .change_directory_prop("", "custom:root prop", Some("root value"))
+        .unwrap();
+    editor.add_file("trunk/file name", None).unwrap();
+    editor
+        .change_file_prop("trunk/file name", "custom:file", Some("line 1\nline 2"))
+        .unwrap();
+    editor
+        .change_file_prop("trunk/file name", "svn:entry:uuid", Some("ignored"))
+        .unwrap();
+    editor
+        .change_file_prop("trunk/file name", "custom:removed", None)
+        .unwrap();
+    editor.absent_file("trunk/private file").unwrap();
+    editor.absent_directory("trunk/private directory").unwrap();
+    editor.close_edit().unwrap();
+
+    let result = editor.into_result().unwrap();
+
+    assert_eq!(
+        result.unhandled.lines(),
+        vec![
+            "  +dir_prop: . custom:root%20prop root%20value",
+            "  +file_prop: trunk/file%20name custom:file line%201%0Aline%202",
+            "  -file_prop: trunk/file%20name custom:removed",
+            "  absent_file: trunk/private%20file",
+            "  absent_directory: trunk/private%20directory",
+        ]
     );
 }
 

@@ -408,6 +408,33 @@ fn linked_backend_do_update_drives_fetch_editor_callbacks() {
 }
 
 #[test]
+fn linked_backend_stops_update_on_fetch_editor_error() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = FailingFetchEditor::default();
+
+    let error = session.do_update("trunk", 2, &mut editor).unwrap_err();
+
+    assert!(
+        error.contains("intentional fetch editor failure"),
+        "{error}"
+    );
+    assert!(!editor.close_called);
+}
+
+#[test]
 fn linked_backend_do_switch_drives_fetch_editor_callbacks() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;
@@ -555,6 +582,7 @@ fn linked_backend_do_update_clears_removed_file_properties() {
         author: "alice <alice@example.com>".to_string(),
         committer: "alice <alice@example.com>".to_string(),
         timestamp: 1,
+        timezone_offset: "+0000".to_string(),
         message: "remove executable property".to_string(),
         parent_mark: None,
         parent_ref: None,
@@ -1183,6 +1211,51 @@ fn linked_backend_reads_log_metadata_and_changed_paths() {
 #[derive(Default)]
 struct RecordingFetchEditor {
     events: Vec<String>,
+}
+
+#[derive(Default)]
+struct FailingFetchEditor {
+    close_called: bool,
+}
+
+impl FetchEditor for FailingFetchEditor {
+    fn open_root(&mut self, _revision: u32) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn add_directory(
+        &mut self,
+        _path: &str,
+        _copy_from: Option<(&str, u32)>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn add_file(&mut self, _path: &str, _copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        Err("intentional fetch editor failure".to_string())
+    }
+
+    fn delete_entry(&mut self, _path: &str, _revision: u32) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn change_file_prop(
+        &mut self,
+        _path: &str,
+        _name: &str,
+        _value: Option<&str>,
+    ) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn apply_textdelta(&mut self, _path: &str, _content: &[u8]) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn close_edit(&mut self) -> Result<(), String> {
+        self.close_called = true;
+        Ok(())
+    }
 }
 
 impl FetchEditor for RecordingFetchEditor {

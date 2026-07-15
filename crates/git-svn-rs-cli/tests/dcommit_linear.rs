@@ -113,6 +113,8 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
             "commit",
             "-m",
             "change answer",
+            "-m",
+            "full dcommit message body",
         ],
     );
 
@@ -134,7 +136,9 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
         "svn log failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(String::from_utf8_lossy(&output.stdout).contains("change answer"));
+    let log = String::from_utf8_lossy(&output.stdout);
+    assert!(log.contains("change answer"));
+    assert!(log.contains("full dcommit message body"));
 }
 
 #[test]

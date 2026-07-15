@@ -8,7 +8,7 @@ use git_svn_rs_core::mapping::{build_single_path, build_standard_layout};
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
 use git_svn_rs_core::svn::editor::FetchEditor;
 use git_svn_rs_core::svn::mock::{MockRaSession, MockSvnBackend};
-use git_svn_rs_core::svn::ra::{DirListing, RaSession, SvnNodeKind};
+use git_svn_rs_core::svn::ra::{DirListing, RaSession, SvnNodeKind, UpdateRequest};
 use git_svn_rs_core::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent};
 use tempfile::tempdir;
 
@@ -143,6 +143,10 @@ fn imports_ra_session_update_into_git_and_rev_map() {
     )
     .unwrap();
     assert!(rev_map.get(2).unwrap().is_some());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".git/svn/origin.trunk/unhandled.log")).unwrap(),
+        "r2\n  +file_prop: trunk/src/lib.rs svn:eol-style LF\n"
+    );
 }
 
 #[test]
@@ -167,7 +171,22 @@ fn ra_import_filters_revisions_per_mapping_before_replay() {
     assert_eq!(summary.imported_revisions, vec![2, 3]);
     assert_eq!(
         session.update_calls.borrow().as_slice(),
-        [("trunk".to_string(), 2), ("branches/main".to_string(), 3)]
+        [
+            (
+                "trunk".to_string(),
+                UpdateRequest {
+                    target_revision: 2,
+                    base_revision: None,
+                },
+            ),
+            (
+                "branches/main".to_string(),
+                UpdateRequest {
+                    target_revision: 3,
+                    base_revision: None,
+                },
+            ),
+        ]
     );
     assert_eq!(
         git.run_for_test(["show", "refs/remotes/origin/main:src/lib.rs"])
@@ -181,6 +200,85 @@ fn ra_import_filters_revisions_per_mapping_before_replay() {
         git.run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
             .unwrap()
             .trim()
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".git/svn/origin.trunk/unhandled.log")).unwrap(),
+        concat!(
+            "r2\n",
+            "  +dir_prop: trunk custom:dir-prop dir%20value\n",
+            "  +file_prop: trunk/src/lib.rs svn:eol-style LF\n",
+            "  absent_file: trunk/private%20file\n",
+            "  absent_directory: trunk/private%20directory\n",
+        )
+    );
+}
+
+#[test]
+fn ra_import_propagates_empty_and_existing_rev_map_update_bases() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let mut session = PathFilteringRaSession::new();
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+
+    import_ra_revisions(
+        &session,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    session.revisions = vec![RevisionEvent {
+        revision: 3,
+        author: "bob".to_string(),
+        message: "update trunk again".to_string(),
+        timestamp: "2026-01-03T00:00:00Z".to_string(),
+        changed_paths: vec![ChangedPath {
+            path: "/trunk/src/lib.rs".to_string(),
+            action: ChangeAction::Modify,
+            copy_from_path: None,
+            copy_from_rev: None,
+            kind: NodeKind::File,
+            properties_modified: false,
+            content_modified: true,
+            properties: BTreeMap::new(),
+            content: Some(b"pub fn trunk_again() {}\n".to_vec()),
+        }],
+    }];
+
+    import_ra_revisions(
+        &session,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 3,
+            end_revision: Some(3),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        session.update_calls.borrow().as_slice(),
+        [
+            (
+                "trunk".to_string(),
+                UpdateRequest {
+                    target_revision: 2,
+                    base_revision: None,
+                },
+            ),
+            (
+                "trunk".to_string(),
+                UpdateRequest {
+                    target_revision: 3,
+                    base_revision: Some(2),
+                },
+            ),
+        ]
     );
 }
 
@@ -279,7 +377,7 @@ fn revisions() -> Vec<RevisionEvent> {
 
 struct PathFilteringRaSession {
     revisions: Vec<RevisionEvent>,
-    update_calls: RefCell<Vec<(String, u32)>>,
+    update_calls: RefCell<Vec<(String, UpdateRequest)>>,
 }
 
 impl PathFilteringRaSession {
@@ -405,21 +503,19 @@ impl RaSession for PathFilteringRaSession {
         revision: u32,
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String> {
-        match (path, revision) {
-            ("trunk", 2) => {
-                self.update_calls
-                    .borrow_mut()
-                    .push((path.to_string(), revision));
-                drive_update(editor, "trunk", revision, b"pub fn trunk() {}\n")
-            }
-            ("branches/main", 3) => {
-                self.update_calls
-                    .borrow_mut()
-                    .push((path.to_string(), revision));
-                drive_copy_update(editor, "branches/main", revision, b"pub fn branch() {}\n")
-            }
-            _ => Err(format!("unexpected update {path}@{revision}")),
-        }
+        self.drive_update(path, revision, editor)
+    }
+
+    fn do_update_from(
+        &self,
+        path: &str,
+        request: UpdateRequest,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        self.update_calls
+            .borrow_mut()
+            .push((path.to_string(), request));
+        self.drive_update(path, request.target_revision, editor)
     }
 
     fn do_switch(
@@ -433,6 +529,24 @@ impl RaSession for PathFilteringRaSession {
     }
 }
 
+impl PathFilteringRaSession {
+    fn drive_update(
+        &self,
+        path: &str,
+        revision: u32,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        match (path, revision) {
+            ("trunk", 2) => drive_update(editor, "trunk", revision, b"pub fn trunk() {}\n"),
+            ("trunk", 3) => drive_update(editor, "trunk", revision, b"pub fn trunk_again() {}\n"),
+            ("branches/main", 3) => {
+                drive_copy_update(editor, "branches/main", revision, b"pub fn branch() {}\n")
+            }
+            _ => Err(format!("unexpected update {path}@{revision}")),
+        }
+    }
+}
+
 fn drive_update(
     editor: &mut dyn FetchEditor,
     path: &str,
@@ -441,11 +555,15 @@ fn drive_update(
 ) -> Result<(), String> {
     editor.open_root(revision)?;
     editor.add_directory(path, None)?;
+    editor.change_directory_prop(path, "custom:dir-prop", Some("dir value"))?;
     editor.add_directory(&format!("{path}/empty-dir"), None)?;
     editor.add_file(&format!("{path}/src/lib.rs"), None)?;
+    editor.change_file_prop(&format!("{path}/src/lib.rs"), "svn:eol-style", Some("LF"))?;
     editor.apply_textdelta(&format!("{path}/src/lib.rs"), content)?;
     editor.add_file(&format!("{path}/run.sh"), None)?;
     editor.apply_textdelta(&format!("{path}/run.sh"), b"#!/bin/sh\n")?;
+    editor.absent_file(&format!("{path}/private file"))?;
+    editor.absent_directory(&format!("{path}/private directory"))?;
     editor.close_edit()
 }
 

@@ -10,10 +10,12 @@ default = []
 svn-libsvn = []
 
 [dependencies]
+chrono.workspace = true
 clap.workspace = true
 fancy-regex.workspace = true
 flate2.workspace = true
 hex.workspace = true
+md-5.workspace = true
 thiserror.workspace = true
 url.workspace = true
 

@@ -58,7 +58,7 @@ pub struct RevMapArtifactRecord {
     pub source_ref: String,
     pub uuid: String,
     pub revision: u32,
-    pub has_commit: bool,
+    pub object_id: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,6 +66,38 @@ pub struct RevMapByteLengthArtifact {
     pub source_ref: String,
     pub uuid: String,
     pub byte_len: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RefTipArtifact {
+    pub name: String,
+    pub object_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CommitGraphArtifact {
+    pub object_id: String,
+    pub parents: Vec<String>,
+    pub tree_id: String,
+    pub author_name: String,
+    pub author_email: String,
+    pub author_epoch: i64,
+    pub author_offset: String,
+    pub committer_name: String,
+    pub committer_email: String,
+    pub committer_epoch: i64,
+    pub committer_offset: String,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CloneStateArtifact {
+    pub head_symbolic_ref: Option<String>,
+    pub head_object_id: Option<String>,
+    pub local_branches: Vec<String>,
+    pub index_entries: Vec<String>,
+    pub worktree_entries: Vec<String>,
+    pub status_porcelain_v2: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +127,10 @@ pub struct FilePropertyArtifact {
 pub struct GoldenComparisonArtifacts {
     pub config: Vec<(String, String)>,
     pub refs: Vec<String>,
+    pub ref_tips: Vec<RefTipArtifact>,
+    pub commit_graph: Vec<CommitGraphArtifact>,
+    pub clone_state: CloneStateArtifact,
+    pub no_checkout_clone_state: CloneStateArtifact,
     pub git_svn_id_footers: Vec<String>,
     pub rev_map: Vec<RevMapArtifactRecord>,
     pub rev_map_byte_lengths: Vec<RevMapByteLengthArtifact>,
@@ -353,7 +389,7 @@ pub fn run_rust_stdlayout_ref_artifacts(
                 .map_err(|error| format!("invalid tip git-svn-id for {source_ref}: {error}"))?;
             let max_valid_rev_map_revision = rev_map
                 .iter()
-                .filter(|record| record.source_ref == source_ref && record.has_commit)
+                .filter(|record| record.source_ref == source_ref && record.object_id.is_some())
                 .map(|record| record.revision)
                 .max()
                 .ok_or_else(|| format!("missing populated rev-map record for {source_ref}"))?;
@@ -396,14 +432,43 @@ pub fn run_standard_trunk_golden_comparison(
             path_arg(&perl_path)?,
         ],
     )?;
-    let perl = collect_supported_artifacts(
+    let mut perl = collect_supported_artifacts(
         &perl_path,
         GoldenTool::Perl,
         normalize_clone_output(&perl_clone_output),
     )?;
+    let perl_no_checkout_path = root.join("perl-clone-no-checkout");
+    run(
+        root,
+        "git",
+        &[
+            "svn",
+            "clone",
+            "--no-checkout",
+            "--trunk",
+            "trunk",
+            "--prefix=origin/",
+            &fixture.url(),
+            path_arg(&perl_no_checkout_path)?,
+        ],
+    )?;
+    perl.no_checkout_clone_state = collect_clone_state(&perl_no_checkout_path)?;
     capture.write_text("perl/clone-output.txt", &perl.clone_output)?;
     capture.write_text("perl/config.txt", &format_config(&perl.config))?;
     capture.write_text("perl/refs.txt", &perl.refs.join("\n"))?;
+    capture.write_text("perl/ref-tips.txt", &format_ref_tips(&perl.ref_tips))?;
+    capture.write_text(
+        "perl/commit-graph.txt",
+        &format_commit_graph(&perl.commit_graph),
+    )?;
+    capture.write_text(
+        "perl/clone-state.txt",
+        &format_clone_state(&perl.clone_state),
+    )?;
+    capture.write_text(
+        "perl/clone-state-no-checkout.txt",
+        &format_clone_state(&perl.no_checkout_clone_state),
+    )?;
     capture.write_text(
         "perl/git-svn-id-footers.txt",
         &perl.git_svn_id_footers.join("\n"),
@@ -464,11 +529,42 @@ pub fn run_standard_trunk_golden_comparison(
         shared: default_shared_fetch_args(),
         no_checkout: false,
     })?;
-    let rust =
-        collect_supported_artifacts(&rust_path, GoldenTool::Rust, "clone: success".to_string())?;
+    let mut rust = collect_supported_artifacts(
+        &rust_path,
+        GoldenTool::Rust,
+        "status: 0\nstdout:\n\nstderr:\n".to_string(),
+    )?;
+    let rust_no_checkout_path = root.join("rust-clone-no-checkout");
+    commands::clone::run(CloneArgs {
+        url: fixture.url(),
+        path: Some(path_arg(&rust_no_checkout_path)?.to_string()),
+        layout: LayoutArgs {
+            stdlayout: false,
+            trunk: Some("trunk".to_string()),
+            branches: Vec::new(),
+            tags: Vec::new(),
+            prefix: None,
+        },
+        shared: default_shared_fetch_args(),
+        no_checkout: true,
+    })?;
+    rust.no_checkout_clone_state = collect_clone_state(&rust_no_checkout_path)?;
     capture.write_text("rust/clone-output.txt", &rust.clone_output)?;
     capture.write_text("rust/config.txt", &format_config(&rust.config))?;
     capture.write_text("rust/refs.txt", &rust.refs.join("\n"))?;
+    capture.write_text("rust/ref-tips.txt", &format_ref_tips(&rust.ref_tips))?;
+    capture.write_text(
+        "rust/commit-graph.txt",
+        &format_commit_graph(&rust.commit_graph),
+    )?;
+    capture.write_text(
+        "rust/clone-state.txt",
+        &format_clone_state(&rust.clone_state),
+    )?;
+    capture.write_text(
+        "rust/clone-state-no-checkout.txt",
+        &format_clone_state(&rust.no_checkout_clone_state),
+    )?;
     capture.write_text(
         "rust/git-svn-id-footers.txt",
         &rust.git_svn_id_footers.join("\n"),
@@ -534,6 +630,30 @@ pub fn compare_supported_subset(
         mismatches.push(format!(
             "refs differ\nperl: {:?}\nrust: {:?}",
             perl.refs, rust.refs
+        ));
+    }
+    if perl.ref_tips != rust.ref_tips {
+        mismatches.push(format!(
+            "ref tips differ\nperl: {:?}\nrust: {:?}",
+            perl.ref_tips, rust.ref_tips
+        ));
+    }
+    if perl.commit_graph != rust.commit_graph {
+        mismatches.push(format!(
+            "commit graph differs\nperl: {:?}\nrust: {:?}",
+            perl.commit_graph, rust.commit_graph
+        ));
+    }
+    if perl.clone_state != rust.clone_state {
+        mismatches.push(format!(
+            "clone state differs\nperl: {:?}\nrust: {:?}",
+            perl.clone_state, rust.clone_state
+        ));
+    }
+    if perl.no_checkout_clone_state != rust.no_checkout_clone_state {
+        mismatches.push(format!(
+            "--no-checkout clone state differs\nperl: {:?}\nrust: {:?}",
+            perl.no_checkout_clone_state, rust.no_checkout_clone_state
         ));
     }
     if perl.git_svn_id_footers != rust.git_svn_id_footers {
@@ -869,6 +989,9 @@ fn collect_supported_artifacts(
     .map(str::to_string)
     .filter(|line| !line.ends_with("/HEAD"))
     .collect::<Vec<_>>();
+    let ref_tips = supported_ref_tips(work_tree)?;
+    let commit_graph = supported_commit_graph(work_tree, &refs)?;
+    let clone_state = collect_clone_state(work_tree)?;
 
     let config = supported_config(work_tree)?;
     let rev = refs
@@ -912,6 +1035,10 @@ fn collect_supported_artifacts(
     Ok(GoldenComparisonArtifacts {
         config,
         refs,
+        ref_tips,
+        commit_graph,
+        clone_state,
+        no_checkout_clone_state: CloneStateArtifact::default(),
         git_svn_id_footers,
         rev_map,
         rev_map_byte_lengths,
@@ -938,6 +1065,170 @@ fn collect_supported_artifacts(
         gc_output,
         clone_output,
     })
+}
+
+fn collect_clone_state(work_tree: &Path) -> Result<CloneStateArtifact, String> {
+    let head_symbolic_ref = optional_git_text(work_tree, &["symbolic-ref", "-q", "HEAD"])?;
+    let head_object_id = optional_git_text(work_tree, &["rev-parse", "--verify", "HEAD"])?;
+    let mut local_branches = run_text(
+        work_tree,
+        "git",
+        &[
+            "for-each-ref",
+            "refs/heads",
+            "--format=%(refname)\t%(objectname)\t%(upstream)",
+        ],
+    )?
+    .lines()
+    .map(str::to_string)
+    .collect::<Vec<_>>();
+    local_branches.sort();
+
+    let mut index_entries = run_text(work_tree, "git", &["ls-files", "--stage", "-z"])?
+        .split('\0')
+        .filter(|entry| !entry.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    index_entries.sort();
+
+    let mut worktree_entries = Vec::new();
+    for path in run_text(work_tree, "git", &["ls-files", "-z"])?
+        .split('\0')
+        .filter(|path| !path.is_empty())
+    {
+        let content = fs::read(work_tree.join(path))
+            .map_err(|error| format!("failed to read worktree path {path:?}: {error}"))?;
+        worktree_entries.push(format!("{path}\t{}", hex::encode(content)));
+    }
+    worktree_entries.sort();
+
+    let status_porcelain_v2 = run_text(
+        work_tree,
+        "git",
+        &[
+            "status",
+            "--porcelain=v2",
+            "--branch",
+            "-z",
+            "--untracked-files=all",
+        ],
+    )?
+    .replace('\0', "\n");
+
+    Ok(CloneStateArtifact {
+        head_symbolic_ref,
+        head_object_id,
+        local_branches,
+        index_entries,
+        worktree_entries,
+        status_porcelain_v2,
+    })
+}
+
+fn optional_git_text(work_tree: &Path, args: &[&str]) -> Result<Option<String>, String> {
+    let output = Command::new("git")
+        .current_dir(work_tree)
+        .args(args)
+        .output()
+        .map_err(|error| format!("git failed to start: {error}"))?;
+    if output.status.success() {
+        return Ok(Some(
+            String::from_utf8_lossy(&output.stdout).trim().to_string(),
+        ));
+    }
+    if output.status.code() == Some(1) || output.status.code() == Some(128) {
+        return Ok(None);
+    }
+    Err(command_error("git", output))
+}
+
+fn supported_ref_tips(work_tree: &Path) -> Result<Vec<RefTipArtifact>, String> {
+    let mut refs = run_text(
+        work_tree,
+        "git",
+        &[
+            "for-each-ref",
+            "refs/remotes",
+            "--format=%(refname)\t%(objectname)",
+        ],
+    )?
+    .lines()
+    .filter(|line| !line.starts_with("refs/remotes/") || !line.contains("/HEAD\t"))
+    .map(|line| {
+        let (name, object_id) = line
+            .split_once('\t')
+            .ok_or_else(|| format!("invalid ref artifact: {line}"))?;
+        Ok(RefTipArtifact {
+            name: name.to_string(),
+            object_id: object_id.to_string(),
+        })
+    })
+    .collect::<Result<Vec<_>, String>>()?;
+    refs.sort_by(|left, right| left.name.cmp(&right.name));
+    Ok(refs)
+}
+
+fn supported_commit_graph(
+    work_tree: &Path,
+    refs: &[String],
+) -> Result<Vec<CommitGraphArtifact>, String> {
+    let mut args = vec!["rev-list".to_string()];
+    args.extend(refs.iter().cloned());
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    let mut object_ids = run_text(work_tree, "git", &args)?
+        .lines()
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+    object_ids.sort();
+    object_ids.dedup();
+
+    object_ids
+        .into_iter()
+        .map(|object_id| {
+            let raw = run_text(
+                work_tree,
+                "git",
+                &[
+                    "show",
+                    "-s",
+                    "--format=%H%x00%P%x00%T%x00%an%x00%ae%x00%at%x00%aI%x00%cn%x00%ce%x00%ct%x00%cI%x00%B",
+                    &object_id,
+                ],
+            )?;
+            let fields = raw.splitn(12, '\0').collect::<Vec<_>>();
+            if fields.len() != 12 {
+                return Err(format!("invalid commit graph artifact for {object_id}"));
+            }
+            Ok(CommitGraphArtifact {
+                object_id: fields[0].to_string(),
+                parents: fields[1].split_whitespace().map(str::to_string).collect(),
+                tree_id: fields[2].to_string(),
+                author_name: fields[3].to_string(),
+                author_email: fields[4].to_string(),
+                author_epoch: fields[5].parse().map_err(|error| {
+                    format!("invalid author epoch for {object_id}: {error}")
+                })?,
+                author_offset: iso8601_offset(fields[6])?,
+                committer_name: fields[7].to_string(),
+                committer_email: fields[8].to_string(),
+                committer_epoch: fields[9].parse().map_err(|error| {
+                    format!("invalid committer epoch for {object_id}: {error}")
+                })?,
+                committer_offset: iso8601_offset(fields[10])?,
+                message: fields[11].to_string(),
+            })
+        })
+        .collect()
+}
+
+fn iso8601_offset(value: &str) -> Result<String, String> {
+    let offset = value
+        .get(value.len().saturating_sub(6)..)
+        .ok_or_else(|| format!("invalid ISO-8601 timestamp: {value}"))?;
+    if !matches!(offset.as_bytes(), [b'+' | b'-', _, _, b':', _, _]) {
+        return Err(format!("invalid ISO-8601 offset: {value}"));
+    }
+    Ok(offset.replace(':', ""))
 }
 
 fn supported_gc(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
@@ -1233,14 +1524,14 @@ fn supported_find_rev_commit(
         GoldenTool::Rust => commands::find_rev::run_in_work_tree(
             work_tree,
             FindRevArgs {
-                rev_or_commit: commit,
+                rev_or_commit: commit.clone(),
                 before: false,
                 after: false,
             },
         )?,
     };
     Ok(format!(
-        "<commit> -> {}",
+        "{commit} -> {}",
         normalize_commit_to_revision_output(&output, expected_revision)
     ))
 }
@@ -1357,9 +1648,10 @@ fn normalize_oneline_show_commit_log(output: &str) -> String {
                 return None;
             }
             let revision_index = parts.iter().position(|part| part.trim().starts_with('r'))?;
+            let commit = parts.first()?.trim();
             let revision = parts.get(revision_index)?.trim();
             let subject = parts.get(revision_index + 1)?.trim();
-            Some(format!("<commit> | {revision} | {subject}"))
+            Some(format!("{commit} | {revision} | {subject}"))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -1460,11 +1752,7 @@ fn normalize_find_rev_output(revision: u32, output: &str) -> String {
     if output.trim().is_empty() {
         return format!("r{revision} -> ");
     }
-    if output.trim().chars().all(|c| c.is_ascii_hexdigit()) {
-        format!("r{revision} -> <commit>")
-    } else {
-        format!("r{revision} -> {}", output.trim())
-    }
+    format!("r{revision} -> {}", output.trim())
 }
 
 fn supported_file_modes(work_tree: &Path, refname: &str) -> Result<Vec<FileModeArtifact>, String> {
@@ -1687,16 +1975,17 @@ fn supported_rev_map(
             ));
         }
 
-        records.extend(
-            bytes
-                .chunks_exact(record_size)
-                .map(|record| RevMapArtifactRecord {
-                    source_ref: source_ref.clone(),
-                    uuid: uuid.clone(),
-                    revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
-                    has_commit: record[4..].iter().any(|byte| *byte != 0),
-                }),
-        );
+        records.extend(bytes.chunks_exact(record_size).map(|record| {
+            RevMapArtifactRecord {
+                source_ref: source_ref.clone(),
+                uuid: uuid.clone(),
+                revision: u32::from_be_bytes([record[0], record[1], record[2], record[3]]),
+                object_id: record[4..]
+                    .iter()
+                    .any(|byte| *byte != 0)
+                    .then(|| hex::encode(&record[4..])),
+            }
+        }));
     }
     records.sort_by(|left, right| {
         left.source_ref
@@ -1864,13 +2153,59 @@ fn format_config(config: &[(String, String)]) -> String {
         .join("\n")
 }
 
+fn format_ref_tips(refs: &[RefTipArtifact]) -> String {
+    refs.iter()
+        .map(|artifact| format!("{} {}", artifact.name, artifact.object_id))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn format_clone_state(state: &CloneStateArtifact) -> String {
+    format!(
+        "head-symbolic {:?}\nhead-oid {:?}\nbranches\n{}\nindex\n{}\nworktree\n{}\nstatus\n{}",
+        state.head_symbolic_ref,
+        state.head_object_id,
+        state.local_branches.join("\n"),
+        state.index_entries.join("\n"),
+        state.worktree_entries.join("\n"),
+        state.status_porcelain_v2,
+    )
+}
+
+fn format_commit_graph(commits: &[CommitGraphArtifact]) -> String {
+    commits
+        .iter()
+        .map(|commit| {
+            format!(
+                "commit {}\nparents {}\ntree {}\nauthor {:?} {:?} {} {}\ncommitter {:?} {:?} {} {}\nmessage {:?}",
+                commit.object_id,
+                commit.parents.join(" "),
+                commit.tree_id,
+                commit.author_name,
+                commit.author_email,
+                commit.author_epoch,
+                commit.author_offset,
+                commit.committer_name,
+                commit.committer_email,
+                commit.committer_epoch,
+                commit.committer_offset,
+                commit.message,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+
 fn format_rev_map(records: &[RevMapArtifactRecord]) -> String {
     records
         .iter()
         .map(|record| {
             format!(
                 "{} {} {} {}",
-                record.source_ref, record.uuid, record.revision, record.has_commit
+                record.source_ref,
+                record.uuid,
+                record.revision,
+                record.object_id.as_deref().unwrap_or("zero")
             )
         })
         .collect::<Vec<_>>()
@@ -1914,8 +2249,10 @@ struct CapturedCommandOutput {
 }
 
 fn normalize_clone_output(output: &CapturedCommandOutput) -> String {
-    let _ = (&output.stdout, &output.stderr);
-    "clone: success".to_string()
+    format!(
+        "status: 0\nstdout:\n{}\nstderr:\n{}",
+        output.stdout, output.stderr
+    )
 }
 
 fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
@@ -2029,16 +2366,99 @@ mod tests {
                     source_ref: "refs/remotes/origin/branches/main".to_string(),
                     uuid: "uuid".to_string(),
                     revision: 1,
-                    has_commit: true,
+                    object_id: Some("01".repeat(20)),
                 },
                 RevMapArtifactRecord {
                     source_ref: "refs/remotes/origin/trunk".to_string(),
                     uuid: "uuid".to_string(),
                     revision: 1,
-                    has_commit: true,
+                    object_id: Some("01".repeat(20)),
                 },
             ]
         );
+    }
+
+    #[test]
+    fn exact_ref_graph_and_clone_state_collectors_preserve_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        run(tmp.path(), "git", &["init"]).unwrap();
+        fs::write(tmp.path().join("file.txt"), b"content\n").unwrap();
+        run(tmp.path(), "git", &["add", "file.txt"]).unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &[
+                "-c",
+                "user.name=Artifact Author",
+                "-c",
+                "user.email=artifact@example.com",
+                "commit",
+                "--date=2026-01-02T03:04:05+05:30",
+                "-m",
+                "artifact message",
+            ],
+        )
+        .unwrap();
+        let head = run_text(tmp.path(), "git", &["rev-parse", "HEAD"])
+            .unwrap()
+            .trim()
+            .to_string();
+        run(
+            tmp.path(),
+            "git",
+            &["update-ref", "refs/remotes/origin/trunk", &head],
+        )
+        .unwrap();
+
+        let refs = supported_ref_tips(tmp.path()).unwrap();
+        assert_eq!(
+            refs,
+            vec![RefTipArtifact {
+                name: "refs/remotes/origin/trunk".to_string(),
+                object_id: head.clone(),
+            }]
+        );
+        let graph =
+            supported_commit_graph(tmp.path(), &["refs/remotes/origin/trunk".to_string()]).unwrap();
+        assert_eq!(graph.len(), 1);
+        assert_eq!(graph[0].object_id, head);
+        assert!(graph[0].parents.is_empty());
+        assert_eq!(graph[0].author_name, "Artifact Author");
+        assert_eq!(graph[0].author_email, "artifact@example.com");
+        assert_eq!(graph[0].author_offset, "+0530");
+        assert!(graph[0].message.contains("artifact message"));
+
+        let state = collect_clone_state(tmp.path()).unwrap();
+        assert!(
+            state
+                .head_symbolic_ref
+                .as_deref()
+                .is_some_and(|head| head.starts_with("refs/heads/"))
+        );
+        assert_eq!(
+            state.head_object_id.as_deref(),
+            Some(graph[0].object_id.as_str())
+        );
+        assert_eq!(state.index_entries.len(), 1);
+        assert_eq!(state.worktree_entries, vec!["file.txt\t636f6e74656e740a"]);
+
+        let no_checkout = tempfile::tempdir().unwrap();
+        let no_checkout_path = no_checkout.path().join("clone");
+        run(
+            no_checkout.path(),
+            "git",
+            &[
+                "clone",
+                "--no-checkout",
+                path_arg(tmp.path()).unwrap(),
+                path_arg(&no_checkout_path).unwrap(),
+            ],
+        )
+        .unwrap();
+        let no_checkout_state = collect_clone_state(&no_checkout_path).unwrap();
+        assert!(no_checkout_state.head_object_id.is_some());
+        assert!(no_checkout_state.index_entries.is_empty());
+        assert!(no_checkout_state.worktree_entries.is_empty());
     }
 
     #[test]
@@ -2058,7 +2478,7 @@ mod tests {
                 source_ref: "refs/remotes/origin/trunk".to_string(),
                 uuid: "uuid".to_string(),
                 revision: 3,
-                has_commit: false,
+                object_id: None,
             }]
         );
     }
@@ -2080,7 +2500,7 @@ mod tests {
                 source_ref: "refs/remotes/git-svn".to_string(),
                 uuid: "uuid".to_string(),
                 revision: 5,
-                has_commit: true,
+                object_id: Some("05".repeat(32)),
             }]
         );
     }
@@ -2103,7 +2523,7 @@ mod tests {
                 source_ref: "refs/remotes/origin/trunk".to_string(),
                 uuid: "repository-uuid".to_string(),
                 revision: 7,
-                has_commit: true,
+                object_id: Some("07".repeat(20)),
             }]
         );
         assert_eq!(
@@ -2116,7 +2536,10 @@ mod tests {
         );
         assert_eq!(
             format_rev_map(&records),
-            "refs/remotes/origin/trunk repository-uuid 7 true"
+            format!(
+                "refs/remotes/origin/trunk repository-uuid 7 {}",
+                "07".repeat(20)
+            )
         );
         assert_eq!(
             format_rev_map_byte_lengths(&lengths),
@@ -2130,12 +2553,12 @@ mod tests {
             source_ref: "refs/remotes/origin/trunk".to_string(),
             uuid: "uuid".to_string(),
             revision: 3,
-            has_commit: false,
+            object_id: None,
         }];
 
         assert_eq!(
             format_rev_map(&records),
-            "refs/remotes/origin/trunk uuid 3 false"
+            "refs/remotes/origin/trunk uuid 3 zero"
         );
     }
 

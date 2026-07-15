@@ -18,6 +18,42 @@ fn clone_uses_mock_import_shell_for_mock_urls() {
             .trim(),
         "add trunk file"
     );
+    assert_eq!(
+        git.run_for_test(["rev-parse", "HEAD"]).unwrap(),
+        git.run_for_test(["rev-parse", "refs/remotes/git-svn"])
+            .unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("src/lib.rs")).unwrap(),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+    assert_eq!(
+        git.run_for_test(["show", "-s", "--format=%at %ct %ai %ci", "HEAD"])
+            .unwrap()
+            .trim(),
+        "1767312000 1767312000 2026-01-02 00:00:00 +0000 2026-01-02 00:00:00 +0000"
+    );
+}
+
+#[test]
+fn clone_no_checkout_sets_head_without_populating_work_tree() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", "mock://repo/trunk", "work", "--no-checkout"])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["rev-parse", "HEAD"]).unwrap(),
+        git.run_for_test(["rev-parse", "refs/remotes/git-svn"])
+            .unwrap()
+    );
+    assert!(!work.join("src/lib.rs").exists());
 }
 
 #[test]

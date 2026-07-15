@@ -360,6 +360,76 @@ fn info_url_uses_current_head_ancestor_ref_in_multi_ref_layout() {
 }
 
 #[test]
+fn resolver_uses_nearest_first_parent_identity_after_merge() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "branches/A:refs/remotes/origin/A");
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            "branches/B:refs/remotes/origin/B",
+        ],
+    );
+
+    let branch_a = commit_file(
+        work,
+        "a.txt",
+        "A\n",
+        "branch A\n\ngit-svn-id: mock://repo/branches/A@100 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/A", &branch_a]);
+    write_rev_map_for_short_ref(work, "origin.A", &[(100, &branch_a)]);
+
+    git(work, ["checkout", "-b", "branch-b", &branch_a]);
+    let branch_b = commit_file(
+        work,
+        "b.txt",
+        "B\n",
+        "branch B\n\ngit-svn-id: mock://repo/branches/B@200 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/B", &branch_b]);
+    write_rev_map_for_short_ref(work, "origin.B", &[(200, &branch_b)]);
+
+    git(work, ["checkout", "-b", "topic", &branch_a]);
+    commit_file(work, "local.txt", "local\n", "local change");
+    git(
+        work,
+        [
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "merge",
+            "--no-ff",
+            "refs/remotes/origin/B",
+            "-m",
+            "merge branch B",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "--url"])
+        .assert()
+        .success()
+        .stdout("mock://repo/branches/A\n");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "does not support merge commits in the local commit range",
+        ));
+}
+
+#[test]
 fn log_prints_svn_revisions_from_git_history() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

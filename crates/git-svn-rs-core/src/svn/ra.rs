@@ -21,6 +21,14 @@ pub struct DirListing {
     pub properties: BTreeMap<String, String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UpdateRequest {
+    pub target_revision: u32,
+    /// The SVN revision represented by the editor's base tree. `None` requests
+    /// an empty report for an initial import.
+    pub base_revision: Option<u32>,
+}
+
 pub trait RaSession {
     fn url(&self) -> &str;
     fn repos_root(&self) -> &str;
@@ -35,6 +43,14 @@ pub trait RaSession {
         revision: u32,
         editor: &mut dyn FetchEditor,
     ) -> Result<(), String>;
+    fn do_update_from(
+        &self,
+        path: &str,
+        request: UpdateRequest,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        self.do_update(path, request.target_revision, editor)
+    }
     fn do_switch(
         &self,
         path: &str,

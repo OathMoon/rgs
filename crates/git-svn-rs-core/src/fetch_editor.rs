@@ -11,6 +11,7 @@ pub struct FetchCommitPlan {
     pub author: String,
     pub committer: String,
     pub timestamp: i64,
+    pub timezone_offset: String,
     pub message: String,
     pub parent_mark: Option<u32>,
     pub parent_ref: Option<String>,
@@ -20,6 +21,45 @@ pub struct FetchCommitPlan {
 pub struct TreeEntry {
     path: String,
     file: PlannedFile,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FetchEditResult {
+    pub commit: FastImportCommit,
+    pub unhandled: UnhandledMetadata,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UnhandledMetadata {
+    directory_properties: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    file_properties: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    absent_directories: Vec<String>,
+    absent_files: Vec<String>,
+}
+
+impl UnhandledMetadata {
+    pub fn is_empty(&self) -> bool {
+        self.lines().is_empty()
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        append_property_lines(&mut lines, "dir_prop", &self.directory_properties);
+        append_property_lines(&mut lines, "file_prop", &self.file_properties);
+
+        let mut absent_files = self.absent_files.clone();
+        absent_files.sort();
+        for path in absent_files {
+            lines.push(format!("  absent_file: {}", uri_encode(&path)));
+        }
+
+        let mut absent_directories = self.absent_directories.clone();
+        absent_directories.sort();
+        for path in absent_directories {
+            lines.push(format!("  absent_directory: {}", uri_encode(&path)));
+        }
+        lines
+    }
 }
 
 impl TreeEntry {
@@ -41,6 +81,7 @@ pub struct SvnFetchEditor {
     path_prefix: String,
     base_tree: BTreeMap<String, PlannedFile>,
     changes: BTreeMap<String, PlannedChange>,
+    unhandled: UnhandledMetadata,
     closed: bool,
 }
 
@@ -58,6 +99,7 @@ impl SvnFetchEditor {
                 .map(|entry| (entry.path, entry.file))
                 .collect(),
             changes: BTreeMap::new(),
+            unhandled: UnhandledMetadata::default(),
             closed: false,
         }
     }
@@ -81,16 +123,21 @@ impl SvnFetchEditor {
     }
 
     pub fn into_commit(self) -> Result<FastImportCommit, String> {
+        Ok(self.into_result()?.commit)
+    }
+
+    pub fn into_result(self) -> Result<FetchEditResult, String> {
         if !self.closed {
             return Err("fetch edit is not closed".to_string());
         }
 
-        Ok(FastImportCommit {
+        let commit = FastImportCommit {
             mark: self.plan.mark,
             refname: self.plan.refname,
             author: self.plan.author,
             committer: self.plan.committer,
             timestamp: self.plan.timestamp,
+            timezone_offset: self.plan.timezone_offset,
             message: self.plan.message,
             parent_mark: self.plan.parent_mark,
             parent_ref: self.plan.parent_ref,
@@ -106,6 +153,10 @@ impl SvnFetchEditor {
                     PlannedChange::Delete => FileChange::Delete { path },
                 })
                 .collect(),
+        };
+        Ok(FetchEditResult {
+            commit,
+            unhandled: self.unhandled,
         })
     }
 
@@ -232,8 +283,38 @@ impl FetchEditor for SvnFetchEditor {
         match name {
             "svn:executable" => file.executable = value.is_some(),
             "svn:special" => file.special = value.is_some(),
-            _ => {}
+            _ => {
+                self.unhandled
+                    .file_properties
+                    .entry(normalize_path(path))
+                    .or_default()
+                    .insert(name.to_string(), value.map(str::to_string));
+            }
         }
+        Ok(())
+    }
+
+    fn change_directory_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        self.unhandled
+            .directory_properties
+            .entry(normalize_path(path))
+            .or_default()
+            .insert(name.to_string(), value.map(str::to_string));
+        Ok(())
+    }
+
+    fn absent_directory(&mut self, path: &str) -> Result<(), String> {
+        self.unhandled.absent_directories.push(normalize_path(path));
+        Ok(())
+    }
+
+    fn absent_file(&mut self, path: &str) -> Result<(), String> {
+        self.unhandled.absent_files.push(normalize_path(path));
         Ok(())
     }
 
@@ -244,6 +325,11 @@ impl FetchEditor for SvnFetchEditor {
 
     fn close_edit(&mut self) -> Result<(), String> {
         self.closed = true;
+        Ok(())
+    }
+
+    fn abort_edit(&mut self) -> Result<(), String> {
+        self.closed = false;
         Ok(())
     }
 }
@@ -325,4 +411,51 @@ fn join_path(base: &str, child: &str) -> String {
     } else {
         format!("{base}/{child}")
     }
+}
+
+fn append_property_lines(
+    lines: &mut Vec<String>,
+    kind: &str,
+    properties: &BTreeMap<String, BTreeMap<String, Option<String>>>,
+) {
+    for (path, values) in properties {
+        let path = if path.is_empty() { "." } else { path };
+        for (name, value) in values {
+            if skip_property(name) {
+                continue;
+            }
+            let prefix = format!("{kind}: {} {}", uri_encode(path), uri_encode(name));
+            match value {
+                Some(value) => lines.push(format!("  +{prefix} {}", uri_encode(value))),
+                None => lines.push(format!("  -{prefix}")),
+            }
+        }
+    }
+}
+
+fn skip_property(name: &str) -> bool {
+    matches!(
+        name,
+        "svn:wc:ra_dav:version-url"
+            | "svn:special"
+            | "svn:executable"
+            | "svn:entry:committed-rev"
+            | "svn:entry:last-author"
+            | "svn:entry:uuid"
+            | "svn:entry:committed-date"
+    )
+}
+
+fn uri_encode(value: &str) -> String {
+    let mut encoded = String::new();
+    for byte in value.as_bytes() {
+        if byte.is_ascii_alphanumeric()
+            || matches!(byte, b'*' | b'!' | b':' | b'_' | b'.' | b'/' | b'-')
+        {
+            encoded.push(char::from(*byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }

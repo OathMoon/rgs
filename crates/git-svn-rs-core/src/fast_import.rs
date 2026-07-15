@@ -17,6 +17,7 @@ pub struct FastImportCommit {
     pub author: String,
     pub committer: String,
     pub timestamp: i64,
+    pub timezone_offset: String,
     pub message: String,
     pub parent_mark: Option<u32>,
     pub parent_ref: Option<String>,
@@ -37,12 +38,12 @@ impl FastImportStream {
         self.write_line(&format!("commit {}", commit.refname));
         self.write_line(&format!("mark :{}", commit.mark));
         self.write_line(&format!(
-            "author {} {} +0000",
-            commit.author, commit.timestamp
+            "author {} {} {}",
+            commit.author, commit.timestamp, commit.timezone_offset
         ));
         self.write_line(&format!(
-            "committer {} {} +0000",
-            commit.committer, commit.timestamp
+            "committer {} {} {}",
+            commit.committer, commit.timestamp, commit.timezone_offset
         ));
         self.write_data(commit.message.as_bytes());
 

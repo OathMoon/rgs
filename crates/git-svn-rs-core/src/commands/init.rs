@@ -6,6 +6,17 @@ use crate::git::GitCli;
 use crate::mapping::{LayoutMappings, build_from_layout_args};
 
 pub fn run(args: InitArgs) -> Result<(), String> {
+    if args.shared.revision.is_some() {
+        return Err("init --revision is not supported; use clone or fetch".to_string());
+    }
+    if args.shared.password.is_some() {
+        return Err(
+            "init --password is not supported and passwords are never persisted".to_string(),
+        );
+    }
+    if args.shared.log_window_size.is_some() {
+        return Err("--log-window-size is not implemented".to_string());
+    }
     let mappings = build_from_layout_args(
         args.layout.stdlayout,
         args.layout.trunk.as_deref(),

@@ -14,10 +14,12 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 anyhow = "1"
 assert_cmd = "2"
+chrono = "0.4"
 clap = { version = "4", features = ["derive", "env"] }
 fancy-regex = "0.14"
 flate2 = "1"
 hex = "0.4"
+md-5 = "0.10"
 predicates = "3"
 tempfile = "3"
 thiserror = "2"

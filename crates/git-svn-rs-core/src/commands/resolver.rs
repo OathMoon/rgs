@@ -2,8 +2,10 @@ use std::path::{Path, PathBuf};
 
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
+use crate::git_svn_id::GitSvnId;
 use crate::mapping::{MappingKind, RefMapping};
 use crate::metadata::svn_metadata_dir;
+use crate::path_url::add_path_to_url;
 use crate::rev_map::{RevMap, RevMapRecord};
 
 pub struct TrackedSvn {
@@ -39,12 +41,9 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
     let mappings = tracked_candidate_mappings(&git, &config)?;
     let git_dir = git.git_dir()?;
     let git_metadata_dir = git.work_tree().join(git_dir);
-    let head = git
-        .rev_parse("HEAD")
-        .ok()
-        .map(|value| value.trim().to_string());
+    let first_parent_history = git.first_parent_history("HEAD").ok();
     let mut fallback = None;
-    let mut best_ancestor: Option<(u32, TrackedSvn)> = None;
+    let mut best_identity: Option<(usize, TrackedSvn)> = None;
 
     for mapping in &mappings {
         let metadata_dir =
@@ -54,17 +53,24 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
             Err(_) if mapping != first_mapping => continue,
             Err(error) => return Err(error),
         };
-        if let Some(head) = &head
-            && let Some(score) = rev_map_head_score(&tracked, head)?
+        if let Some(history) = &first_parent_history
+            && let Some((distance, record)) = rev_map_first_parent_identity(&tracked, history)?
         {
-            if score == u32::MAX {
-                return Ok(tracked);
+            if !tracking_identity_matches(&tracked, &record, &history[distance])? {
+                continue;
             }
-            if best_ancestor
+            if best_identity
                 .as_ref()
-                .is_none_or(|(best_score, _)| score > *best_score)
+                .is_none_or(|(best_distance, _)| distance < *best_distance)
             {
-                best_ancestor = Some((score, tracked));
+                best_identity = Some((distance, tracked));
+            } else if best_identity
+                .as_ref()
+                .is_some_and(|(best_distance, _)| distance == *best_distance)
+            {
+                return Err(format!(
+                    "ambiguous SVN tracking identity at first-parent distance {distance}"
+                ));
             }
             continue;
         }
@@ -73,7 +79,7 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
         }
     }
 
-    if let Some((_, tracked)) = best_ancestor {
+    if let Some((_, tracked)) = best_identity {
         return Ok(tracked);
     }
 
@@ -108,16 +114,53 @@ fn tracked_from_mapping(
     })
 }
 
-fn rev_map_head_score(tracked: &TrackedSvn, head: &str) -> Result<Option<u32>, String> {
+fn rev_map_first_parent_identity(
+    tracked: &TrackedSvn,
+    first_parent_history: &[String],
+) -> Result<Option<(usize, RevMapRecord)>, String> {
     let rev_map = RevMap::open(&tracked.rev_map_path, tracked.git.object_format()?)?;
     let records = rev_map.records()?;
-    if records.iter().any(|record| record.object_id_hex == head) {
-        return Ok(Some(u32::MAX));
+    Ok(first_parent_history
+        .iter()
+        .enumerate()
+        .find_map(|(distance, commit)| {
+            records
+                .iter()
+                .find(|record| record.object_id_hex == *commit)
+                .cloned()
+                .map(|record| (distance, record))
+        }))
+}
+
+fn tracking_identity_matches(
+    tracked: &TrackedSvn,
+    record: &RevMapRecord,
+    commit: &str,
+) -> Result<bool, String> {
+    if tracked.config.no_metadata {
+        return Ok(true);
     }
-    if tracked.git.is_ancestor(&tracked.refname, head)? {
-        return Ok(records.iter().map(|record| record.revision).max());
-    }
-    Ok(None)
+    let message = tracked.git.commit_message(commit)?;
+    let Some(footer) = message.lines().rev().find(|line| !line.trim().is_empty()) else {
+        return Ok(false);
+    };
+    let Ok(identity) = GitSvnId::parse(footer.trim_end_matches('\r')) else {
+        return Ok(false);
+    };
+    let root = tracked
+        .config
+        .rewrite_root
+        .as_ref()
+        .unwrap_or(&tracked.config.url);
+    let expected_url = add_path_to_url(root, &tracked.svn_path);
+    let expected_uuid = tracked
+        .config
+        .rewrite_uuid
+        .as_deref()
+        .unwrap_or(&tracked.uuid);
+    Ok(identity.url == expected_url
+        && identity.uuid == expected_uuid
+        && identity.revision == record.revision)
 }
 
 fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {

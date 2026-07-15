@@ -58,6 +58,50 @@ fn clone_stdlayout_file_url_imports_trunk_history() {
 }
 
 #[test]
+fn clone_single_subdirectory_file_url_imports_session_root() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let trunk_url = format!("{}/trunk", fixture.url().trim_end_matches('/'));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &trunk_url, "work"])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/git-svn:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+    assert!(
+        git.run_for_test(["show", "refs/remotes/git-svn:trunk/src/lib.rs"])
+            .is_err()
+    );
+    assert_eq!(
+        git.run_for_test(["rev-parse", "HEAD"]).unwrap(),
+        git.run_for_test(["rev-parse", "refs/remotes/git-svn"])
+            .unwrap()
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("src/lib.rs")).unwrap(),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+}
+
+#[test]
 fn clone_stdlayout_svn_url_imports_trunk_history() {
     match require_svn_tools() {
         Ok(()) => {}

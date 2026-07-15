@@ -3,6 +3,8 @@ use std::num::ParseIntError;
 use std::process::Command;
 
 use crate::config::SvnRemoteConfig;
+use crate::svn::editor::FetchEditor;
+use crate::svn::ra::{DirEntry, DirListing, RaSession, SvnNodeKind, UpdateRequest};
 use crate::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent, SvnBackend};
 
 #[derive(Debug, Clone)]
@@ -117,8 +119,8 @@ impl SvnCliBackend {
         String::from_utf8(self.run(args)?).map_err(|e| e.to_string())
     }
 
-    fn cat(&self, path: &str, revision: u32) -> Result<Vec<u8>, String> {
-        let url = self.versioned_url(path, revision);
+    fn cat(&self, repos_root: &str, path: &str, revision: u32) -> Result<Vec<u8>, String> {
+        let url = versioned_url(repos_root, path, revision);
         self.run(&[
             "cat",
             "--non-interactive",
@@ -130,43 +132,41 @@ impl SvnCliBackend {
 
     fn file_properties(
         &self,
+        repos_root: &str,
         path: &str,
         revision: u32,
     ) -> Result<BTreeMap<String, String>, String> {
-        let mut properties = BTreeMap::new();
-        let url = self.versioned_url(path, revision);
-        for name in [
-            "svn:executable",
-            "svn:special",
-            "svn:eol-style",
-            "svn:mime-type",
-            "svn:keywords",
-            "svn:needs-lock",
-        ] {
-            let value = match self.run_text(&[
-                "propget",
-                "--strict",
-                "--non-interactive",
-                "-r",
-                &revision.to_string(),
-                name,
-                &url,
-            ]) {
-                Ok(value) => value,
-                Err(error) if error.contains(&format!("Property '{name}' not found")) => {
-                    String::new()
-                }
-                Err(error) => return Err(error),
-            };
-            if !value.is_empty() {
-                properties.insert(name.to_string(), value);
-            }
-        }
-        Ok(properties)
+        self.node_properties(repos_root, path, revision)
     }
 
-    fn list_files(&self, path: &str, revision: u32) -> Result<Vec<String>, String> {
-        let url = self.versioned_url(path, revision);
+    fn node_properties(
+        &self,
+        repos_root: &str,
+        path: &str,
+        revision: u32,
+    ) -> Result<BTreeMap<String, String>, String> {
+        let url = versioned_url(repos_root, path, revision);
+        let xml = self.run_text(&[
+            "proplist",
+            "--xml",
+            "--verbose",
+            "--depth",
+            "empty",
+            "--non-interactive",
+            "-r",
+            &revision.to_string(),
+            &url,
+        ])?;
+        parse_proplist_xml(&xml)
+    }
+
+    fn list_files(
+        &self,
+        repos_root: &str,
+        path: &str,
+        revision: u32,
+    ) -> Result<Vec<String>, String> {
+        let url = versioned_url(repos_root, path, revision);
         let output = self.run_text(&[
             "list",
             "--recursive",
@@ -182,15 +182,15 @@ impl SvnCliBackend {
             .filter(|line| !line.is_empty())
             .collect())
     }
+}
 
-    fn versioned_url(&self, path: &str, revision: u32) -> String {
-        format!(
-            "{}/{}@{}",
-            self.url.trim_end_matches('/'),
-            path.trim_start_matches('/'),
-            revision
-        )
-    }
+fn versioned_url(repos_root: &str, path: &str, revision: u32) -> String {
+    format!(
+        "{}/{}@{}",
+        repos_root.trim_end_matches('/'),
+        path.trim_start_matches('/'),
+        revision
+    )
 }
 
 fn is_svn_cli_supported_url(url: &str) -> bool {
@@ -217,6 +217,17 @@ impl SvnBackend for SvnCliBackend {
     fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
         let range = format!("{start}:{end}");
         let xml = self.run_text(&["log", "--xml", "-v", "-r", &range, &self.url])?;
+        let repos_root = self
+            .run_text(&["info", "--show-item", "repos-root-url", &self.url])?
+            .trim()
+            .to_string();
+        let session_path = self
+            .run_text(&["info", "--show-item", "relative-url", &self.url])?
+            .trim()
+            .strip_prefix("^/")
+            .unwrap_or_default()
+            .trim_matches('/')
+            .to_string();
         let mut revisions = parse_log_xml(&xml)?;
         for revision in &mut revisions {
             let mut copied_files = Vec::new();
@@ -226,14 +237,23 @@ impl SvnBackend for SvnCliBackend {
                     ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
                 ) && path.kind == NodeKind::File
                 {
-                    path.content = Some(self.cat(&path.path, revision.revision)?);
-                    path.properties = self.file_properties(&path.path, revision.revision)?;
+                    path.content = Some(self.cat(&repos_root, &path.path, revision.revision)?);
+                    path.properties =
+                        self.file_properties(&repos_root, &path.path, revision.revision)?;
+                }
+                if matches!(
+                    path.action,
+                    ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
+                ) && path.kind == NodeKind::Directory
+                {
+                    path.properties =
+                        self.node_properties(&repos_root, &path.path, revision.revision)?;
                 }
                 if matches!(path.action, ChangeAction::Add | ChangeAction::Replace)
                     && path.kind == NodeKind::Directory
                     && path.copy_from_path.is_some()
                 {
-                    for relative in self.list_files(&path.path, revision.revision)? {
+                    for relative in self.list_files(&repos_root, &path.path, revision.revision)? {
                         let file_path = format!("{}/{}", path.path.trim_end_matches('/'), relative);
                         copied_files.push(ChangedPath {
                             path: file_path.clone(),
@@ -245,16 +265,270 @@ impl SvnBackend for SvnCliBackend {
                             kind: NodeKind::File,
                             properties_modified: true,
                             content_modified: true,
-                            properties: self.file_properties(&file_path, revision.revision)?,
-                            content: Some(self.cat(&file_path, revision.revision)?),
+                            properties: self.file_properties(
+                                &repos_root,
+                                &file_path,
+                                revision.revision,
+                            )?,
+                            content: Some(self.cat(&repos_root, &file_path, revision.revision)?),
                         });
                     }
                 }
             }
             revision.changed_paths.extend(copied_files);
         }
+        normalize_changed_paths(&mut revisions, &session_path);
         Ok(revisions)
     }
+}
+
+impl RaSession for SvnCliBackend {
+    fn url(&self) -> &str {
+        &self.url
+    }
+
+    fn repos_root(&self) -> &str {
+        &self.url
+    }
+
+    fn uuid(&self) -> Result<String, String> {
+        SvnBackend::uuid(self)
+    }
+
+    fn latest_revnum(&self) -> Result<u32, String> {
+        SvnBackend::latest_revnum(self)
+    }
+
+    fn check_path(&self, path: &str, revision: u32) -> Result<Option<SvnNodeKind>, String> {
+        let url = versioned_url(&self.url, path, revision);
+        match self.run_text(&["info", "--show-item", "kind", &url]) {
+            Ok(kind) => Ok(match kind.trim() {
+                "file" => Some(SvnNodeKind::File),
+                "dir" => Some(SvnNodeKind::Directory),
+                _ => None,
+            }),
+            Err(error) if error.contains("not found") || error.contains("does not exist") => {
+                Ok(None)
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    fn get_dir(&self, path: &str, revision: u32) -> Result<DirListing, String> {
+        let mut entries = BTreeMap::new();
+        for file in self.list_files(&self.url, path, revision)? {
+            entries.insert(
+                file,
+                DirEntry {
+                    kind: SvnNodeKind::File,
+                },
+            );
+        }
+        Ok(DirListing {
+            entries,
+            properties: BTreeMap::new(),
+        })
+    }
+
+    fn get_log(&self, paths: &[&str], start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
+        let mut revisions = SvnBackend::log(self, start, end)?;
+        if !paths.is_empty() {
+            revisions.retain(|revision| {
+                revision.changed_paths.iter().any(|changed_path| {
+                    paths.iter().any(|path| {
+                        path_contains(path, &changed_path.path)
+                            || path_contains(&changed_path.path, path)
+                    })
+                })
+            });
+        }
+        Ok(revisions)
+    }
+
+    fn do_update(
+        &self,
+        path: &str,
+        revision: u32,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        self.do_update_from(
+            path,
+            UpdateRequest {
+                target_revision: revision,
+                base_revision: None,
+            },
+            editor,
+        )
+    }
+
+    fn do_update_from(
+        &self,
+        path: &str,
+        request: UpdateRequest,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        let revision = SvnBackend::log(self, request.target_revision, request.target_revision)?
+            .into_iter()
+            .find(|revision| revision.revision == request.target_revision)
+            .ok_or_else(|| format!("SVN revision r{} was not found", request.target_revision))?;
+        editor.open_root(request.target_revision)?;
+        for changed_path in revision
+            .changed_paths
+            .iter()
+            .filter(|changed_path| path_contains(path, &changed_path.path))
+        {
+            let removed_properties = if changed_path.action == ChangeAction::Modify {
+                request
+                    .base_revision
+                    .map(|base_revision| {
+                        self.node_properties(&self.url, &changed_path.path, base_revision)
+                    })
+                    .transpose()?
+                    .unwrap_or_default()
+                    .into_keys()
+                    .filter(|name| !changed_path.properties.contains_key(name))
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            drive_changed_path(
+                editor,
+                changed_path,
+                request.base_revision,
+                &removed_properties,
+            )?;
+        }
+        editor.close_edit()
+    }
+
+    fn do_switch(
+        &self,
+        path: &str,
+        revision: u32,
+        _switch_url: &str,
+        editor: &mut dyn FetchEditor,
+    ) -> Result<(), String> {
+        self.do_update(path, revision, editor)
+    }
+}
+
+fn path_contains(parent: &str, candidate: &str) -> bool {
+    let parent = parent.trim_matches('/');
+    let candidate = candidate.trim_matches('/');
+    parent.is_empty() || candidate == parent || candidate.starts_with(&format!("{parent}/"))
+}
+
+fn drive_changed_path(
+    editor: &mut dyn FetchEditor,
+    changed_path: &ChangedPath,
+    base_revision: Option<u32>,
+    removed_properties: &[String],
+) -> Result<(), String> {
+    let path = changed_path.path.trim_matches('/');
+    if matches!(
+        changed_path.action,
+        ChangeAction::Delete | ChangeAction::Replace
+    ) {
+        editor.delete_entry(path, base_revision.unwrap_or_default())?;
+    }
+    if changed_path.action == ChangeAction::Delete {
+        return Ok(());
+    }
+
+    match changed_path.kind {
+        NodeKind::Directory => {
+            if matches!(
+                changed_path.action,
+                ChangeAction::Add | ChangeAction::Replace
+            ) {
+                // `SvnBackend::log` expands copied directories and loads full
+                // file contents, so the CLI adapter replays a self-contained
+                // snapshot delta. Copy ancestry still comes from the log event.
+                editor.add_directory(path, None)?;
+            }
+            for (name, value) in &changed_path.properties {
+                editor.change_directory_prop(path, name, Some(value))?;
+            }
+            for name in removed_properties {
+                editor.change_directory_prop(path, name, None)?;
+            }
+        }
+        NodeKind::File | NodeKind::Symlink => {
+            if matches!(
+                changed_path.action,
+                ChangeAction::Add | ChangeAction::Replace
+            ) {
+                editor.add_file(path, None)?;
+            }
+            for (name, value) in &changed_path.properties {
+                editor.change_file_prop(path, name, Some(value))?;
+            }
+            for name in removed_properties {
+                editor.change_file_prop(path, name, None)?;
+            }
+            if let Some(content) = &changed_path.content {
+                editor.apply_textdelta(path, content)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_proplist_xml(xml: &str) -> Result<BTreeMap<String, String>, String> {
+    let mut properties = BTreeMap::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<property") {
+        rest = &rest[start..];
+        let header_end = rest
+            .find('>')
+            .ok_or_else(|| "invalid svn proplist XML: unterminated property".to_string())?;
+        let header = &rest[..=header_end];
+        let name = attr(header, "name")
+            .ok_or_else(|| "invalid svn proplist XML: property without name".to_string())?;
+        if attr(header, "encoding").is_some() {
+            return Err(format!("unsupported encoded SVN property: {name}"));
+        }
+        if header.ends_with("/>") {
+            properties.insert(name, String::new());
+            rest = &rest[header_end + 1..];
+            continue;
+        }
+        let value_start = header_end + 1;
+        let value_end = rest[value_start..]
+            .find("</property>")
+            .ok_or_else(|| "invalid svn proplist XML: unclosed property".to_string())?
+            + value_start;
+        properties.insert(name, xml_unescape(&rest[value_start..value_end]));
+        rest = &rest[value_end + "</property>".len()..];
+    }
+    Ok(properties)
+}
+
+fn normalize_changed_paths(revisions: &mut [RevisionEvent], session_path: &str) {
+    if session_path.is_empty() {
+        return;
+    }
+    for revision in revisions {
+        revision.changed_paths.retain_mut(|changed_path| {
+            let Some(path) = session_relative_path(&changed_path.path, session_path) else {
+                return false;
+            };
+            changed_path.path = path;
+            if let Some(copy_from_path) = &changed_path.copy_from_path {
+                changed_path.copy_from_path = session_relative_path(copy_from_path, session_path);
+            }
+            true
+        });
+    }
+}
+
+fn session_relative_path(path: &str, session_path: &str) -> Option<String> {
+    let path = path.trim_matches('/');
+    if path == session_path {
+        return Some(String::new());
+    }
+    path.strip_prefix(&format!("{session_path}/"))
+        .map(str::to_string)
 }
 
 fn parse_log_xml(xml: &str) -> Result<Vec<RevisionEvent>, String> {
@@ -436,5 +710,49 @@ mod tests {
         ] {
             SvnCliBackend::new(url).unwrap();
         }
+    }
+
+    #[test]
+    fn versioned_urls_use_repository_root_for_subdirectory_sessions() {
+        assert_eq!(
+            versioned_url("file:///repo", "/trunk/src/lib.rs", 2),
+            "file:///repo/trunk/src/lib.rs@2"
+        );
+    }
+
+    #[test]
+    fn changed_paths_are_normalized_to_the_session_root() {
+        assert_eq!(
+            session_relative_path("/trunk/src/lib.rs", "trunk"),
+            Some("src/lib.rs".to_string())
+        );
+        assert_eq!(session_relative_path("/branches/topic/file", "trunk"), None);
+    }
+
+    #[test]
+    fn parses_verbose_proplist_xml_for_unknown_and_empty_properties() {
+        let properties = parse_proplist_xml(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<properties>
+<target path="file:///repo/trunk">
+<property name="custom:message">hello &amp; goodbye</property>
+<property name="custom:empty"/>
+</target>
+</properties>"#,
+        )
+        .unwrap();
+
+        assert_eq!(properties.get("custom:message").unwrap(), "hello & goodbye");
+        assert_eq!(properties.get("custom:empty").unwrap(), "");
+    }
+
+    #[test]
+    fn rejects_encoded_binary_properties_explicitly() {
+        let error = parse_proplist_xml(
+            r#"<properties><target path="x"><property name="custom:binary" encoding="base64">AA==</property></target></properties>"#,
+        )
+        .unwrap_err();
+
+        assert_eq!(error, "unsupported encoded SVN property: custom:binary");
     }
 }
