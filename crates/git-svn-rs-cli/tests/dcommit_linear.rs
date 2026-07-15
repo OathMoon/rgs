@@ -1,4 +1,7 @@
 use assert_cmd::Command;
+use git_svn_rs_core::dcommit::journal::{
+    BatchState, DcommitJournal, DcommitTargetIdentity, EntryState, JournalEntry, JournalStore,
+};
 use predicates::prelude::*;
 
 #[allow(dead_code)]
@@ -73,6 +76,111 @@ fn dcommit_mock_write_back_registers_linear_commit() {
         .assert()
         .success()
         .stdout("3\n");
+}
+
+#[test]
+fn dcommit_mock_executes_typed_rename_and_copy_plan() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    std::fs::copy(work.join("src/lib.rs"), work.join("src/copied.rs")).unwrap();
+    run_git(&work, &["mv", "src/lib.rs", "src/moved.rs"]);
+    run_git(&work, &["add", "src/copied.rs"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "rename and copy through typed plan",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("r3"));
+
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        git_stdout(&work, &["rev-parse", "HEAD"])
+    );
+}
+
+#[test]
+fn dcommit_fails_closed_before_mock_write_back_for_unfinished_journal() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    make_commit(&work, "local.txt", "local\n", "local change");
+    let head = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    write_mock_dcommit_journal(
+        &work,
+        &tracked_before,
+        &head,
+        BatchState::Submitting,
+        EntryState::Ready {
+            expected_base_revision: 2,
+            expected_tracking_oid: tracked_before.clone(),
+        },
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unfinished dcommit journal found"));
+
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+}
+
+#[test]
+fn dcommit_rejects_local_commit_recorded_by_completed_ledger() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    make_commit(&work, "local.txt", "local\n", "already submitted");
+    let head = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    write_mock_dcommit_journal(
+        &work,
+        &tracked_before,
+        &head,
+        BatchState::Complete,
+        EntryState::FetchedVerified {
+            svn_revision: 3,
+            imported_oid: head.clone(),
+        },
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "local commits overlap completed dcommit ledger",
+        ));
+
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
 }
 
 #[test]
@@ -2176,6 +2284,65 @@ fn make_commit(work: &std::path::Path, path: &str, content: &str, message: &str)
             message,
         ],
     );
+}
+
+fn mock_rev_map_snapshot(work: &std::path::Path) -> (std::path::PathBuf, Vec<u8>) {
+    let metadata = work.join(".git/svn/git-svn");
+    let rev_map_path = std::fs::read_dir(&metadata)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".rev_map.")
+        })
+        .expect("mock clone must create its rev_map in the mapping metadata directory");
+    let bytes = std::fs::read(&rev_map_path).unwrap();
+    (rev_map_path, bytes)
+}
+
+fn write_mock_dcommit_journal(
+    work: &std::path::Path,
+    tracked_oid: &str,
+    head_oid: &str,
+    batch_state: BatchState,
+    entry_state: EntryState,
+) {
+    let metadata = work.join(".git/svn/git-svn");
+    let store = JournalStore::new(metadata.join("dcommit-journal"));
+    let lock = store.acquire_lock().unwrap();
+    store
+        .save(
+            &lock,
+            &DcommitJournal {
+                target: DcommitTargetIdentity {
+                    remote_id: "svn".to_owned(),
+                    repository_root_url: "mock://repo/trunk".to_owned(),
+                    repository_uuid: "mock-uuid".to_owned(),
+                    mapping_ref: "refs/remotes/git-svn".to_owned(),
+                    rev_map_path: metadata
+                        .join(".rev_map.mock-uuid")
+                        .to_string_lossy()
+                        .into_owned(),
+                    commit_url: "mock://repo/trunk".to_owned(),
+                },
+                original_base_revision: 2,
+                original_base_oid: tracked_oid.to_owned(),
+                original_head: head_oid.to_owned(),
+                no_rebase: true,
+                config_fingerprint: "1010".to_owned(),
+                entries: vec![JournalEntry {
+                    git_oid: head_oid.to_owned(),
+                    base_oid: tracked_oid.to_owned(),
+                    plan_fingerprint: "2020".to_owned(),
+                    message_fingerprint: "3030".to_owned(),
+                    state: entry_state,
+                }],
+                batch_state,
+            },
+        )
+        .unwrap();
 }
 
 fn run_git(work: &std::path::Path, args: &[&str]) {

@@ -102,6 +102,28 @@ impl CommitEditor for MockCommitEditor<'_> {
         Ok(())
     }
 
+    fn copy_file(
+        &mut self,
+        source_path: &str,
+        source_revision: u32,
+        path: &str,
+    ) -> Result<(), String> {
+        self.operations
+            .push(format!("copy {source_path}@{source_revision} {path}"));
+        Ok(())
+    }
+
+    fn move_entry(
+        &mut self,
+        source_path: &str,
+        source_revision: u32,
+        path: &str,
+    ) -> Result<(), String> {
+        self.operations
+            .push(format!("move {source_path}@{source_revision} {path}"));
+        Ok(())
+    }
+
     fn change_file_prop(
         &mut self,
         path: &str,
@@ -110,6 +132,19 @@ impl CommitEditor for MockCommitEditor<'_> {
     ) -> Result<(), String> {
         self.operations.push(format!(
             "prop {path} {name} {}",
+            value.unwrap_or("<deleted>")
+        ));
+        Ok(())
+    }
+
+    fn change_directory_prop(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
+        self.operations.push(format!(
+            "dir-prop {path} {name} {}",
             value.unwrap_or("<deleted>")
         ));
         Ok(())

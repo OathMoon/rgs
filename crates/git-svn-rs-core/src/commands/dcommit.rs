@@ -1,7 +1,10 @@
 use crate::cli::DcommitArgs;
 use crate::commands::resolver::resolve_tracked_svn;
 use crate::commands::{fetch, rebase};
-use crate::dcommit::{GitDiffChange, GitDiffPlanner, PropertyMapper, SvnCommitEditor};
+use crate::dcommit::journal_registry::{RepositoryDcommitLock, discover_repository_journals};
+use crate::dcommit::{
+    DcommitPlanBuilder, DcommitPlanRequest, DcommitTarget, PropertyMapper, SvnCommitEditor,
+};
 use crate::git::{GitCli, GitCommitSummary};
 use crate::rev_map::RevMap;
 use crate::svn::CommitRecord;
@@ -35,6 +38,35 @@ pub fn run_in_work_tree(
     };
 
     if !args.dry_run {
+        let svn_metadata_root = tracked
+            .git
+            .work_tree()
+            .join(tracked.git.git_dir()?)
+            .join("svn");
+        let _repository_lock = RepositoryDcommitLock::acquire(&svn_metadata_root)
+            .map_err(|error| error.to_string())?;
+        if let Some(discovery) =
+            discover_repository_journals(&svn_metadata_root).map_err(|error| error.to_string())?
+        {
+            if let Some(active) = discovery.active {
+                return Err(format!(
+                    "unfinished dcommit journal found at {}; automatic production recovery is not connected yet",
+                    active.directory.display()
+                ));
+            }
+            if let Some(completed) = discovery.completed.iter().find(|located| {
+                located.journal.entries.iter().any(|entry| {
+                    commits
+                        .iter()
+                        .any(|commit| commit.id.as_str() == entry.git_oid)
+                })
+            }) {
+                return Err(format!(
+                    "local commits overlap completed dcommit ledger at {}; rebase or reset before dcommit",
+                    completed.directory.display()
+                ));
+            }
+        }
         if target_url.starts_with("mock://") && tracked.config.url.starts_with("mock://") {
             if args.mergeinfo.is_some() {
                 return Err(
@@ -42,13 +74,16 @@ pub fn run_in_work_tree(
                 );
             }
             return dcommit_mock(
-                &tracked.git,
-                &tracked.refname,
-                tracked.open_rev_map()?,
-                &tracked.uuid,
-                revision,
+                MockDcommit {
+                    git: &tracked.git,
+                    refname: &tracked.refname,
+                    rev_map: tracked.open_rev_map()?,
+                    uuid: &tracked.uuid,
+                    target_url: &tracked.config.url,
+                    base_revision: revision,
+                    no_rebase: args.no_rebase,
+                },
                 commits,
-                args.no_rebase,
             );
         }
         if is_svn_cli_write_back_url(target_url) && is_svn_cli_write_back_url(&tracked.config.url) {
@@ -739,39 +774,58 @@ fn strip_windows_verbatim_prefix(path: PathBuf) -> PathBuf {
     }
 }
 
-fn dcommit_mock(
-    git: &GitCli,
-    refname: &str,
-    mut rev_map: RevMap,
-    uuid: &str,
-    mut base_revision: u32,
-    commits: Vec<GitCommitSummary>,
+struct MockDcommit<'a> {
+    git: &'a GitCli,
+    refname: &'a str,
+    rev_map: RevMap,
+    uuid: &'a str,
+    target_url: &'a str,
+    base_revision: u32,
     no_rebase: bool,
-) -> Result<String, String> {
+}
+
+fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<String, String> {
     if commits.is_empty() {
         return Ok("No local commits to dcommit.\n".to_string());
     }
 
-    let planner = GitDiffPlanner::new();
+    let planner = DcommitPlanBuilder::new();
     let svn_editor = SvnCommitEditor::new(PropertyMapper);
-    let mut backend = MockSvnBackend::new(uuid, Vec::new());
+    let mut backend = MockSvnBackend::new(ctx.uuid, Vec::new());
+    let mut rev_map = ctx.rev_map;
+    let mut base_revision = ctx.base_revision;
     let mut out = String::new();
-    let mut diff_base = refname.to_string();
+    let mut diff_base = ctx.refname.to_string();
 
     for commit in &commits {
-        let changes = git_changes_for_commit(git, &diff_base, commit)?;
-        let planned = planner.plan(changes)?;
+        let plan = planner.build(
+            DcommitPlanRequest {
+                target: DcommitTarget {
+                    url: ctx.target_url.to_string(),
+                    repository_root: ctx.target_url.to_string(),
+                    repository_uuid: ctx.uuid.to_string(),
+                    git_ref: ctx.refname.to_string(),
+                },
+                base_revision,
+                git_commit: commit.id.clone(),
+                message: ctx.git.commit_message(&commit.id)?,
+                author: Some(ctx.git.commit_author(&commit.id)?),
+                mergeinfo: None,
+                changes: ctx.git.diff_raw(&diff_base, &commit.id)?,
+            },
+            |path| ctx.git.show_file(&commit.id, path),
+        )?;
         let record = CommitRecord {
-            author: git.commit_author(&commit.id)?,
-            message: git.commit_message(&commit.id)?,
-            base_revision,
+            author: plan.author.clone().unwrap_or_default(),
+            message: plan.message.clone(),
+            base_revision: plan.base_revision,
         };
         let revision = {
             let mut editor = backend.commit_editor(record);
-            svn_editor.apply(&mut editor, planned.changes)?
+            svn_editor.apply_plan(&mut editor, &plan)?
         };
         rev_map.append(revision, &commit.id)?;
-        git.update_ref(refname, &commit.id)?;
+        ctx.git.update_ref(ctx.refname, &commit.id)?;
         base_revision = revision;
         diff_base = commit.id.clone();
         out.push_str(&format!(
@@ -785,10 +839,10 @@ fn dcommit_mock(
         &format!("Committed {} local Git commit(s)\n", commits.len()),
     );
 
-    if no_rebase {
+    if ctx.no_rebase {
         out.push_str("Skipped rebase (--no-rebase).\n");
     } else {
-        let rebase_output = git.rebase(refname, false, None)?;
+        let rebase_output = ctx.git.rebase(ctx.refname, false, None)?;
         if rebase_output.is_empty() {
             out.push_str("Rebased onto tracked SVN ref.\n");
         } else {
@@ -830,65 +884,6 @@ fn default_shared_args() -> crate::cli::SharedFetchArgs {
         preserve_empty_dirs: false,
         placeholder_filename: ".gitignore".to_string(),
     }
-}
-
-fn git_changes_for_commit(
-    git: &GitCli,
-    base: &str,
-    commit: &GitCommitSummary,
-) -> Result<Vec<GitDiffChange>, String> {
-    let mut changes = Vec::new();
-    for change in git.diff_name_status(base, &commit.id)? {
-        match change.status.as_str() {
-            "A" => {
-                let content = git.show_file(&commit.id, &change.path)?;
-                let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
-                changes.push(
-                    GitDiffChange::add_file(change.path, content)
-                        .with_executable(mode == "100755")
-                        .with_symlink(mode == "120000"),
-                );
-            }
-            "M" | "T" => {
-                let content = git.show_file(&commit.id, &change.path)?;
-                let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
-                changes.push(
-                    GitDiffChange::modify_file(change.path, content)
-                        .with_executable(mode == "100755")
-                        .with_symlink(mode == "120000"),
-                );
-            }
-            "D" => changes.push(GitDiffChange::delete(change.path)),
-            status if status.starts_with('R') => {
-                let old_path = change
-                    .old_path
-                    .ok_or_else(|| format!("missing source path for {status}"))?;
-                let content = git.show_file(&commit.id, &change.path)?;
-                let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
-                changes.push(GitDiffChange::delete(old_path));
-                changes.push(
-                    GitDiffChange::add_file(change.path, content)
-                        .with_executable(mode == "100755")
-                        .with_symlink(mode == "120000"),
-                );
-            }
-            status if status.starts_with('C') => {
-                let content = git.show_file(&commit.id, &change.path)?;
-                let mode = git.ls_tree_file(&commit.id, &change.path)?.mode;
-                changes.push(
-                    GitDiffChange::add_file(change.path, content)
-                        .with_executable(mode == "100755")
-                        .with_symlink(mode == "120000"),
-                );
-            }
-            status => {
-                return Err(format!(
-                    "dcommit does not support git diff status {status} yet"
-                ));
-            }
-        }
-    }
-    Ok(changes)
 }
 
 #[cfg(test)]

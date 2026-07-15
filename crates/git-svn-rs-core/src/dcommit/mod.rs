@@ -1,6 +1,8 @@
 pub mod commit_editor;
+pub mod coordinator;
 pub mod diff_planner;
 pub mod journal;
+pub mod journal_registry;
 pub mod plan_builder;
 pub mod property_mapper;
 
