@@ -1,8 +1,12 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+use fs2::FileExt;
 
 const FORMAT_MAGIC: &str = "git-svn-rs-dcommit-journal";
 const FORMAT_VERSION: u32 = 1;
@@ -407,18 +411,37 @@ impl JournalStore {
     pub fn acquire_lock(&self) -> Result<JournalLock, JournalError> {
         fs::create_dir_all(&self.directory)?;
         let path = self.directory.join(LOCK_FILE);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                writeln!(file, "pid={}", std::process::id())?;
-                file.flush()?;
-                file.sync_all()?;
-                Ok(JournalLock { path })
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                Err(JournalError::LockHeld(path))
-            }
-            Err(error) => Err(error.into()),
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        let registry_path = fs::canonicalize(&path)?;
+        if !register_process_lock(&registry_path) {
+            return Err(JournalError::LockHeld(path));
         }
+        match file.try_lock_exclusive() {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                unregister_process_lock(&registry_path);
+                return Err(JournalError::LockHeld(path));
+            }
+            Err(error) => {
+                unregister_process_lock(&registry_path);
+                return Err(error.into());
+            }
+        }
+        let mut lock = JournalLock {
+            path,
+            file,
+            registry_path,
+        };
+        lock.file.set_len(0)?;
+        writeln!(lock.file, "pid={}", std::process::id())?;
+        lock.file.flush()?;
+        lock.file.sync_all()?;
+        Ok(lock)
     }
 
     pub fn load(&self) -> Result<Option<DcommitJournal>, JournalError> {
@@ -520,12 +543,34 @@ impl JournalStore {
 #[derive(Debug)]
 pub struct JournalLock {
     path: PathBuf,
+    file: fs::File,
+    registry_path: PathBuf,
 }
 
 impl Drop for JournalLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = FileExt::unlock(&self.file);
+        unregister_process_lock(&self.registry_path);
     }
+}
+
+fn process_locks() -> &'static Mutex<HashSet<PathBuf>> {
+    static LOCKS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn register_process_lock(path: &Path) -> bool {
+    process_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(path.to_path_buf())
+}
+
+fn unregister_process_lock(path: &Path) {
+    process_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(path);
 }
 
 fn snapshot_generation(name: &str) -> Option<u64> {
@@ -779,6 +824,15 @@ mod tests {
         ));
         drop(lock);
         store.acquire_lock().unwrap();
+        assert!(temp.path().join(LOCK_FILE).exists());
+    }
+
+    #[test]
+    fn preexisting_unlocked_lock_file_does_not_block_acquisition() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join(LOCK_FILE), b"stale pid\n").unwrap();
+
+        JournalStore::new(temp.path()).acquire_lock().unwrap();
     }
 
     #[test]

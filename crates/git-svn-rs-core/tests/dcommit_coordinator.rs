@@ -9,7 +9,9 @@ use git_svn_rs_core::dcommit::coordinator::{
 use git_svn_rs_core::dcommit::journal::{
     BatchState, DcommitJournal, DcommitTargetIdentity, EntryState, JournalEntry,
 };
-use git_svn_rs_core::dcommit::{DcommitPlan, DcommitTarget, PlannedChange};
+use git_svn_rs_core::dcommit::{
+    DcommitPlan, DcommitTarget, PlannedChange, message_fingerprint, plan_fingerprint,
+};
 
 #[derive(Default)]
 struct SinkState {
@@ -137,18 +139,8 @@ fn prepared(count: usize, no_rebase: bool) -> PreparedDcommit {
     let commits = ['b', 'c', 'd'];
     let bases = ['a', 'b', 'c'];
     let target = target_identity();
-    let entries = (0..count)
-        .map(|index| JournalEntry {
-            git_oid: oid(commits[index]),
-            base_oid: oid(bases[index]),
-            plan_fingerprint: format!("{:02x}", index + 1),
-            message_fingerprint: format!("{:02x}", index + 11),
-            state: EntryState::Queued,
-        })
-        .collect::<Vec<_>>();
-    let plans = entries
-        .iter()
-        .map(|entry| DcommitPlan {
+    let plans = (0..count)
+        .map(|index| DcommitPlan {
             target: DcommitTarget {
                 url: target.commit_url.clone(),
                 repository_root: target.repository_root_url.clone(),
@@ -156,7 +148,7 @@ fn prepared(count: usize, no_rebase: bool) -> PreparedDcommit {
                 git_ref: target.mapping_ref.clone(),
             },
             base_revision: 40,
-            git_commit: entry.git_oid.clone(),
+            git_commit: oid(commits[index]),
             message: "message".to_owned(),
             author: None,
             root_properties: Vec::new(),
@@ -167,7 +159,18 @@ fn prepared(count: usize, no_rebase: bool) -> PreparedDcommit {
                 b"content",
             )],
         })
-        .collect();
+        .collect::<Vec<_>>();
+    let entries = plans
+        .iter()
+        .enumerate()
+        .map(|(index, plan)| JournalEntry {
+            git_oid: plan.git_commit.clone(),
+            base_oid: oid(bases[index]),
+            plan_fingerprint: plan_fingerprint(plan),
+            message_fingerprint: message_fingerprint(&plan.message),
+            state: EntryState::Queued,
+        })
+        .collect::<Vec<_>>();
     PreparedDcommit {
         journal: DcommitJournal {
             target,
@@ -181,6 +184,22 @@ fn prepared(count: usize, no_rebase: bool) -> PreparedDcommit {
         },
         plans,
     }
+}
+
+fn set_recovery_state(
+    prepared: &mut PreparedDcommit,
+    index: usize,
+    revision: u32,
+    state: EntryState,
+) {
+    prepared.plans[index].base_revision = revision;
+    for change in &mut prepared.plans[index].changes {
+        if let Some(source) = &mut change.source {
+            source.revision = revision;
+        }
+    }
+    prepared.journal.entries[index].plan_fingerprint = plan_fingerprint(&prepared.plans[index]);
+    prepared.journal.entries[index].state = state;
 }
 
 type TestFixture = (
@@ -240,7 +259,12 @@ fn remote_advance_fails_closed_before_submission() {
 #[test]
 fn submitted_resume_fetches_without_duplicate_submission() {
     let mut prepared = prepared(2, false);
-    prepared.journal.entries[0].state = EntryState::Submitted { svn_revision: 41 };
+    set_recovery_state(
+        &mut prepared,
+        0,
+        40,
+        EntryState::Submitted { svn_revision: 41 },
+    );
     let (mut coordinator, sink, post, _) = make_coordinator([head(41, imported_oid(41))], [42]);
 
     coordinator.run(&mut prepared).unwrap();
@@ -256,11 +280,21 @@ fn submitted_resume_fetches_without_duplicate_submission() {
 #[test]
 fn second_commit_resume_advances_the_third_from_verified_tracking_state() {
     let mut prepared = prepared(3, false);
-    prepared.journal.entries[0].state = EntryState::FetchedVerified {
-        svn_revision: 41,
-        imported_oid: imported_oid(41),
-    };
-    prepared.journal.entries[1].state = EntryState::Submitted { svn_revision: 42 };
+    set_recovery_state(
+        &mut prepared,
+        0,
+        40,
+        EntryState::FetchedVerified {
+            svn_revision: 41,
+            imported_oid: imported_oid(41),
+        },
+    );
+    set_recovery_state(
+        &mut prepared,
+        1,
+        41,
+        EntryState::Submitted { svn_revision: 42 },
+    );
     let (mut coordinator, sink, post, _) = make_coordinator([head(42, imported_oid(42))], [43]);
 
     coordinator.run(&mut prepared).unwrap();
@@ -316,10 +350,15 @@ fn no_rebase_finishes_with_a_durable_complete_tombstone() {
 #[test]
 fn rebase_pending_failure_is_retryable_without_any_submission() {
     let mut prepared = prepared(1, false);
-    prepared.journal.entries[0].state = EntryState::FetchedVerified {
-        svn_revision: 41,
-        imported_oid: imported_oid(41),
-    };
+    set_recovery_state(
+        &mut prepared,
+        0,
+        40,
+        EntryState::FetchedVerified {
+            svn_revision: 41,
+            imported_oid: imported_oid(41),
+        },
+    );
     prepared.journal.batch_state = BatchState::RebasePending;
     let (mut coordinator, sink, post, _) = make_coordinator([], []);
     post.borrow_mut().fail_next_rebase = true;
@@ -335,6 +374,28 @@ fn rebase_pending_failure_is_retryable_without_any_submission() {
     assert_eq!(prepared.journal.batch_state, BatchState::Complete);
     assert_eq!(post.borrow().rebases, 2);
     assert!(sink.borrow().submitted.is_empty());
+}
+
+#[test]
+fn fingerprint_tampering_is_rejected_before_persistence_or_remote_access() {
+    for tamper in [
+        |prepared: &mut PreparedDcommit| prepared.plans[0].message.push('!'),
+        |prepared: &mut PreparedDcommit| {
+            prepared.plans[0].changes[0].content = Some(b"tampered".to_vec())
+        },
+    ] {
+        let mut prepared = prepared(1, false);
+        tamper(&mut prepared);
+        let (mut coordinator, sink, _, persistence) = make_coordinator([], []);
+
+        assert!(matches!(
+            coordinator.run(&mut prepared),
+            Err(CoordinatorError::Invalid(_))
+        ));
+        assert_eq!(persistence.borrow().calls, 0);
+        assert_eq!(sink.borrow().remote_checks, 0);
+        assert!(sink.borrow().submitted.is_empty());
+    }
 }
 
 #[test]

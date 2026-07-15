@@ -1,7 +1,11 @@
+use std::collections::HashSet;
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
+use fs2::FileExt;
 
 use super::journal::{BatchState, DcommitJournal, JournalError, JournalStore};
 
@@ -70,6 +74,8 @@ pub fn discover_repository_journals(
 #[derive(Debug)]
 pub struct RepositoryDcommitLock {
     path: PathBuf,
+    file: fs::File,
+    registry_path: PathBuf,
 }
 
 impl RepositoryDcommitLock {
@@ -78,24 +84,37 @@ impl RepositoryDcommitLock {
         fs::create_dir_all(svn_root)?;
         let root = checked_root(svn_root)?;
         let path = root.join(REPOSITORY_LOCK_FILE);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                let result = (|| -> io::Result<()> {
-                    writeln!(file, "pid={}", std::process::id())?;
-                    file.flush()?;
-                    file.sync_all()
-                })();
-                if let Err(error) = result {
-                    let _ = fs::remove_file(&path);
-                    return Err(error.into());
-                }
-                Ok(Self { path })
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
-                Err(JournalRegistryError::LockHeld(path))
-            }
-            Err(error) => Err(error.into()),
+        let file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(&path)?;
+        let registry_path = fs::canonicalize(&path)?;
+        if !register_process_lock(&registry_path) {
+            return Err(JournalRegistryError::LockHeld(path));
         }
+        match file.try_lock_exclusive() {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                unregister_process_lock(&registry_path);
+                return Err(JournalRegistryError::LockHeld(path));
+            }
+            Err(error) => {
+                unregister_process_lock(&registry_path);
+                return Err(error.into());
+            }
+        }
+        let mut lock = Self {
+            path,
+            file,
+            registry_path,
+        };
+        lock.file.set_len(0)?;
+        writeln!(lock.file, "pid={}", std::process::id())?;
+        lock.file.flush()?;
+        lock.file.sync_all()?;
+        Ok(lock)
     }
 
     pub fn path(&self) -> &Path {
@@ -105,8 +124,28 @@ impl RepositoryDcommitLock {
 
 impl Drop for RepositoryDcommitLock {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        let _ = FileExt::unlock(&self.file);
+        unregister_process_lock(&self.registry_path);
     }
+}
+
+fn process_locks() -> &'static Mutex<HashSet<PathBuf>> {
+    static LOCKS: OnceLock<Mutex<HashSet<PathBuf>>> = OnceLock::new();
+    LOCKS.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+fn register_process_lock(path: &Path) -> bool {
+    process_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .insert(path.to_path_buf())
+}
+
+fn unregister_process_lock(path: &Path) {
+    process_locks()
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .remove(path);
 }
 
 #[derive(Debug)]
@@ -328,6 +367,15 @@ mod tests {
             Err(JournalRegistryError::LockHeld(_))
         ));
         drop(lock);
+        RepositoryDcommitLock::acquire(temp.path()).unwrap();
+        assert!(temp.path().join(REPOSITORY_LOCK_FILE).exists());
+    }
+
+    #[test]
+    fn preexisting_unlocked_repository_lock_file_does_not_block() {
+        let temp = tempfile::tempdir().unwrap();
+        fs::write(temp.path().join(REPOSITORY_LOCK_FILE), b"stale pid\n").unwrap();
+
         RepositoryDcommitLock::acquire(temp.path()).unwrap();
     }
 

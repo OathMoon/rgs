@@ -1,6 +1,7 @@
 use std::fmt;
 
 use super::diff_planner::DcommitPlan;
+use super::fingerprint::{message_fingerprint, plan_fingerprint};
 use super::journal::{BatchState, DcommitJournal, DcommitTargetIdentity, EntryState, JournalEntry};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -60,6 +61,18 @@ impl PreparedDcommit {
                 return Err(CoordinatorError::Invalid(format!(
                     "plan {index} is for Git commit {}, expected {}",
                     plan.git_commit, entry.git_oid
+                )));
+            }
+            let actual_message_fingerprint = message_fingerprint(&plan.message);
+            if actual_message_fingerprint != entry.message_fingerprint {
+                return Err(CoordinatorError::Invalid(format!(
+                    "plan {index} message fingerprint does not match the journal entry"
+                )));
+            }
+            let actual_plan_fingerprint = plan_fingerprint(plan);
+            if actual_plan_fingerprint != entry.plan_fingerprint {
+                return Err(CoordinatorError::Invalid(format!(
+                    "plan {index} fingerprint does not match the journal entry"
                 )));
             }
             if plan.target.url != self.journal.target.commit_url
@@ -136,6 +149,8 @@ where
                 EntryState::Queued => {
                     let (revision, tracking_oid) = expected_base(&prepared.journal, index)?;
                     set_plan_base_revision(&mut prepared.plans[index], revision)?;
+                    prepared.journal.entries[index].plan_fingerprint =
+                        plan_fingerprint(&prepared.plans[index]);
                     prepared.journal.entries[index].state = EntryState::Ready {
                         expected_base_revision: revision,
                         expected_tracking_oid: tracking_oid,
