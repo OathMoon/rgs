@@ -250,6 +250,62 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_rejects_dirty_work_tree_before_file_svn_write() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 50 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "dirty preflight",
+        ],
+    );
+    std::fs::write(work.join("untracked.txt"), "must block dcommit\n").unwrap();
+    let before = svn_stdout(&["info", "--show-item", "revision", &fixture.url()]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "dcommit requires a clean index and working tree",
+        ));
+
+    assert_eq!(
+        svn_stdout(&["info", "--show-item", "revision", &fixture.url()]),
+        before
+    );
+}
+
+#[test]
 fn dcommit_revision_option_does_not_limit_post_commit_fetch_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
@@ -2127,6 +2183,7 @@ fn dcommit_writes_special_property_to_file_svn_when_tools_exist() {
             "add special link",
         ],
     );
+    run_git(&work, &["reset", "--hard", "HEAD"]);
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -2200,6 +2257,7 @@ fn dcommit_removes_special_property_from_file_svn_when_link_becomes_file() {
             "turn link into file",
         ],
     );
+    run_git(&work, &["reset", "--hard", "HEAD"]);
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()

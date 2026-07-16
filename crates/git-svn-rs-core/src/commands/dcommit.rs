@@ -1,12 +1,21 @@
 use crate::cli::DcommitArgs;
 use crate::commands::resolver::resolve_tracked_svn;
 use crate::commands::{fetch, rebase};
-use crate::dcommit::journal_registry::{RepositoryDcommitLock, discover_repository_journals};
+use crate::dcommit::coordinator::{CommitSink, Coordinator, PostSubmit, RemoteHead};
+use crate::dcommit::journal::{
+    DcommitJournal, DcommitTargetIdentity, EntryState, JournalEntry, JournalStore,
+};
+use crate::dcommit::journal_persistence::JournalStorePersistence;
+use crate::dcommit::journal_registry::{
+    LocatedJournal, RepositoryDcommitLock, discover_repository_journals,
+};
 use crate::dcommit::{
-    DcommitPlanBuilder, DcommitPlanRequest, DcommitTarget, PropertyMapper, SvnCommitEditor,
-    merge_attribute_properties,
+    DcommitPlan, DcommitPlanBuilder, DcommitPlanRequest, DcommitTarget, PreparedDcommitRequest,
+    PropertyMapper, RecoveryFingerprintInput, SvnCommitEditor, build_prepared_dcommit,
+    merge_attribute_properties, recovery_config_fingerprint,
 };
 use crate::git::{GitCli, GitCommitSummary};
+use crate::git_svn_id::GitSvnId;
 use crate::rev_map::RevMap;
 use crate::svn::CommitRecord;
 use crate::svn::mock::MockSvnBackend;
@@ -50,29 +59,42 @@ pub fn run_in_work_tree(
             .join("svn");
         let _repository_lock = RepositoryDcommitLock::acquire(&svn_metadata_root)
             .map_err(|error| error.to_string())?;
-        if let Some(discovery) =
-            discover_repository_journals(&svn_metadata_root).map_err(|error| error.to_string())?
-        {
-            if let Some(active) = discovery.active {
-                return Err(format!(
-                    "unfinished dcommit journal found at {}; automatic production recovery is not connected yet",
-                    active.directory.display()
-                ));
-            }
-            if let Some(completed) = discovery.completed.iter().find(|located| {
+        let discovery =
+            discover_repository_journals(&svn_metadata_root).map_err(|error| error.to_string())?;
+        let may_submit = discovery
+            .as_ref()
+            .and_then(|value| value.active.as_ref())
+            .is_none_or(|active| {
+                active.journal.entries.iter().any(|entry| {
+                    matches!(entry.state, EntryState::Queued | EntryState::Ready { .. })
+                })
+            });
+        if may_submit && !tracked.git.is_work_tree_clean()? {
+            return Err(
+                "dcommit requires a clean index and working tree before SVN write-back".to_string(),
+            );
+        }
+        if let Some(discovery) = &discovery
+            && let Some(completed) = discovery.completed.iter().find(|located| {
                 located.journal.entries.iter().any(|entry| {
                     commits
                         .iter()
                         .any(|commit| commit.id.as_str() == entry.git_oid)
                 })
-            }) {
-                return Err(format!(
-                    "local commits overlap completed dcommit ledger at {}; rebase or reset before dcommit",
-                    completed.directory.display()
-                ));
-            }
+            })
+        {
+            return Err(format!(
+                "local commits overlap completed dcommit ledger at {}; rebase or reset before dcommit",
+                completed.directory.display()
+            ));
         }
         if target_url.starts_with("mock://") && tracked.config.url.starts_with("mock://") {
+            if let Some(active) = discovery.as_ref().and_then(|value| value.active.as_ref()) {
+                return Err(format!(
+                    "unfinished dcommit journal found at {}; mock recovery is not implemented",
+                    active.directory.display()
+                ));
+            }
             if args.mergeinfo.is_some() {
                 return Err(
                     "--mergeinfo write-back is only implemented for file:// URLs in v1".to_string(),
@@ -116,8 +138,25 @@ pub fn run_in_work_tree(
                     mergeinfo: args.mergeinfo.as_deref(),
                     svn_options,
                     post_commit_fetch_shared: args.shared.clone(),
+                    remote_id: &tracked.config.name,
+                    rev_map_path: &tracked.rev_map_path,
+                    expected_footer_url: svn_checkout_url(
+                        tracked
+                            .config
+                            .rewrite_root
+                            .as_deref()
+                            .unwrap_or(&tracked.config.url),
+                        &tracked.svn_path,
+                    ),
+                    expected_footer_uuid: tracked
+                        .config
+                        .rewrite_uuid
+                        .clone()
+                        .unwrap_or_else(|| tracked.uuid.clone()),
+                    commit_url_override: args.commit_url.is_some(),
                 },
                 commits,
+                discovery.and_then(|value| value.active),
             );
         }
         {
@@ -168,93 +207,352 @@ struct FileSvnDcommit<'a> {
     mergeinfo: Option<&'a str>,
     svn_options: DcommitSvnOptions,
     post_commit_fetch_shared: crate::cli::SharedFetchArgs,
+    remote_id: &'a str,
+    rev_map_path: &'a Path,
+    expected_footer_url: String,
+    expected_footer_uuid: String,
+    commit_url_override: bool,
 }
 
 fn dcommit_file_svn(
     ctx: FileSvnDcommit<'_>,
     commits: Vec<GitCommitSummary>,
+    active: Option<LocatedJournal>,
 ) -> Result<String, String> {
-    if commits.is_empty() {
+    if commits.is_empty() && active.is_none() {
         return Ok("No local commits to dcommit.\n".to_string());
     }
 
+    let target_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
+    let target = DcommitTargetIdentity {
+        remote_id: ctx.remote_id.to_string(),
+        repository_root_url: ctx.svn_root_url.to_string(),
+        repository_uuid: ctx.uuid.to_string(),
+        mapping_ref: ctx.refname.to_string(),
+        rev_map_path: ctx.rev_map_path.to_string_lossy().into_owned(),
+        commit_url: target_url.clone(),
+    };
+    let config_fingerprint = recovery_config_fingerprint(RecoveryFingerprintInput {
+        target: &target,
+        no_rebase: ctx.no_rebase,
+        mergeinfo: ctx.mergeinfo,
+    });
+    let plan_chain = if let Some(located) = &active {
+        located
+            .journal
+            .entries
+            .iter()
+            .map(|entry| (entry.base_oid.clone(), entry.git_oid.clone()))
+            .collect::<Vec<_>>()
+    } else {
+        let mut base = ctx.refname.to_string();
+        commits
+            .iter()
+            .map(|commit| {
+                let pair = (base.clone(), commit.id.clone());
+                base.clone_from(&commit.id);
+                pair
+            })
+            .collect::<Vec<_>>()
+    };
+    let original_base_revision = match &active {
+        Some(located) => located.journal.original_base_revision,
+        None if ctx.commit_url_override => {
+            svn_last_changed_revision(&target_url, &ctx.svn_options)?
+        }
+        None => ctx.base_revision as u64,
+    };
+    let original_base_oid = match &active {
+        Some(located) => located.journal.original_base_oid.clone(),
+        None => ctx.git.rev_parse(ctx.refname)?.trim().to_string(),
+    };
+    let original_head = match &active {
+        Some(located) => located.journal.original_head.clone(),
+        None => ctx.git.rev_parse("HEAD")?.trim().to_string(),
+    };
+    let plans = build_file_svn_plans(&ctx, &target_url, original_base_revision, &plan_chain)?;
+    let mut prepared = build_prepared_dcommit(PreparedDcommitRequest {
+        target: target.clone(),
+        original_base_revision,
+        original_base_oid,
+        original_head,
+        no_rebase: ctx.no_rebase,
+        config_fingerprint: config_fingerprint.clone(),
+        plans,
+    })
+    .map_err(|error| error.to_string())?;
+    let journal_directory = if let Some(located) = active {
+        if located.journal.target != target {
+            return Err(
+                "unfinished dcommit journal target does not match the resolved target".to_string(),
+            );
+        }
+        if located.journal.config_fingerprint != config_fingerprint {
+            return Err(
+                "unfinished dcommit journal configuration does not match this invocation"
+                    .to_string(),
+            );
+        }
+        prepared.journal = located.journal;
+        located.directory
+    } else {
+        ctx.rev_map_path
+            .parent()
+            .ok_or_else(|| "rev_map path has no metadata directory".to_string())?
+            .join("dcommit-journal")
+    };
+
     let temp = TempCheckout::new()?;
-    let checkout_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
     run_svn(
         Some(&temp.root),
         &ctx.svn_options,
         &[
             "checkout".to_string(),
             "--quiet".to_string(),
-            checkout_url,
+            target_url,
             "wc".to_string(),
         ],
     )?;
+    let sink = WorkingCopyCommitSink {
+        wc: &temp.wc,
+        options: &ctx.svn_options,
+        git: ctx.git,
+        rev_map_path: ctx.rev_map_path,
+    };
+    let post_submit = FileSvnPostSubmit {
+        git: ctx.git,
+        rebase_shared: ctx.post_commit_fetch_shared.clone(),
+        fetch_shared: ctx.post_commit_fetch_shared,
+        svn_options: ctx.svn_options.clone(),
+        commit_url_override: ctx.commit_url_override,
+        expected_footer_url: ctx.expected_footer_url,
+        expected_footer_uuid: ctx.expected_footer_uuid,
+    };
+    let persistence = JournalStorePersistence::new(JournalStore::new(journal_directory))
+        .map_err(|error| error.to_string())?;
+    Coordinator::new(sink, post_submit, persistence)
+        .run(&mut prepared)
+        .map_err(|error| error.to_string())?;
 
-    let planner = DcommitPlanBuilder::new();
-    let svn_editor = SvnCommitEditor::new(PropertyMapper);
-    let target_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
-    let mut base_revision = ctx.base_revision;
-    let mut out = format!("Committed {} local Git commit(s)\n", commits.len());
-    let mut diff_base = ctx.refname.to_string();
-    for commit in &commits {
-        let message = ctx.git.commit_message(&commit.id)?;
-        let mut plan = planner.build(
-            DcommitPlanRequest {
-                target: DcommitTarget {
-                    url: target_url.clone(),
-                    repository_root: ctx.svn_root_url.to_string(),
-                    repository_uuid: ctx.uuid.to_string(),
-                    git_ref: ctx.refname.to_string(),
-                },
-                base_revision,
-                git_commit: commit.id.clone(),
-                message: message.clone(),
-                author: Some(ctx.git.commit_author(&commit.id)?),
-                mergeinfo: ctx.mergeinfo.map(str::to_owned),
-                changes: ctx.git.diff_raw(&diff_base, &commit.id)?,
-            },
-            |path| ctx.git.show_file(&commit.id, path),
-        )?;
-        let base_attributes = git_attributes(ctx.git, &diff_base)?;
-        let current_attributes = git_attributes(ctx.git, &commit.id)?;
-        merge_attribute_properties(
-            &mut plan,
-            base_attributes.as_deref(),
-            current_attributes.as_deref(),
-        );
-        let revision = {
-            let mut editor =
-                WorkingCopyPlanEditor::new(&temp.wc, &ctx.svn_options, message, base_revision);
-            svn_editor.apply_plan(&mut editor, &plan)?
+    let mut out = format!(
+        "Committed {} local Git commit(s)\n",
+        prepared.journal.entries.len()
+    );
+    for entry in &prepared.journal.entries {
+        let revision = match entry.state {
+            EntryState::Submitted { svn_revision }
+            | EntryState::FetchedVerified { svn_revision, .. } => svn_revision,
+            _ => return Err("completed dcommit journal entry has no SVN revision".to_string()),
         };
-        fetch::run_in_work_tree(
-            ctx.git.work_tree().to_path_buf(),
-            fetch_args(ctx.post_commit_fetch_shared.clone()),
-        )?;
-        base_revision = revision;
-        diff_base = commit.id.clone();
-        out.push_str(&format!(
-            "Committed {} {} as r{revision}\n",
-            commit.short_id, commit.subject
-        ));
+        let label = commits
+            .iter()
+            .find(|commit| commit.id == entry.git_oid)
+            .map_or_else(
+                || entry.git_oid.chars().take(12).collect::<String>(),
+                |commit| format!("{} {}", commit.short_id, commit.subject),
+            );
+        out.push_str(&format!("Committed {label} as r{revision}\n"));
     }
-
     if ctx.no_rebase {
         out.push_str("Skipped rebase (--no-rebase).\n");
     } else {
-        out.push_str(&rebase::run_in_work_tree(
-            ctx.git.work_tree().to_path_buf(),
+        out.push_str("Rebased onto tracked SVN ref.\n");
+    }
+    Ok(out)
+}
+
+fn build_file_svn_plans(
+    ctx: &FileSvnDcommit<'_>,
+    target_url: &str,
+    original_base_revision: u64,
+    chain: &[(String, String)],
+) -> Result<Vec<DcommitPlan>, String> {
+    let planner = DcommitPlanBuilder::new();
+    chain
+        .iter()
+        .enumerate()
+        .map(|(index, (base_oid, git_commit))| {
+            let base_revision = u32::try_from(original_base_revision + index as u64)
+                .map_err(|_| "dcommit base revision exceeds u32".to_string())?;
+            let mut plan = planner.build(
+                DcommitPlanRequest {
+                    target: DcommitTarget {
+                        url: target_url.to_string(),
+                        repository_root: ctx.svn_root_url.to_string(),
+                        repository_uuid: ctx.uuid.to_string(),
+                        git_ref: ctx.refname.to_string(),
+                    },
+                    base_revision,
+                    git_commit: git_commit.clone(),
+                    message: ctx.git.commit_message(git_commit)?,
+                    author: Some(ctx.git.commit_author(git_commit)?),
+                    mergeinfo: ctx.mergeinfo.map(str::to_owned),
+                    changes: ctx.git.diff_raw(base_oid, git_commit)?,
+                },
+                |path| ctx.git.show_file(git_commit, path),
+            )?;
+            let base_attributes = git_attributes(ctx.git, base_oid)?;
+            let current_attributes = git_attributes(ctx.git, git_commit)?;
+            merge_attribute_properties(
+                &mut plan,
+                base_attributes.as_deref(),
+                current_attributes.as_deref(),
+            );
+            Ok(plan)
+        })
+        .collect()
+}
+
+struct WorkingCopyCommitSink<'a> {
+    wc: &'a Path,
+    options: &'a DcommitSvnOptions,
+    git: &'a GitCli,
+    rev_map_path: &'a Path,
+}
+
+impl CommitSink for WorkingCopyCommitSink<'_> {
+    fn remote_head(&mut self, target: &DcommitTargetIdentity) -> Result<RemoteHead, String> {
+        let revision = svn_last_changed_revision(&target.commit_url, self.options)?;
+        let tracking_oid = RevMap::open(self.rev_map_path, self.git.object_format()?)?
+            .max_record(true)?
+            .ok_or_else(|| "dcommit target rev_map is empty".to_string())?
+            .object_id_hex;
+        Ok(RemoteHead {
+            revision,
+            tracking_oid,
+        })
+    }
+
+    fn submit(&mut self, plan: &DcommitPlan, expected_base_revision: u64) -> Result<u64, String> {
+        let expected_base = u32::try_from(expected_base_revision)
+            .map_err(|_| "dcommit expected base revision exceeds u32".to_string())?;
+        if plan.base_revision != expected_base {
+            return Err(format!(
+                "prepared plan base r{} does not match coordinator base r{expected_base}",
+                plan.base_revision
+            ));
+        }
+        let mut editor =
+            WorkingCopyPlanEditor::new(self.wc, self.options, &plan.message, expected_base);
+        SvnCommitEditor::new(PropertyMapper)
+            .apply_plan(&mut editor, plan)
+            .map(u64::from)
+    }
+}
+
+struct FileSvnPostSubmit<'a> {
+    git: &'a GitCli,
+    fetch_shared: crate::cli::SharedFetchArgs,
+    rebase_shared: crate::cli::SharedFetchArgs,
+    svn_options: DcommitSvnOptions,
+    commit_url_override: bool,
+    expected_footer_url: String,
+    expected_footer_uuid: String,
+}
+
+impl PostSubmit for FileSvnPostSubmit<'_> {
+    fn fetch_and_verify(
+        &mut self,
+        target: &DcommitTargetIdentity,
+        entry: &JournalEntry,
+        svn_revision: u64,
+    ) -> Result<String, String> {
+        let revision = u32::try_from(svn_revision)
+            .map_err(|_| "submitted SVN revision exceeds u32".to_string())?;
+        fetch::run_in_work_tree(
+            self.git.work_tree().to_path_buf(),
+            fetch_args_for_revision(self.fetch_shared.clone(), revision),
+        )?;
+        if self.commit_url_override {
+            let actual = svn_last_changed_revision(&target.commit_url, &self.svn_options)?;
+            if actual != svn_revision {
+                return Err(format!(
+                    "commit URL reports r{actual} after submitting r{svn_revision}"
+                ));
+            }
+            return self
+                .git
+                .rev_parse(&target.mapping_ref)
+                .map(|oid| oid.trim().to_string());
+        }
+        verify_imported_dcommit(
+            self.git,
+            target,
+            entry,
+            revision,
+            &self.expected_footer_url,
+            &self.expected_footer_uuid,
+        )
+        .map_err(|error| {
+            format!("SVN r{revision} was submitted but post-fetch verification failed: {error}")
+        })
+    }
+
+    fn rebase(&mut self, _journal: &DcommitJournal) -> Result<(), String> {
+        rebase::run_in_work_tree(
+            self.git.work_tree().to_path_buf(),
             crate::cli::RebaseArgs {
                 dry_run: false,
                 merge: false,
                 strategy: None,
-                shared: default_shared_args(),
+                shared: self.rebase_shared.clone(),
             },
-        )?);
+        )
+        .map(|_| ())
     }
+}
 
-    Ok(out)
+fn verify_imported_dcommit(
+    git: &GitCli,
+    target: &DcommitTargetIdentity,
+    _entry: &JournalEntry,
+    revision: u32,
+    expected_footer_url: &str,
+    expected_footer_uuid: &str,
+) -> Result<String, String> {
+    let mapped_oid = RevMap::open(&target.rev_map_path, git.object_format()?)?
+        .get(revision)?
+        .ok_or_else(|| format!("rev_map has no object for r{revision}"))?;
+    let ref_oid = git.rev_parse(&target.mapping_ref)?;
+    if mapped_oid != ref_oid.trim() {
+        return Err(format!(
+            "tracking ref {} points to {}, but rev_map r{revision} points to {mapped_oid}",
+            target.mapping_ref,
+            ref_oid.trim()
+        ));
+    }
+    let message = git.commit_message(&mapped_oid)?;
+    let footer = message
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| "imported commit has no git-svn-id footer".to_string())?;
+    let identity = GitSvnId::parse(footer.trim_end_matches('\r'))?;
+    if identity.url != expected_footer_url
+        || identity.uuid != expected_footer_uuid
+        || identity.revision != revision
+    {
+        return Err(format!(
+            "imported git-svn-id does not match expected {expected_footer_url}@{revision} {expected_footer_uuid}"
+        ));
+    }
+    Ok(mapped_oid)
+}
+
+fn svn_last_changed_revision(url: &str, options: &DcommitSvnOptions) -> Result<u64, String> {
+    run_svn_output(
+        None,
+        options,
+        &[
+            "info".to_string(),
+            "--show-item".to_string(),
+            "last-changed-revision".to_string(),
+            url.to_string(),
+        ],
+    )?
+    .trim()
+    .parse::<u64>()
+    .map_err(|error| format!("invalid SVN remote revision: {error}"))
 }
 
 fn git_attributes(git: &GitCli, commit: &str) -> Result<Option<String>, String> {
@@ -502,9 +800,11 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
     Ok(out)
 }
 
-fn fetch_args(shared: crate::cli::SharedFetchArgs) -> crate::cli::FetchArgs {
-    let mut shared = shared;
-    shared.revision = None;
+fn fetch_args_for_revision(
+    mut shared: crate::cli::SharedFetchArgs,
+    revision: u32,
+) -> crate::cli::FetchArgs {
+    shared.revision = Some(revision.to_string());
     crate::cli::FetchArgs {
         remote: None,
         shared,
@@ -513,6 +813,7 @@ fn fetch_args(shared: crate::cli::SharedFetchArgs) -> crate::cli::FetchArgs {
     }
 }
 
+#[cfg(test)]
 fn default_shared_args() -> crate::cli::SharedFetchArgs {
     crate::cli::SharedFetchArgs {
         authors_file: None,
