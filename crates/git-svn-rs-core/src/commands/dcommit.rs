@@ -9,6 +9,7 @@ use crate::dcommit::journal_persistence::JournalStorePersistence;
 use crate::dcommit::journal_registry::{
     LocatedJournal, RepositoryDcommitLock, discover_repository_journals,
 };
+use crate::dcommit::tree_projection::{apply_plan_to_tree, canonicalize_tree_keywords, tree_map};
 use crate::dcommit::{
     DcommitPlan, DcommitPlanBuilder, DcommitPlanRequest, DcommitTarget, PreparedDcommitRequest,
     PropertyMapper, RecoveryFingerprintInput, SvnCommitEditor, build_prepared_dcommit,
@@ -321,6 +322,8 @@ fn dcommit_file_svn(
     };
     let post_submit = FileSvnPostSubmit {
         git: ctx.git,
+        original_base_oid: prepared.journal.original_base_oid.clone(),
+        plans: prepared.plans.clone(),
         rebase_shared: ctx.post_commit_fetch_shared.clone(),
         fetch_shared: ctx.post_commit_fetch_shared,
         svn_options: ctx.svn_options.clone(),
@@ -442,6 +445,8 @@ impl CommitSink for WorkingCopyCommitSink<'_> {
 
 struct FileSvnPostSubmit<'a> {
     git: &'a GitCli,
+    original_base_oid: String,
+    plans: Vec<DcommitPlan>,
     fetch_shared: crate::cli::SharedFetchArgs,
     rebase_shared: crate::cli::SharedFetchArgs,
     svn_options: DcommitSvnOptions,
@@ -475,13 +480,23 @@ impl PostSubmit for FileSvnPostSubmit<'_> {
                 .rev_parse(&target.mapping_ref)
                 .map(|oid| oid.trim().to_string());
         }
+        let expected_tree = projected_tree_for_entry(
+            self.git,
+            &self.original_base_oid,
+            &self.plans,
+            &entry.git_oid,
+        )?;
         verify_imported_dcommit(
             self.git,
             target,
-            entry,
             revision,
-            &self.expected_footer_url,
-            &self.expected_footer_uuid,
+            ImportedDcommitExpectation {
+                footer_url: &self.expected_footer_url,
+                footer_uuid: &self.expected_footer_uuid,
+                tree: &expected_tree,
+                plans: &self.plans,
+                git_oid: &entry.git_oid,
+            },
         )
         .map_err(|error| {
             format!("SVN r{revision} was submitted but post-fetch verification failed: {error}")
@@ -502,13 +517,19 @@ impl PostSubmit for FileSvnPostSubmit<'_> {
     }
 }
 
+struct ImportedDcommitExpectation<'a> {
+    footer_url: &'a str,
+    footer_uuid: &'a str,
+    tree: &'a std::collections::BTreeMap<String, crate::git::GitTreeFile>,
+    plans: &'a [DcommitPlan],
+    git_oid: &'a str,
+}
+
 fn verify_imported_dcommit(
     git: &GitCli,
     target: &DcommitTargetIdentity,
-    _entry: &JournalEntry,
     revision: u32,
-    expected_footer_url: &str,
-    expected_footer_uuid: &str,
+    expected: ImportedDcommitExpectation<'_>,
 ) -> Result<String, String> {
     let mapped_oid = RevMap::open(&target.rev_map_path, git.object_format()?)?
         .get(revision)?
@@ -528,15 +549,69 @@ fn verify_imported_dcommit(
         .find(|line| !line.trim().is_empty())
         .ok_or_else(|| "imported commit has no git-svn-id footer".to_string())?;
     let identity = GitSvnId::parse(footer.trim_end_matches('\r'))?;
-    if identity.url != expected_footer_url
-        || identity.uuid != expected_footer_uuid
+    if identity.url != expected.footer_url
+        || identity.uuid != expected.footer_uuid
         || identity.revision != revision
     {
         return Err(format!(
-            "imported git-svn-id does not match expected {expected_footer_url}@{revision} {expected_footer_uuid}"
+            "imported git-svn-id does not match expected {}@{revision} {}",
+            expected.footer_url, expected.footer_uuid
+        ));
+    }
+    let mut imported_tree = tree_map(git.tree_files(&mapped_oid)?);
+    for plan in expected.plans {
+        canonicalize_tree_keywords(&mut imported_tree, plan);
+        if plan.git_commit == expected.git_oid {
+            break;
+        }
+    }
+    if imported_tree != *expected.tree {
+        let mismatch = expected
+            .tree
+            .iter()
+            .find(|(path, expected)| imported_tree.get(*path) != Some(*expected))
+            .map(|(path, expected)| {
+                let actual = imported_tree.get(path);
+                format!(
+                    "{path} (expected mode {} and {} bytes, imported {})",
+                    expected.mode,
+                    expected.content.len(),
+                    actual.map_or_else(
+                        || "missing".to_string(),
+                        |file| format!("mode {} and {} bytes", file.mode, file.content.len())
+                    )
+                )
+            })
+            .or_else(|| {
+                imported_tree
+                    .keys()
+                    .find(|path| !expected.tree.contains_key(*path))
+                    .map(|path| format!("unexpected path {path}"))
+            })
+            .unwrap_or_else(|| "<unknown>".to_string());
+        return Err(format!(
+            "imported tree does not match the dcommit plan projection at {mismatch}"
         ));
     }
     Ok(mapped_oid)
+}
+
+fn projected_tree_for_entry(
+    git: &GitCli,
+    original_base_oid: &str,
+    plans: &[DcommitPlan],
+    git_oid: &str,
+) -> Result<std::collections::BTreeMap<String, crate::git::GitTreeFile>, String> {
+    let mut tree = tree_map(git.tree_files(original_base_oid)?);
+    for plan in plans {
+        apply_plan_to_tree(&mut tree, plan);
+        if plan.git_commit == git_oid {
+            return Ok(tree);
+        }
+    }
+    Err(format!(
+        "dcommit plan queue has no projection for Git commit {git_oid}"
+    ))
 }
 
 fn svn_last_changed_revision(url: &str, options: &DcommitSvnOptions) -> Result<u64, String> {

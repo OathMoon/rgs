@@ -9,6 +9,7 @@ pub mod journal_registry;
 pub mod plan_builder;
 pub mod prepared_builder;
 pub mod property_mapper;
+pub mod tree_projection;
 
 pub use attributes::{merge_attribute_properties, svn_file_properties};
 pub use commit_editor::{PathEnsurer, SvnCommitEditor};
