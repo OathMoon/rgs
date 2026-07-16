@@ -2,8 +2,8 @@
 
 Last audited: 2026-07-16
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `87aabd7 feat: verify projected dcommit trees`
-Latest implementation commit: `87aabd7 feat: verify projected dcommit trees`
+Committed HEAD at audit: `a29e90f fix: reject cross-repository dcommit targets`
+Latest implementation commit: `a29e90f fix: reject cross-repository dcommit targets`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -70,6 +70,7 @@ The repository is a substantial preview implementation with useful local fixture
 - Working-copy write-back now executes the shared editor plan through the durable coordinator. Production persists the queue before write, checks the target path head, records submitted revisions before exact-revision fetch, verifies rev_map/ref/footer identity, reconstructs active journals from durable fingerprints, and runs final rebase/no-rebase transitions.
 - Post-fetch verification projects each queued `DcommitPlan` from the original imported base and compares the imported tree after normalizing SVN EOL, executable, symlink, and keyword semantics. It therefore detects path/content/mode divergence without incorrectly requiring byte identity with the original local Git commit.
 - Non-dry-run dcommit rejects a dirty index/worktree before any state that may submit. Explicit commit URLs use the target path's last-changed revision and verify that target even when the configured mapping cannot import the submitted revision.
+- Every production write target is queried for its repository UUID before journal creation, checkout, or submission. A cross-repository `--commit-url` fails closed even when its revision number happens to match the tracked repository.
 
 ### Golden infrastructure
 
@@ -170,6 +171,7 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `4bf9205`: production working-copy coordinator integration, post-fetch identity verification, active-journal reconstruction, and clean-worktree preflight.
 - `68fabb0`: real file-SVN post-fetch failure/restart regression proving no duplicate submission.
 - `87aabd7`: plan-projected post-fetch tree verification with SVN EOL, mode, symlink, and keyword normalization.
+- `a29e90f`: pre-write repository UUID validation and a real two-repository wrong-target regression.
 
 ### Golden harness
 
@@ -214,4 +216,4 @@ The first four corrected P0 items were completed on 2026-07-12; preserve their r
 - Global native callback recorders/serialization were removed. Linked default-parallel core tests pass with `VCPKGRS_DYNAMIC=1`; prompt/editor panics are contained at FFI boundaries.
 - Native `do_switch` combines log copy discovery with `svn_ra_do_switch3` content deltas. Base/result MD5 checksums are validated, copy-only sources resolve mixed revisions, and callback failures return immediate libsvn errors.
 - CLI and libsvn imports now share `RaSession`/`FetchEditor`. The common editor persists exact textual property/absent records to `unhandled.log`; CLI arbitrary textual properties use verbose XML proplist, while encoded binary properties remain an explicit unsupported boundary.
-- Dcommit now preserves complete `%B` messages and both mock and working-copy sinks execute the shared typed plan. Production file/svn write-back is connected to `CommitSink`/`PostSubmit`, exact rev_map/ref/footer and plan-projected tree verification, durable active-journal reconstruction, clean preflight, and retry-safe submitted/fetched/rebase states. Real file-SVN recovery proves post-fetch failure does not duplicate submission. Next, close or operationalize the ambiguous submit-persistence window and broaden remote/auth profile validation before claiming the Phase 7 behavioral gate.
+- Dcommit now preserves complete `%B` messages and both mock and working-copy sinks execute the shared typed plan. Production file/svn write-back is connected to `CommitSink`/`PostSubmit`, exact rev_map/ref/footer and plan-projected tree verification, durable active-journal reconstruction, clean and repository-UUID preflight, and retry-safe submitted/fetched/rebase states. Real file-SVN recovery proves post-fetch failure does not duplicate submission, while a two-repository regression proves a wrong `--commit-url` cannot write. Next, close or operationalize the ambiguous submit-persistence window and broaden remote/auth profile validation before claiming the Phase 7 behavioral gate.
