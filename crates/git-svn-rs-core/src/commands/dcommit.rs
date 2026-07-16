@@ -4,6 +4,7 @@ use crate::commands::{fetch, rebase};
 use crate::dcommit::journal_registry::{RepositoryDcommitLock, discover_repository_journals};
 use crate::dcommit::{
     DcommitPlanBuilder, DcommitPlanRequest, DcommitTarget, PropertyMapper, SvnCommitEditor,
+    merge_attribute_properties,
 };
 use crate::git::{GitCli, GitCommitSummary};
 use crate::rev_map::RevMap;
@@ -11,6 +12,10 @@ use crate::svn::CommitRecord;
 use crate::svn::mock::MockSvnBackend;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+mod working_copy;
+
+use working_copy::WorkingCopyPlanEditor;
 
 pub fn run(args: DcommitArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
@@ -104,7 +109,9 @@ pub fn run_in_work_tree(
                     git: &tracked.git,
                     svn_root_url: target_url,
                     svn_path: commit_svn_path,
+                    uuid: &tracked.uuid,
                     refname: &tracked.refname,
+                    base_revision: revision,
                     no_rebase: args.no_rebase,
                     mergeinfo: args.mergeinfo.as_deref(),
                     svn_options,
@@ -154,17 +161,13 @@ struct FileSvnDcommit<'a> {
     git: &'a GitCli,
     svn_root_url: &'a str,
     svn_path: &'a str,
+    uuid: &'a str,
     refname: &'a str,
+    base_revision: u32,
     no_rebase: bool,
     mergeinfo: Option<&'a str>,
     svn_options: DcommitSvnOptions,
     post_commit_fetch_shared: crate::cli::SharedFetchArgs,
-}
-
-struct FileSvnWorkingCopy<'a> {
-    git: &'a GitCli,
-    wc: &'a Path,
-    svn_options: &'a DcommitSvnOptions,
 }
 
 fn dcommit_file_svn(
@@ -188,34 +191,48 @@ fn dcommit_file_svn(
         ],
     )?;
 
+    let planner = DcommitPlanBuilder::new();
+    let svn_editor = SvnCommitEditor::new(PropertyMapper);
+    let target_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
+    let mut base_revision = ctx.base_revision;
     let mut out = format!("Committed {} local Git commit(s)\n", commits.len());
     let mut diff_base = ctx.refname.to_string();
-    let wc = FileSvnWorkingCopy {
-        git: ctx.git,
-        wc: &temp.wc,
-        svn_options: &ctx.svn_options,
-    };
     for commit in &commits {
-        let changes = ctx.git.diff_name_status(&diff_base, &commit.id)?;
-        for change in changes {
-            apply_file_svn_change(
-                &wc,
-                &diff_base,
-                &commit.id,
-                &change.status,
-                &change.path,
-                change.old_path.as_deref(),
-            )?;
-        }
-        if let Some(mergeinfo) = ctx.mergeinfo {
-            apply_mergeinfo(&temp.wc, mergeinfo, &ctx.svn_options)?;
-        }
         let message = ctx.git.commit_message(&commit.id)?;
-        let revision = svn_commit(&temp.wc, &message, &ctx.svn_options)?;
+        let mut plan = planner.build(
+            DcommitPlanRequest {
+                target: DcommitTarget {
+                    url: target_url.clone(),
+                    repository_root: ctx.svn_root_url.to_string(),
+                    repository_uuid: ctx.uuid.to_string(),
+                    git_ref: ctx.refname.to_string(),
+                },
+                base_revision,
+                git_commit: commit.id.clone(),
+                message: message.clone(),
+                author: Some(ctx.git.commit_author(&commit.id)?),
+                mergeinfo: ctx.mergeinfo.map(str::to_owned),
+                changes: ctx.git.diff_raw(&diff_base, &commit.id)?,
+            },
+            |path| ctx.git.show_file(&commit.id, path),
+        )?;
+        let base_attributes = git_attributes(ctx.git, &diff_base)?;
+        let current_attributes = git_attributes(ctx.git, &commit.id)?;
+        merge_attribute_properties(
+            &mut plan,
+            base_attributes.as_deref(),
+            current_attributes.as_deref(),
+        );
+        let revision = {
+            let mut editor =
+                WorkingCopyPlanEditor::new(&temp.wc, &ctx.svn_options, message, base_revision);
+            svn_editor.apply_plan(&mut editor, &plan)?
+        };
         fetch::run_in_work_tree(
             ctx.git.work_tree().to_path_buf(),
             fetch_args(ctx.post_commit_fetch_shared.clone()),
         )?;
+        base_revision = revision;
         diff_base = commit.id.clone();
         out.push_str(&format!(
             "Committed {} {} as r{revision}\n",
@@ -240,381 +257,13 @@ fn dcommit_file_svn(
     Ok(out)
 }
 
-fn apply_file_svn_change(
-    wc: &FileSvnWorkingCopy<'_>,
-    base: &str,
-    commit: &str,
-    status: &str,
-    path: &str,
-    old_path: Option<&str>,
-) -> Result<(), String> {
-    let target = wc.wc.join(path);
-    match status {
-        "A" => {
-            if let Some(parent) = target.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-            }
-            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
-                .map_err(|e| e.to_string())?;
-            run_svn(
-                Some(wc.wc),
-                wc.svn_options,
-                &[
-                    "add".to_string(),
-                    "--parents".to_string(),
-                    path.replace('\\', "/"),
-                ],
-            )?;
-            apply_file_props(wc.git, wc.wc, commit, path, "000000", None, wc.svn_options)?;
-        }
-        "M" | "T" => {
-            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
-                .map_err(|e| e.to_string())?;
-            let old_mode = wc.git.ls_tree_file(base, path)?.mode;
-            apply_file_props(
-                wc.git,
-                wc.wc,
-                commit,
-                path,
-                &old_mode,
-                Some((base, path)),
-                wc.svn_options,
-            )?;
-        }
-        "D" => {
-            run_svn(
-                Some(wc.wc),
-                wc.svn_options,
-                &["delete".to_string(), path.replace('\\', "/")],
-            )?;
-        }
-        status if status.starts_with('R') => {
-            let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
-            ensure_svn_parent_dirs(wc.wc, path, wc.svn_options)?;
-            run_svn(
-                Some(wc.wc),
-                wc.svn_options,
-                &[
-                    "move".to_string(),
-                    old_path.replace('\\', "/"),
-                    path.replace('\\', "/"),
-                ],
-            )?;
-            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
-                .map_err(|e| e.to_string())?;
-            let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(
-                wc.git,
-                wc.wc,
-                commit,
-                path,
-                &old_mode,
-                Some((base, old_path)),
-                wc.svn_options,
-            )?;
-        }
-        status if status.starts_with('C') => {
-            let old_path = old_path.ok_or_else(|| format!("missing source path for {status}"))?;
-            ensure_svn_parent_dirs(wc.wc, path, wc.svn_options)?;
-            run_svn(
-                Some(wc.wc),
-                wc.svn_options,
-                &[
-                    "copy".to_string(),
-                    old_path.replace('\\', "/"),
-                    path.replace('\\', "/"),
-                ],
-            )?;
-            std::fs::write(&target, svn_file_content(wc.git, commit, path)?)
-                .map_err(|e| e.to_string())?;
-            let old_mode = wc.git.ls_tree_file(base, old_path)?.mode;
-            apply_file_props(
-                wc.git,
-                wc.wc,
-                commit,
-                path,
-                &old_mode,
-                Some((base, old_path)),
-                wc.svn_options,
-            )?;
-        }
-        other => {
-            return Err(format!(
-                "dcommit does not support git diff status {other} yet"
-            ));
-        }
+fn git_attributes(git: &GitCli, commit: &str) -> Result<Option<String>, String> {
+    match git.show_file(commit, ".gitattributes") {
+        Ok(content) => String::from_utf8(content)
+            .map(Some)
+            .map_err(|error| format!(".gitattributes is not valid UTF-8: {error}")),
+        Err(_) => Ok(None),
     }
-    Ok(())
-}
-
-fn ensure_svn_parent_dirs(
-    wc: &Path,
-    path: &str,
-    svn_options: &DcommitSvnOptions,
-) -> Result<(), String> {
-    let Some(parent) = Path::new(path).parent() else {
-        return Ok(());
-    };
-    if parent.as_os_str().is_empty() {
-        return Ok(());
-    }
-
-    let parent_path = wc.join(parent);
-    if parent_path.exists() {
-        return Ok(());
-    }
-
-    std::fs::create_dir_all(&parent_path).map_err(|e| e.to_string())?;
-    run_svn(
-        Some(wc),
-        svn_options,
-        &[
-            "add".to_string(),
-            "--parents".to_string(),
-            parent.to_string_lossy().replace('\\', "/"),
-        ],
-    )
-}
-
-fn svn_file_content(git: &GitCli, commit: &str, path: &str) -> Result<Vec<u8>, String> {
-    let mode = git.ls_tree_file(commit, path)?.mode;
-    let content = git.show_file(commit, path)?;
-    if mode == "120000" {
-        let mut special = b"link ".to_vec();
-        special.extend(content);
-        Ok(special)
-    } else {
-        Ok(content)
-    }
-}
-
-fn apply_mergeinfo(
-    wc: &Path,
-    mergeinfo: &str,
-    svn_options: &DcommitSvnOptions,
-) -> Result<(), String> {
-    run_svn(
-        Some(wc),
-        svn_options,
-        &[
-            "propset".to_string(),
-            "--non-interactive".to_string(),
-            "svn:mergeinfo".to_string(),
-            mergeinfo.to_string(),
-            ".".to_string(),
-        ],
-    )
-}
-
-fn apply_file_props(
-    git: &GitCli,
-    wc: &Path,
-    commit: &str,
-    path: &str,
-    old_mode: &str,
-    old_file: Option<(&str, &str)>,
-    svn_options: &DcommitSvnOptions,
-) -> Result<(), String> {
-    let new_mode = git.ls_tree_file(commit, path)?.mode;
-    if new_mode == "100755" {
-        run_svn(
-            Some(wc),
-            svn_options,
-            &[
-                "propset".to_string(),
-                "--non-interactive".to_string(),
-                "svn:executable".to_string(),
-                "x".to_string(),
-                path.replace('\\', "/"),
-            ],
-        )?;
-    } else if old_mode == "100755" {
-        run_svn(
-            Some(wc),
-            svn_options,
-            &[
-                "propdel".to_string(),
-                "--non-interactive".to_string(),
-                "svn:executable".to_string(),
-                path.replace('\\', "/"),
-            ],
-        )?;
-    }
-    if new_mode == "120000" {
-        run_svn(
-            Some(wc),
-            svn_options,
-            &[
-                "propset".to_string(),
-                "--non-interactive".to_string(),
-                "svn:special".to_string(),
-                "x".to_string(),
-                path.replace('\\', "/"),
-            ],
-        )?;
-    } else if old_mode == "120000" {
-        run_svn(
-            Some(wc),
-            svn_options,
-            &[
-                "propdel".to_string(),
-                "--non-interactive".to_string(),
-                "svn:special".to_string(),
-                path.replace('\\', "/"),
-            ],
-        )?;
-    }
-    let old_properties = match old_file {
-        Some((old_commit, old_path)) => svn_file_attributes_for_path(git, old_commit, old_path)?,
-        None => Vec::new(),
-    };
-    let new_properties = svn_file_attributes_for_path(git, commit, path)?;
-    for (property, _) in &old_properties {
-        if new_properties
-            .iter()
-            .all(|(new_property, _)| new_property != property)
-        {
-            run_svn(
-                Some(wc),
-                svn_options,
-                &[
-                    "propdel".to_string(),
-                    "--non-interactive".to_string(),
-                    property.clone(),
-                    path.replace('\\', "/"),
-                ],
-            )?;
-        }
-    }
-    for (property, value) in new_properties {
-        run_svn(
-            Some(wc),
-            svn_options,
-            &[
-                "propset".to_string(),
-                "--non-interactive".to_string(),
-                property,
-                value,
-                path.replace('\\', "/"),
-            ],
-        )?;
-    }
-    Ok(())
-}
-
-fn svn_file_attributes_for_path(
-    git: &GitCli,
-    commit: &str,
-    path: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let attributes = match git.show_file(commit, ".gitattributes") {
-        Ok(attributes) => String::from_utf8(attributes).map_err(|e| e.to_string())?,
-        Err(_) => return Ok(Vec::new()),
-    };
-    let mut svn_properties = None;
-    let mut property_operations = Vec::new();
-    let mut attribute_order = 0;
-    for line in attributes.lines() {
-        let line = line.trim();
-        if line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let mut parts = line.split_whitespace();
-        let Some(pattern) = parts.next() else {
-            continue;
-        };
-        if !attribute_pattern_matches(pattern, path) {
-            continue;
-        }
-        for attr in parts {
-            attribute_order += 1;
-            if let Some(value) = attr.strip_prefix("svn-properties=") {
-                svn_properties = Some((attribute_order, value));
-            } else if attr == "-svn-properties" || attr == "!svn-properties" {
-                svn_properties = None;
-            } else if let Some(name) = direct_svn_property_clear(attr) {
-                property_operations.push((attribute_order, name, None));
-            } else if let Some(value) = attr.strip_prefix("svn:eol-style=") {
-                property_operations.push((attribute_order, "svn:eol-style", Some(value)));
-            } else if let Some(value) = attr.strip_prefix("svn:mime-type=") {
-                property_operations.push((attribute_order, "svn:mime-type", Some(value)));
-            } else if let Some(value) = attr.strip_prefix("svn:keywords=") {
-                property_operations.push((attribute_order, "svn:keywords", Some(value)));
-            } else if let Some(value) = attr.strip_prefix("svn:needs-lock=") {
-                property_operations.push((attribute_order, "svn:needs-lock", Some(value)));
-            } else if let Some(value) = attr.strip_prefix("svn:executable=") {
-                property_operations.push((attribute_order, "svn:executable", Some(value)));
-            } else if attr == "svn:executable" {
-                property_operations.push((attribute_order, "svn:executable", Some("x")));
-            } else if let Some(value) = attr.strip_prefix("svn:special=") {
-                property_operations.push((attribute_order, "svn:special", Some(value)));
-            } else if attr == "svn:special" {
-                property_operations.push((attribute_order, "svn:special", Some("x")));
-            } else if attr == "svn:needs-lock" {
-                property_operations.push((attribute_order, "svn:needs-lock", Some("x")));
-            }
-        }
-    }
-    if let Some((order, value)) = svn_properties {
-        for property in value.split(';').filter(|property| !property.is_empty()) {
-            if let Some((name, value)) = property.split_once('=')
-                && !name.is_empty()
-                && !value.is_empty()
-            {
-                property_operations.push((order, name, Some(value)));
-            }
-        }
-    }
-    property_operations.sort_by_key(|(order, _, _)| *order);
-    let mut svn_props = Vec::new();
-    for (_, name, value) in property_operations {
-        apply_svn_file_attribute_operation(&mut svn_props, name, value);
-    }
-    Ok(svn_props)
-}
-
-fn direct_svn_property_clear(attr: &str) -> Option<&'static str> {
-    match attr {
-        "-svn:eol-style" | "!svn:eol-style" => Some("svn:eol-style"),
-        "-svn:mime-type" | "!svn:mime-type" => Some("svn:mime-type"),
-        "-svn:keywords" | "!svn:keywords" => Some("svn:keywords"),
-        "-svn:executable" | "!svn:executable" => Some("svn:executable"),
-        "-svn:special" | "!svn:special" => Some("svn:special"),
-        "-svn:needs-lock" | "!svn:needs-lock" => Some("svn:needs-lock"),
-        _ => None,
-    }
-}
-
-fn apply_svn_file_attribute_operation(
-    props: &mut Vec<(String, String)>,
-    name: &str,
-    value: Option<&str>,
-) {
-    if let Some(value) = value {
-        if let Some((_, existing)) = props.iter_mut().find(|(property, _)| property == name) {
-            *existing = value.to_string();
-        } else {
-            props.push((name.to_string(), value.to_string()));
-        }
-    } else if let Some(index) = props.iter().position(|(property, _)| property == name) {
-        props.remove(index);
-    }
-}
-
-fn attribute_pattern_matches(pattern: &str, path: &str) -> bool {
-    if pattern == path {
-        return true;
-    }
-    if let Some(suffix) = pattern.strip_prefix('*') {
-        return path.ends_with(suffix);
-    }
-    if let Some((prefix, suffix)) = pattern.split_once('*') {
-        let Some(rest) = path.strip_prefix(prefix) else {
-            return false;
-        };
-        return rest.ends_with(suffix) && !rest.trim_end_matches(suffix).contains('/');
-    }
-    false
 }
 
 fn svn_commit(wc: &Path, message: &str, svn_options: &DcommitSvnOptions) -> Result<u32, String> {
