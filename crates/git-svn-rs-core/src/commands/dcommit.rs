@@ -36,6 +36,9 @@ pub fn run_in_work_tree(
     args: DcommitArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
+    if tracked.config.no_metadata {
+        return Err("dcommit is unavailable for --no-metadata one-shot imports".to_string());
+    }
     if tracked.git.range_has_merges(&tracked.refname, "HEAD")? {
         return Err("dcommit does not support merge commits in the local commit range".to_string());
     }

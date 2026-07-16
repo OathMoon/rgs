@@ -242,6 +242,62 @@ fn find_rev_before_and_after_use_nearest_tracked_revision() {
 }
 
 #[test]
+fn no_metadata_import_rejects_followup_operations_without_mutating_tracking_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", "mock://repo/trunk", "work", "--no-metadata"])
+        .assert()
+        .success();
+
+    let tracked_before = git_output(&work, ["rev-parse", "refs/remotes/git-svn"]);
+    let rev_map_path = work
+        .join(".git")
+        .join("svn")
+        .join("git-svn")
+        .join(".rev_map.mock-uuid");
+    let rev_map_before = std::fs::read(&rev_map_path).unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["find-rev", "r2"])
+        .assert()
+        .success()
+        .stdout(format!("{}\n", tracked_before.trim()));
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("URL: mock://repo/trunk"));
+
+    for (command, expected) in [
+        (vec!["fetch"], "fetch is unavailable"),
+        (vec!["rebase"], "fetch is unavailable"),
+        (vec!["log"], "log is unavailable"),
+        (vec!["dcommit"], "dcommit is unavailable"),
+    ] {
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(&work)
+            .args(command)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected));
+    }
+
+    assert_eq!(
+        git_output(&work, ["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+}
+
+#[test]
 fn info_prints_tracked_url_and_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

@@ -12,6 +12,9 @@ pub fn run_in_work_tree(
     args: LogArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
+    if tracked.config.no_metadata {
+        return Err("log is unavailable for --no-metadata imports".to_string());
+    }
     let revision_filter = args
         .revision
         .as_deref()

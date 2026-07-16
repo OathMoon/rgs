@@ -98,6 +98,9 @@ fn effective_fetch_config(
         reject_identity_change(base_revision, "--no-metadata")?;
         config.no_metadata = true;
     }
+    if config.no_metadata && base_revision > 0 {
+        return Err("fetch is unavailable after a --no-metadata one-shot import".to_string());
+    }
     if let Some(value) = &shared.rewrite_root
         && config.rewrite_root.as_ref() != Some(value)
     {
