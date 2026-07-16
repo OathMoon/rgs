@@ -8,4 +8,5 @@ pub mod init;
 pub mod log;
 pub mod rebase;
 pub mod reset;
+mod reset_transaction;
 pub mod resolver;

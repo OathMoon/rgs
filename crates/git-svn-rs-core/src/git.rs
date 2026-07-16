@@ -239,6 +239,16 @@ impl GitCli {
         self.run(["update-ref", refname, value]).map(|_| ())
     }
 
+    pub fn update_ref_expected(
+        &self,
+        refname: &str,
+        value: &str,
+        expected_old: &str,
+    ) -> Result<(), String> {
+        self.run(["update-ref", refname, value, expected_old])
+            .map(|_| ())
+    }
+
     pub fn materialize_initial_branch(
         &self,
         tracking_ref: &str,

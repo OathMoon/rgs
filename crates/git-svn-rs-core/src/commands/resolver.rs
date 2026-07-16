@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::commands::reset_transaction;
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
@@ -48,6 +49,7 @@ fn resolve_tracked_svn_impl(
     require_history_identity: bool,
 ) -> Result<TrackedSvn, String> {
     let git = GitCli::new(work_tree);
+    reset_transaction::ensure_no_pending(&git)?;
     let config = read_remote_config(&git, "svn")?;
     let first_mapping = config
         .fetch

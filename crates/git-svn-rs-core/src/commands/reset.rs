@@ -1,5 +1,8 @@
 use crate::cli::ResetArgs;
+use crate::commands::reset_transaction;
 use crate::commands::resolver::resolve_tracked_svn;
+use crate::dcommit::journal_registry::{RepositoryDcommitLock, discover_repository_journals};
+use crate::git::GitCli;
 
 pub fn run(args: ResetArgs) -> Result<(), String> {
     run_in_work_tree(".", args)
@@ -9,6 +12,19 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: ResetArgs,
 ) -> Result<(), String> {
+    let work_tree = work_tree.into();
+    let git = GitCli::new(&work_tree);
+    let svn_metadata_root = git.work_tree().join(git.git_dir()?).join("svn");
+    let _lock =
+        RepositoryDcommitLock::acquire(&svn_metadata_root).map_err(|error| error.to_string())?;
+    if discover_repository_journals(&svn_metadata_root)
+        .map_err(|error| error.to_string())?
+        .and_then(|discovery| discovery.active)
+        .is_some()
+    {
+        return Err("reset is blocked by an unfinished dcommit journal".to_string());
+    }
+    reset_transaction::recover_pending(&git)?;
     let tracked = resolve_tracked_svn(work_tree)?;
     let revision = parse_revision(&args.revision)?;
     let target_revision = if args.parent {
@@ -34,12 +50,13 @@ pub fn run_in_work_tree(
         ));
     }
 
-    tracked
-        .git
-        .update_ref(&tracked.refname, &record.object_id_hex)?;
-    tracked
-        .open_rev_map()?
-        .reset_to(target_revision, &record.object_id_hex)
+    reset_transaction::execute(
+        &tracked.git,
+        &tracked.refname,
+        &tracked.rev_map_path,
+        target_revision,
+        &record.object_id_hex,
+    )
 }
 
 fn parse_revision(value: &str) -> Result<u32, String> {
