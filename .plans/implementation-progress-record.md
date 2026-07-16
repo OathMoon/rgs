@@ -1,9 +1,9 @@
 # git-svn-rs Implementation Progress Record
 
-Last audited: 2026-07-15
+Last audited: 2026-07-16
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `aaf0be0 feat: harden dcommit restart state`
-Latest implementation commit: `aaf0be0 feat: harden dcommit restart state`
+Committed HEAD at audit: `4bf9205 feat: connect durable production dcommit`
+Latest implementation commit: `4bf9205 feat: connect durable production dcommit`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -29,7 +29,7 @@ The repository is a substantial preview implementation with useful local fixture
 | 4 SVN adapters | `in-progress` | CLI/libsvn share the RA editor contract; native update/switch/checksums/errors | auth profiles, binary properties, broader remote validation |
 | 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay | windowing/parent fetch, atomic publication, remaining Fetcher semantics |
 | 6 readonly | `in-progress` | common find-rev/info/log/reset/rebase/gc subset | scoped multi-ref resolver, tree-ish, remaining Log/noMetadata behavior |
-| 7 dcommit | `in-progress` | first-parent target, shared typed plan/editor across mock and working-copy sinks, durable journal, pure recovery coordinator, repository discovery/lock | production coordinator/post-submit integration, remote profiles |
+| 7 dcommit | `in-progress` | production working-copy sink runs through the durable coordinator with clean preflight and post-fetch identity checks | ambiguous submit persistence window, projected-tree verification, remote profiles |
 | 8 golden/release | `structural-pass` | exact refs/graph/rev_map and clone-state artifacts | strict Perl execution and remaining command-output parity |
 
 ## Validated Capabilities
@@ -64,10 +64,11 @@ The repository is a substantial preview implementation with useful local fixture
 - Local `file://` and local authenticated `svn://` write-back use an SVN working copy driven by the shared typed plan and cover file/property/copy/move cases, post-fetch, and rebase.
 - Typed raw diffs preserve A/M/D/C/R/T modes, object IDs, similarity, and both paths. The common plan builder materializes final copy/move content, symlink encoding, mode-property set/delete operations, mergeinfo, and stable raw metadata; editor operation failures abort without closing.
 - The versioned dcommit journal stores the whole oldest-first queue with `Queued`/`Ready`/`Submitted`/`FetchedVerified` ordering, atomic generation snapshots, corruption fallback, and crash-safe OS advisory plus in-process locks. A pure coordinator persists each transition, verifies stable SHA-256 plan/message fingerprints, checks the remote head before submit, advances later plan/copy bases from verified imports, resumes `Submitted` without duplicate submission, and records terminal rebase/no-rebase states.
-- Repository-wide discovery scans `.git/svn/**/dcommit-journal`, rejects multiple active journals, retains completed ledgers, and holds a `.git/svn/dcommit.lock`. The command entrypoint fails closed on active state or a completed-ledger commit overlap until production recovery is connected.
+- Repository-wide discovery scans `.git/svn/**/dcommit-journal`, rejects multiple active journals, retains completed ledgers, and holds a `.git/svn/dcommit.lock`. Production resumes matching file/svn active journals and fails closed on target/config mismatch, multiple active journals, mock active state, or completed-ledger commit overlap.
 - `JournalStorePersistence` keeps a live journal lock and tracks snapshot generations. Disk-restart tests destroy and reload coordinator state to prove submitted commits are not resubmitted, fetch verification is retryable, and rebase-pending recovery avoids the sink.
 - `PreparedDcommit` construction now deterministically derives the oldest-first journal queue and production fingerprints. `.gitattributes` SVN-property resolution is a pure plan-enrichment step shared by the working-copy path, and invalid UTF-8 remains an explicit error.
-- Working-copy write-back now executes the shared editor plan; it is not yet wrapped by the durable coordinator/post-submit verification adapters, and common remote schemes remain unsupported.
+- Working-copy write-back now executes the shared editor plan through the durable coordinator. Production persists the queue before write, checks the target path head, records submitted revisions before exact-revision fetch, verifies rev_map/ref/footer identity, reconstructs active journals from durable fingerprints, and runs final rebase/no-rebase transitions.
+- Non-dry-run dcommit rejects a dirty index/worktree before any state that may submit. Explicit commit URLs use the target path's last-changed revision and verify that target even when the configured mapping cannot import the submitted revision.
 
 ### Golden infrastructure
 
@@ -85,8 +86,9 @@ The repository is a substantial preview implementation with useful local fixture
 
 - Native `do_update` and `do_switch` are production-backed; MD5 base/result checksums, absent/abort callbacks, persistent unhandled metadata, and immediate native callback errors are implemented.
 - Test callback recorders are operation-owned, the global serialization lock is removed, auth prompt panics are contained, and the linked default-parallel suite passes. A full production callback/error audit remains before claiming all FFI callbacks panic-free.
-- Working-copy production dcommit preserves full messages and executes `DcommitPlanBuilder`/`SvnCommitEditor`; the recovery coordinator and repository preflight now exist but are not yet connected to that sink or its post-fetch verification.
-- Dcommit target selection now uses the nearest first-parent rev_map identity with footer URL/UUID/revision validation; local merge ranges are rejected before write. Broader stale/dirty/commit-URL preflight remains incomplete.
+- Working-copy production dcommit preserves full messages and executes `DcommitPlanBuilder`/`SvnCommitEditor` through the recovery coordinator. Exact projected-tree verification remains open because SVN properties/keywords and `.gitattributes` mappings can intentionally produce a tree different from the original local commit.
+- Dcommit target selection uses the nearest first-parent rev_map identity with footer URL/UUID/revision validation; local merge ranges and dirty pre-submit worktrees are rejected. Broader commit-URL intent/auth profile validation remains incomplete.
+- The `Ready -> submit -> Submitted` persistence gap remains ambiguous if SVN succeeds but the returned revision cannot be durably recorded. Safe automatic recovery needs reliable SVN log/revprop reconciliation or idempotency; it must not guess and resubmit.
 - `find-rev` can flatten unrelated rev_maps and lacks optional tree-ish scope.
 - Fetch-time authors/filters/localtime/metadata/empty-dir options overlay persisted config; identity-changing overrides are rejected after import. `log-window-size` and `fetch --parent` now fail explicitly until implemented.
 - Strict fetch revision forms (`N`, `N:M`, `HEAD`, `BASE:N`, `N:HEAD`, `BASE:HEAD`) are implemented; BASE uses the slowest configured mapping for the selected remote/UUID.
@@ -142,6 +144,7 @@ Current linked evidence from 2026-07-13 supersedes the callback-race result abov
 - Current Phase 7 foundation verification passes 34 core library tests, 5 commit-editor tests, 3 legacy planner tests, and 2 typed plan-builder tests. Journal tests cover whole-queue persistence, strict state ordering, roundtrip, truncated-snapshot fallback, and lock exclusion.
 - The next Phase 7 slice adds 7 coordinator fault-injection tests, 4 repository journal-registry tests, typed mock rename/copy execution, and CLI fail-closed checks proving unfinished/completed journal guards leave the tracking ref and rev_map bytes unchanged.
 - `cargo test --workspace` passes after the Phase 7 foundation slice (about 458 seconds). `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` also pass.
+- On 2026-07-16 the production coordinator slice passes coordinator 8/8, disk restart 3/3, dcommit unit 4/4, Git cleanliness 1/1, and the real dcommit CLI matrix after focused follow-up (40 prior scenarios plus the new dirty-tree guard). Workspace clippy with `-D warnings`, formatting, and `git diff --check` pass. A new full workspace run remains required after this slice.
 
 Previously recorded passing commands remain useful developer evidence, but the audit results above take precedence for current gate status.
 
@@ -163,6 +166,7 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `9d354f6`: shared replay convergence and Phase 7 typed-plan/journal foundation.
 - `e3b8cf9`: pure dcommit recovery coordinator, repository journal discovery/lock, and typed mock execution.
 - `aaf0be0`: stable recovery fingerprints, crash-safe locks, journal persistence adapter, and disk-restart tests.
+- `4bf9205`: production working-copy coordinator integration, post-fetch identity verification, active-journal reconstruction, and clean-worktree preflight.
 
 ### Golden harness
 
@@ -207,4 +211,4 @@ The first four corrected P0 items were completed on 2026-07-12; preserve their r
 - Global native callback recorders/serialization were removed. Linked default-parallel core tests pass with `VCPKGRS_DYNAMIC=1`; prompt/editor panics are contained at FFI boundaries.
 - Native `do_switch` combines log copy discovery with `svn_ra_do_switch3` content deltas. Base/result MD5 checksums are validated, copy-only sources resolve mixed revisions, and callback failures return immediate libsvn errors.
 - CLI and libsvn imports now share `RaSession`/`FetchEditor`. The common editor persists exact textual property/absent records to `unhandled.log`; CLI arbitrary textual properties use verbose XML proplist, while encoded binary properties remain an explicit unsupported boundary.
-- Dcommit now preserves complete `%B` messages and both mock and working-copy sinks execute the shared typed plan. Typed raw `T` changes and non-UTF-8 rejection are tested; plan enrichment preserves `.gitattributes`, final copy/move bytes, and explicit executable/special transitions. The pure coordinator, deterministic prepared-queue builder, stable fingerprints, disk restart tests, crash-safe locks, and repository discovery are present. Next, wrap the working-copy executor in `CommitSink`, add exact rev_map/footer/tree/ref post-submit verification, and connect deterministic active-journal reconstruction before enabling automatic recovery.
+- Dcommit now preserves complete `%B` messages and both mock and working-copy sinks execute the shared typed plan. Production file/svn write-back is connected to `CommitSink`/`PostSubmit`, exact rev_map/ref/footer verification, durable active-journal reconstruction, clean preflight, and retry-safe submitted/fetched/rebase states. Next, add a real-SVN injected post-submit restart test, define plan-projected tree verification, and close or operationalize the ambiguous submit-persistence window before claiming the Phase 7 behavioral gate.
