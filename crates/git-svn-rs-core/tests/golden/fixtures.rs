@@ -1483,6 +1483,7 @@ fn supported_find_rev(work_tree: &Path, tool: GoldenTool, revision: u32) -> Resu
             work_tree,
             FindRevArgs {
                 rev_or_commit: revision_arg,
+                treeish: None,
                 before: false,
                 after: false,
             },
@@ -1525,6 +1526,7 @@ fn supported_find_rev_commit(
             work_tree,
             FindRevArgs {
                 rev_or_commit: commit.clone(),
+                treeish: None,
                 before: false,
                 after: false,
             },
@@ -1573,6 +1575,7 @@ fn supported_find_rev_with_direction(
             work_tree,
             FindRevArgs {
                 rev_or_commit: revision_arg,
+                treeish: None,
                 before: true,
                 after: false,
             },
@@ -1581,6 +1584,7 @@ fn supported_find_rev_with_direction(
             work_tree,
             FindRevArgs {
                 rev_or_commit: revision_arg,
+                treeish: None,
                 before: false,
                 after: true,
             },

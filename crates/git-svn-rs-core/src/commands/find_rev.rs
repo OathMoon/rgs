@@ -1,7 +1,5 @@
 use crate::cli::FindRevArgs;
-use crate::commands::resolver::resolve_tracked_svn;
-use crate::rev_map::{ObjectFormat, RevMap, RevMapRecord};
-use std::path::{Path, PathBuf};
+use crate::commands::resolver::{resolve_tracked_svn, resolve_tracked_svn_at};
 
 pub fn run(args: FindRevArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
@@ -11,11 +9,13 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: FindRevArgs,
 ) -> Result<String, String> {
-    let tracked = resolve_tracked_svn(work_tree)?;
-    let git_dir = tracked.git.git_dir()?;
-    let object_format = tracked.git.object_format()?;
+    let work_tree = work_tree.into();
     if let Some(revision) = parse_revision(&args.rev_or_commit) {
-        let records = all_rev_map_records(&tracked.git.work_tree().join(&git_dir), object_format)?;
+        let tracked = match args.treeish.as_deref() {
+            Some(treeish) => resolve_tracked_svn_at(&work_tree, treeish)?,
+            None => resolve_tracked_svn(&work_tree)?,
+        };
+        let records = tracked.open_rev_map()?.records()?;
         let record = if args.before {
             records.into_iter().rfind(|r| r.revision <= revision)
         } else if args.after {
@@ -32,51 +32,21 @@ pub fn run_in_work_tree(
             Ok(format!("{}\n", record.object_id_hex))
         }
     } else {
+        if args.treeish.is_some() {
+            return Err("find-rev accepts a tree-ish scope only with an SVN revision".to_string());
+        }
+        let tracked = resolve_tracked_svn_at(&work_tree, &args.rev_or_commit)
+            .or_else(|_| resolve_tracked_svn(&work_tree))?;
         let commit = tracked.git.rev_parse(&args.rev_or_commit)?;
         let commit = commit.trim();
-        let revision = all_rev_map_records(&tracked.git.work_tree().join(git_dir), object_format)?
+        let revision = tracked
+            .open_rev_map()?
+            .records()?
             .into_iter()
             .find(|record| record.object_id_hex == commit)
             .map(|record| record.revision);
         Ok(revision.map(|rev| format!("{rev}\n")).unwrap_or_default())
     }
-}
-
-fn all_rev_map_records(
-    git_dir: &Path,
-    object_format: ObjectFormat,
-) -> Result<Vec<RevMapRecord>, String> {
-    let mut paths = Vec::new();
-    collect_rev_map_paths(&git_dir.join("svn"), &mut paths)?;
-    paths.sort();
-
-    let mut records = Vec::new();
-    for path in paths {
-        records.extend(RevMap::open(path, object_format)?.records()?);
-    }
-    records.sort_by_key(|record| record.revision);
-    Ok(records)
-}
-
-fn collect_rev_map_paths(path: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
-    if !path.exists() {
-        return Ok(());
-    }
-
-    for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
-        let entry = entry.map_err(|e| e.to_string())?;
-        let path = entry.path();
-        if path.is_dir() {
-            collect_rev_map_paths(&path, paths)?;
-        } else if path
-            .file_name()
-            .and_then(|name| name.to_str())
-            .is_some_and(|name| name.starts_with(".rev_map.") && !name.ends_with(".lock"))
-        {
-            paths.push(path);
-        }
-    }
-    Ok(())
 }
 
 fn parse_revision(value: &str) -> Option<u32> {

@@ -32,7 +32,22 @@ impl TrackedSvn {
 }
 
 pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, String> {
-    let git = GitCli::new(work_tree.into());
+    resolve_tracked_svn_impl(work_tree.into(), "HEAD", false)
+}
+
+pub fn resolve_tracked_svn_at(
+    work_tree: impl Into<PathBuf>,
+    treeish: &str,
+) -> Result<TrackedSvn, String> {
+    resolve_tracked_svn_impl(work_tree.into(), treeish, true)
+}
+
+fn resolve_tracked_svn_impl(
+    work_tree: PathBuf,
+    treeish: &str,
+    require_history_identity: bool,
+) -> Result<TrackedSvn, String> {
+    let git = GitCli::new(work_tree);
     let config = read_remote_config(&git, "svn")?;
     let first_mapping = config
         .fetch
@@ -41,7 +56,7 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
     let mappings = tracked_candidate_mappings(&git, &config)?;
     let git_dir = git.git_dir()?;
     let git_metadata_dir = git.work_tree().join(git_dir);
-    let first_parent_history = git.first_parent_history("HEAD").ok();
+    let first_parent_history = git.first_parent_history(treeish)?;
     let mut fallback = None;
     let mut best_identity: Option<(usize, TrackedSvn)> = None;
 
@@ -53,10 +68,10 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
             Err(_) if mapping != first_mapping => continue,
             Err(error) => return Err(error),
         };
-        if let Some(history) = &first_parent_history
-            && let Some((distance, record)) = rev_map_first_parent_identity(&tracked, history)?
+        if let Some((distance, record)) =
+            rev_map_first_parent_identity(&tracked, &first_parent_history)?
         {
-            if !tracking_identity_matches(&tracked, &record, &history[distance])? {
+            if !tracking_identity_matches(&tracked, &record, &first_parent_history[distance])? {
                 continue;
             }
             if best_identity
@@ -81,6 +96,12 @@ pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, 
 
     if let Some((_, tracked)) = best_identity {
         return Ok(tracked);
+    }
+
+    if require_history_identity {
+        return Err(format!(
+            "tree-ish {treeish:?} has no unambiguous SVN tracking identity"
+        ));
     }
 
     if let Some(tracked) = fallback {

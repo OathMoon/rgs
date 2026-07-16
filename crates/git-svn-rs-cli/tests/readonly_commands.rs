@@ -88,6 +88,15 @@ fn find_rev_maps_branch_git_commit_to_svn_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.branches",
+            "branches/*:refs/remotes/origin/*",
+        ],
+    );
     let trunk = commit_file(
         work,
         "trunk.txt",
@@ -120,6 +129,15 @@ fn find_rev_maps_branch_svn_revision_to_git_commit() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.branches",
+            "branches/*:refs/remotes/origin/*",
+        ],
+    );
     let trunk = commit_file(
         work,
         "trunk.txt",
@@ -145,6 +163,60 @@ fn find_rev_maps_branch_svn_revision_to_git_commit() {
         .assert()
         .success()
         .stdout(format!("{branch}\n"));
+}
+
+#[test]
+fn find_rev_scopes_same_revision_to_head_or_explicit_treeish() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.branches",
+            "branches/*:refs/remotes/origin/*",
+        ],
+    );
+    let trunk = commit_file(
+        work,
+        "trunk.txt",
+        "trunk\n",
+        "trunk\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/trunk", &trunk]);
+    write_rev_map_for_short_ref(work, "origin.trunk", &[(2, &trunk)]);
+
+    let branch = commit_file(
+        work,
+        "branch.txt",
+        "branch\n",
+        "branch\n\ngit-svn-id: mock://repo/branches/main@2 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/main", &branch]);
+    write_rev_map_for_short_ref(work, "origin.main", &[(2, &branch)]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", "r2"])
+        .assert()
+        .success()
+        .stdout(format!("{branch}\n"));
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", "r2", "refs/remotes/origin/trunk"])
+        .assert()
+        .success()
+        .stdout(format!("{trunk}\n"));
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", "r2", "missing-treeish"])
+        .assert()
+        .failure();
 }
 
 #[test]
