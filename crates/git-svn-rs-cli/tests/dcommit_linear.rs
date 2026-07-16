@@ -703,6 +703,65 @@ fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_rejects_commit_url_from_another_repository_before_write() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let other = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 100 }\n").unwrap();
+    run_git(&work, &["add", "src/lib.rs"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "must not reach another repository",
+        ],
+    );
+
+    let other_revision = svn_stdout(&["info", "--show-item", "revision", &other.url()]);
+    let other_branch_url = format!("{}/branches/main", other.url());
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase", "--commit-url", &other_branch_url])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "dcommit target repository UUID mismatch",
+        ));
+
+    assert_eq!(
+        svn_stdout(&["info", "--show-item", "revision", &other.url()]),
+        other_revision,
+        "a mismatched commit URL must not create an SVN revision"
+    );
+}
+
+#[test]
 fn dcommit_writes_explicit_mergeinfo_to_file_svn_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}

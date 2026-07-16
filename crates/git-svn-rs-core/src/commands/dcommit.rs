@@ -225,6 +225,7 @@ fn dcommit_file_svn(
     }
 
     let target_url = svn_checkout_url(ctx.svn_root_url, ctx.svn_path);
+    validate_svn_repository_uuid(&target_url, ctx.uuid, &ctx.svn_options)?;
     let target = DcommitTargetIdentity {
         remote_id: ctx.remote_id.to_string(),
         repository_root_url: ctx.svn_root_url.to_string(),
@@ -615,19 +616,38 @@ fn projected_tree_for_entry(
 }
 
 fn svn_last_changed_revision(url: &str, options: &DcommitSvnOptions) -> Result<u64, String> {
-    run_svn_output(
+    svn_info_item(url, "last-changed-revision", options)?
+        .parse::<u64>()
+        .map_err(|error| format!("invalid SVN remote revision: {error}"))
+}
+
+fn validate_svn_repository_uuid(
+    url: &str,
+    expected_uuid: &str,
+    options: &DcommitSvnOptions,
+) -> Result<(), String> {
+    let actual_uuid = svn_info_item(url, "repos-uuid", options)?;
+    if actual_uuid != expected_uuid {
+        return Err(format!(
+            "dcommit target repository UUID mismatch: expected {expected_uuid}, found {actual_uuid} at {url}; refusing to write"
+        ));
+    }
+    Ok(())
+}
+
+fn svn_info_item(url: &str, item: &str, options: &DcommitSvnOptions) -> Result<String, String> {
+    Ok(run_svn_output(
         None,
         options,
         &[
             "info".to_string(),
             "--show-item".to_string(),
-            "last-changed-revision".to_string(),
+            item.to_string(),
             url.to_string(),
         ],
     )?
     .trim()
-    .parse::<u64>()
-    .map_err(|error| format!("invalid SVN remote revision: {error}"))
+    .to_string())
 }
 
 fn git_attributes(git: &GitCli, commit: &str) -> Result<Option<String>, String> {
