@@ -306,6 +306,92 @@ fn dcommit_rejects_dirty_work_tree_before_file_svn_write() {
 }
 
 #[test]
+fn dcommit_resumes_post_fetch_failure_without_duplicate_file_svn_commit() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let authors_prog = recovery_authors_prog(temp.path(), false);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--authors-prog",
+            authors_prog.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 51 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "recover post fetch",
+        ],
+    );
+    recovery_authors_prog(temp.path(), true);
+    let before = svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("post-submit"));
+    let submitted = svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    assert_eq!(submitted, before + 1);
+
+    recovery_authors_prog(temp.path(), false);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("recover post fetch"));
+    assert_eq!(
+        svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
+            .trim()
+            .parse::<u32>()
+            .unwrap(),
+        submitted,
+        "resuming a Submitted journal must not create another SVN revision"
+    );
+    assert_eq!(
+        git_stdout(&work, &["show", "refs/remotes/origin/trunk:src/lib.rs"]),
+        "pub fn answer() -> u8 { 51 }"
+    );
+}
+
+#[test]
 fn dcommit_revision_option_does_not_limit_post_commit_fetch_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
@@ -2457,6 +2543,36 @@ fn git_stdout_with_stdin(work: &std::path::Path, args: &[&str], stdin: &str) -> 
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn recovery_authors_prog(dir: &std::path::Path, fail: bool) -> std::path::PathBuf {
+    #[cfg(windows)]
+    {
+        let path = dir.join("recovery-authors-prog.cmd");
+        let script = if fail {
+            "@echo off\r\nexit /b 1\r\n"
+        } else {
+            "@echo off\r\necho Recovery Author ^<recovery@example.com^>\r\n"
+        };
+        std::fs::write(&path, script).unwrap();
+        path
+    }
+    #[cfg(not(windows))]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = dir.join("recovery-authors-prog.sh");
+        let script = if fail {
+            "#!/bin/sh\nexit 1\n"
+        } else {
+            "#!/bin/sh\necho 'Recovery Author <recovery@example.com>'\n"
+        };
+        std::fs::write(&path, script).unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        path
+    }
 }
 
 fn svn_stdout(args: &[&str]) -> String {
