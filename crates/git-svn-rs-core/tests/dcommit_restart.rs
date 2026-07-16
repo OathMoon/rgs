@@ -249,12 +249,12 @@ fn restart_after_fetch_before_verified_save_repeats_only_fetch() {
             [41],
         ),
         RecordingPostSubmit(Rc::clone(&post_state)),
-        StorePersistence::acquire(JournalStore::new(&directory), Some(4)),
+        StorePersistence::acquire(JournalStore::new(&directory), Some(5)),
     );
 
     assert!(matches!(
         first_coordinator.run(&mut first_process),
-        Err(CoordinatorError::Persistence(message)) if message == "injected save failure 4"
+        Err(CoordinatorError::Persistence(message)) if message == "injected save failure 5"
     ));
     drop(first_coordinator);
     drop(first_process);
@@ -285,6 +285,54 @@ fn restart_after_fetch_before_verified_save_repeats_only_fetch() {
             svn_revision: 41,
             ..
         }
+    ));
+}
+
+#[test]
+fn restart_from_in_flight_snapshot_refuses_to_resubmit() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("dcommit-journal");
+    save_initial(
+        &JournalStore::new(&directory),
+        &journal(
+            EntryState::SubmissionInFlight {
+                expected_base_revision: 40,
+                expected_tracking_oid: oid('a'),
+            },
+            BatchState::Submitting,
+            true,
+        ),
+    );
+
+    let sink_state = Rc::new(RefCell::new(SinkState::default()));
+    let post_state = Rc::new(RefCell::new(PostState::default()));
+    let mut restarted = prepared(load(&JournalStore::new(&directory)));
+    let mut coordinator = Coordinator::new(
+        sink(
+            &sink_state,
+            [RemoteHead {
+                revision: 40,
+                tracking_oid: oid('a'),
+            }],
+            [41],
+        ),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), None),
+    );
+
+    assert!(matches!(
+        coordinator.run(&mut restarted),
+        Err(CoordinatorError::AmbiguousSubmission {
+            svn_revision: None,
+            ..
+        })
+    ));
+    assert_eq!(sink_state.borrow().remote_checks, 0);
+    assert_eq!(sink_state.borrow().submissions, 0);
+    assert!(post_state.borrow().fetches.is_empty());
+    assert!(matches!(
+        load(&JournalStore::new(&directory)).entries[0].state,
+        EntryState::SubmissionInFlight { .. }
     ));
 }
 

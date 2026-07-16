@@ -181,10 +181,25 @@ where
                         });
                     }
 
-                    let svn_revision = self
+                    prepared.journal.entries[index].state = EntryState::SubmissionInFlight {
+                        expected_base_revision,
+                        expected_tracking_oid,
+                    };
+                    self.persist(&prepared.journal)?;
+                    let svn_revision = match self
                         .sink
                         .submit(&prepared.plans[index], expected_base_revision)
-                        .map_err(CoordinatorError::Sink)?;
+                    {
+                        Ok(revision) => revision,
+                        Err(error) => {
+                            return Err(CoordinatorError::AmbiguousSubmission {
+                                svn_revision: None,
+                                detail: format!(
+                                    "the submit command failed after the in-flight marker was persisted: {error}"
+                                ),
+                            });
+                        }
+                    };
                     if svn_revision <= expected_base_revision {
                         return Err(CoordinatorError::Invalid(format!(
                             "commit sink returned SVN revision {svn_revision} after base revision {expected_base_revision}"
@@ -193,10 +208,21 @@ where
                     prepared.journal.entries[index].state = EntryState::Submitted { svn_revision };
                     if let Err(error) = self.persist(&prepared.journal) {
                         return Err(CoordinatorError::AmbiguousSubmission {
-                            svn_revision,
-                            persistence_error: error.to_string(),
+                            svn_revision: Some(svn_revision),
+                            detail: format!("the submitted state could not be persisted: {error}"),
                         });
                     }
+                }
+                EntryState::SubmissionInFlight {
+                    expected_base_revision,
+                    ..
+                } => {
+                    return Err(CoordinatorError::AmbiguousSubmission {
+                        svn_revision: None,
+                        detail: format!(
+                            "the durable journal records an interrupted submission after base r{expected_base_revision}"
+                        ),
+                    });
                 }
                 EntryState::Submitted { svn_revision } => {
                     let imported_oid = self
@@ -280,8 +306,8 @@ pub enum CoordinatorError {
         actual: RemoteHead,
     },
     AmbiguousSubmission {
-        svn_revision: u64,
-        persistence_error: String,
+        svn_revision: Option<u64>,
+        detail: String,
     },
 }
 
@@ -314,11 +340,17 @@ impl fmt::Display for CoordinatorError {
             ),
             Self::AmbiguousSubmission {
                 svn_revision,
-                persistence_error,
-            } => write!(
-                formatter,
-                "SVN r{svn_revision} was submitted but its journal state could not be persisted ({persistence_error}); refusing automatic retry"
-            ),
+                detail,
+            } => match svn_revision {
+                Some(revision) => write!(
+                    formatter,
+                    "SVN r{revision} may have been submitted but its durable outcome is ambiguous ({detail}); inspect the target SVN log and journal before manual recovery; refusing automatic retry"
+                ),
+                None => write!(
+                    formatter,
+                    "SVN submission outcome is ambiguous ({detail}); inspect the target SVN log and journal before manual recovery; refusing automatic retry"
+                ),
+            },
         }
     }
 }

@@ -9,7 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use fs2::FileExt;
 
 const FORMAT_MAGIC: &str = "git-svn-rs-dcommit-journal";
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
+const MIN_READABLE_FORMAT_VERSION: u32 = 1;
 const SNAPSHOT_PREFIX: &str = "dcommit-journal-g";
 const SNAPSHOT_SUFFIX: &str = ".snapshot";
 const LOCK_FILE: &str = "dcommit-journal.lock";
@@ -28,6 +29,10 @@ pub struct DcommitTargetIdentity {
 pub enum EntryState {
     Queued,
     Ready {
+        expected_base_revision: u64,
+        expected_tracking_oid: String,
+    },
+    SubmissionInFlight {
         expected_base_revision: u64,
         expected_tracking_oid: String,
     },
@@ -148,10 +153,14 @@ impl DcommitJournal {
                 EntryState::Ready {
                     expected_base_revision,
                     expected_tracking_oid,
+                }
+                | EntryState::SubmissionInFlight {
+                    expected_base_revision,
+                    expected_tracking_oid,
                 } => {
                     if saw_active || saw_queued {
                         return Err(JournalError::Invalid(
-                            "at most one ready or submitted entry may precede queued entries"
+                            "at most one ready, in-flight, or submitted entry may precede queued entries"
                                 .to_owned(),
                         ));
                     }
@@ -233,6 +242,13 @@ impl DcommitJournal {
                     "state\tready\t{expected_base_revision}\t{}",
                     encode_string(expected_tracking_oid)
                 )),
+                EntryState::SubmissionInFlight {
+                    expected_base_revision,
+                    expected_tracking_oid,
+                } => lines.push(format!(
+                    "state\tsubmission_in_flight\t{expected_base_revision}\t{}",
+                    encode_string(expected_tracking_oid)
+                )),
                 EntryState::Submitted { svn_revision } => {
                     lines.push(format!("state\tsubmitted\t{svn_revision}"));
                 }
@@ -265,7 +281,7 @@ impl DcommitJournal {
             return Err(JournalError::Invalid("unknown journal format".to_owned()));
         }
         let version = parse_u32("format version", version)?;
-        if version != FORMAT_VERSION {
+        if !(MIN_READABLE_FORMAT_VERSION..=FORMAT_VERSION).contains(&version) {
             return Err(JournalError::UnsupportedVersion(version));
         }
 
@@ -319,6 +335,15 @@ impl DcommitJournal {
                         tracking_oid,
                     )?,
                 },
+                ["state", "submission_in_flight", revision, tracking_oid] => {
+                    EntryState::SubmissionInFlight {
+                        expected_base_revision: parse_u64("expected base revision", revision)?,
+                        expected_tracking_oid: decode_string(
+                            "in-flight expected tracking OID",
+                            tracking_oid,
+                        )?,
+                    }
+                }
                 ["state", "submitted", revision] => EntryState::Submitted {
                     svn_revision: parse_u64("submitted SVN revision", revision)?,
                 },
@@ -781,13 +806,35 @@ mod tests {
         let encoded = journal.encode().unwrap();
         assert_eq!(DcommitJournal::decode(&encoded).unwrap(), journal);
 
+        let mut in_flight = journal.clone();
+        in_flight.entries[1].state = EntryState::SubmissionInFlight {
+            expected_base_revision: 41,
+            expected_tracking_oid: oid('d'),
+        };
+        let encoded_in_flight = in_flight.encode().unwrap();
+        assert_eq!(
+            DcommitJournal::decode(&encoded_in_flight).unwrap(),
+            in_flight
+        );
+
         let unknown = String::from_utf8(encoded)
             .unwrap()
-            .replacen("\t1\n", "\t2\n", 1);
+            .replacen("\t2\n", "\t3\n", 1);
         assert!(matches!(
             DcommitJournal::decode(unknown.as_bytes()),
-            Err(JournalError::UnsupportedVersion(2))
+            Err(JournalError::UnsupportedVersion(3))
         ));
+
+        let version_one = journal
+            .encode()
+            .map(String::from_utf8)
+            .unwrap()
+            .unwrap()
+            .replacen("\t2\n", "\t1\n", 1);
+        assert_eq!(
+            DcommitJournal::decode(version_one.as_bytes()).unwrap(),
+            journal
+        );
     }
 
     #[test]
