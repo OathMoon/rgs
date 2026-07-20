@@ -2,8 +2,8 @@
 
 Last audited: 2026-07-20
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `c191e9b fix: separate rev-map reads from creation`
-Latest implementation commit: `c191e9b fix: separate rev-map reads from creation`
+Committed HEAD at audit: `181e762 fix: reject unsupported legacy metadata layouts`
+Latest implementation commit: `181e762 fix: reject unsupported legacy metadata layouts`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -25,10 +25,10 @@ The repository is a substantial preview implementation with useful local fixture
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | workspace, CLI, shim, diagnose, unsupported commands | remaining inert options and global verbosity contract |
 | 2 config/mapping | `structural-pass` | basic config/glob/authors/filter/layout units, CLI subdirectory session paths | full layout URLs and metadata runtime semantics |
-| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, non-creating reads, managed OS locks/fsync/reset, gitfile discovery | import transaction/recovery, ambiguity, real migration |
+| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, non-creating reads, managed OS locks/fsync/reset, gitfile discovery, explicit legacy rejection | import transaction/recovery and remaining ambiguity |
 | 4 SVN adapters | `in-progress` | CLI/libsvn share the RA editor contract; native update/switch/checksums/errors | auth profiles, binary properties, broader remote validation |
 | 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay | windowing/parent fetch, atomic publication, remaining Fetcher semantics |
-| 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata limits, recoverable reset, conservative gc, SVN-style Log output, and current-parent rebase fetch | merge/strategy compatibility, migration policy, and external exactness |
+| 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata/legacy limits, recoverable reset, conservative gc, SVN-style Log output, and current-parent rebase fetch | merge/strategy compatibility and external exactness |
 | 7 dcommit | `in-progress` | production working-copy sink runs through the durable coordinator with clean preflight, in-flight markers, and plan-projected tree checks | explicit manual reconciliation for ambiguous submissions and remote profiles |
 | 8 golden/release | `structural-pass` | exact refs/graph/rev_map and clone-state artifacts | strict Perl execution and remaining command-output parity |
 
@@ -40,6 +40,7 @@ The repository is a substantial preview implementation with useful local fixture
 - Typed core command surface and explicit v1 unsupported commands.
 - Basic Git CLI wrapper, config serialization, `GlobSpec`, authors, filters, URL helpers, and metadata option conflict checks.
 - Binary rev_map primitives for SHA-1/SHA-256, zero records, explicit create versus non-creating reads, append order, locks, fsync, reset, gitfile, and commondir.
+- Frozen v0-v5 metadata layouts are inspected before fetch/query/gc mutations. Rev_db, v0-v2 roots, empty svn-remote sections, and mixed legacy/v5 layouts receive actionable non-mutating rejection; v5 compatibility `info/url` and gitfile/commondir discovery remain accepted.
 
 ### Local read/import preview
 
@@ -161,6 +162,7 @@ Current linked evidence from 2026-07-13 supersedes the callback-race result abov
 - On 2026-07-20 current-parent rebase fetch and clean-worktree preflight pass focused core/import/CLI tests. A full `cargo test --workspace` rerun passes in about 951 seconds: real clone/fetch 23/23, dcommit 43/43, readonly 47/47, core library 68/68, import mock 9/9, formatter 11/11, and golden 26/26. All-target/all-feature clippy, formatting, diff checks, and the `svn-libsvn` backend integration suite 33/33 pass after linkage-scoping test-only accessors.
 - On 2026-07-20 conservative GC lock probing passes managed stale/live/legacy unit coverage, rev_map 10/10, and GC CLI 2/2. `cargo test --workspace` passes in about 746 seconds, including real clone/fetch 23/23, dcommit 43/43, and readonly 47/47; all-target/all-feature clippy, formatting, and diff checks pass.
 - On 2026-07-20 non-creating rev_map reads pass rev_map 11/11, import mock 9/9, readonly 47/47, and the full workspace in about 701 seconds, including dcommit 43/43. All-target/all-feature clippy, formatting, and diff checks pass; production `RevMap::open` calls are now confined to write coordination.
+- On 2026-07-20 explicit legacy-layout policy passes migration 8/8 plus process-level fetch/gc no-mutation regressions. `cargo test --workspace` passes in about 788 seconds: clone/fetch smoke 8/8, dcommit 43/43, readonly 48/48, and all remaining suites; all-target/all-feature clippy, formatting, and diff checks pass.
 
 Previously recorded passing commands remain useful developer evidence, but the audit results above take precedence for current gate status.
 
@@ -197,6 +199,7 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `0e8d795`: link-state-aware libsvn test accessors restoring the all-feature clippy gate.
 - `e8ef1d4`: versioned OS-held rev_map locks and conservative GC cleanup with live/legacy preservation.
 - `c191e9b`: explicit non-creating rev_map reads across resolver, fetch, reset, dcommit verification, and copy-parent lookup.
+- `181e762`: actionable non-mutating v0-v5/rev_db/mixed-layout and empty svn-remote rejection policy.
 
 ### Golden harness
 
@@ -214,9 +217,9 @@ Previously recorded passing commands remain useful developer evidence, but the a
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 3/6: finish legacy metadata migration policy and non-creating read paths.
+1. Phase 3/5: make import ref/rev_map publication recoverable and close remaining identity ambiguity.
 2. Phase 7: define explicit manual reconciliation/adoption for ambiguous submissions.
-3. Phase 5: make ref/rev_map publication recoverable and finish persistent-placeholder/follow-parent behavior.
+3. Phase 5: finish persistent-placeholder/follow-parent behavior.
 4. Phase 8: provision non-skippable frozen Perl compatibility CI and close remaining output parity gaps.
 5. Phase 4/5/7: define binary-property transport and validate HTTP(S)/svn+ssh read/write authentication profiles.
 
