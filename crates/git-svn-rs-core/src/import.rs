@@ -651,7 +651,11 @@ fn copy_from_parent_ref(
 }
 
 fn max_imported_revision(git: &GitCli, refname: &str, uuid: &str) -> Result<u32, String> {
-    let rev_map = RevMap::open(rev_map_path(git, refname, uuid)?, git.object_format()?)?;
+    let path = rev_map_path(git, refname, uuid)?;
+    if !path.exists() {
+        return Ok(0);
+    }
+    let rev_map = RevMap::open_existing(path, git.object_format()?)?;
     Ok(rev_map.max_revision(false)?.unwrap_or(0))
 }
 
@@ -1035,7 +1039,8 @@ fn svn_git_timestamp(value: &str, localtime: bool) -> Result<GitTimestamp, Strin
 #[cfg(test)]
 #[allow(clippy::items_after_test_module)]
 mod timestamp_tests {
-    use super::svn_git_timestamp;
+    use super::{max_imported_revision, rev_map_path, svn_git_timestamp};
+    use crate::git::GitCli;
 
     #[test]
     fn parses_svn_rfc3339_date_with_fractional_seconds() {
@@ -1048,6 +1053,21 @@ mod timestamp_tests {
     fn rejects_missing_or_invalid_svn_dates() {
         assert!(svn_git_timestamp("", false).is_err());
         assert!(svn_git_timestamp("not-a-date", false).is_err());
+    }
+
+    #[test]
+    fn missing_rev_map_reports_zero_without_creating_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let path = rev_map_path(&git, "refs/remotes/git-svn", "uuid").unwrap();
+
+        assert_eq!(
+            max_imported_revision(&git, "refs/remotes/git-svn", "uuid").unwrap(),
+            0
+        );
+        assert!(!path.exists());
+        assert!(!path.parent().unwrap().exists());
     }
 }
 
