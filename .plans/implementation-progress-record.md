@@ -2,8 +2,8 @@
 
 Last audited: 2026-07-20
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `8876d0f0 fix: preserve svn log passthrough output`
-Latest implementation commit: `8876d0f0 fix: preserve svn log passthrough output`
+Committed HEAD at audit: `0e8d795 fix: gate libsvn test accessors on linkage`
+Latest implementation commit: `0e8d795 fix: gate libsvn test accessors on linkage`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -28,7 +28,7 @@ The repository is a substantial preview implementation with useful local fixture
 | 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, locks/fsync/reset, gitfile discovery | read/create split, transaction/recovery, ambiguity, real migration |
 | 4 SVN adapters | `in-progress` | CLI/libsvn share the RA editor contract; native update/switch/checksums/errors | auth profiles, binary properties, broader remote validation |
 | 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay | windowing/parent fetch, atomic publication, remaining Fetcher semantics |
-| 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata limits, recoverable reset, and SVN-style Log identity/date/range/passthrough output | broader rebase behavior and external exactness |
+| 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata limits, recoverable reset, SVN-style Log output, and current-parent rebase fetch | merge/strategy compatibility, conservative gc, and external exactness |
 | 7 dcommit | `in-progress` | production working-copy sink runs through the durable coordinator with clean preflight, in-flight markers, and plan-projected tree checks | explicit manual reconciliation for ambiguous submissions and remote profiles |
 | 8 golden/release | `structural-pass` | exact refs/graph/rev_map and clone-state artifacts | strict Perl execution and remaining command-output parity |
 
@@ -55,14 +55,15 @@ The repository is a substantial preview implementation with useful local fixture
 
 ### Readonly preview
 
-- Common flows exist for `find-rev`, `info`, `log` modes/ranges/pathspecs, `gc`, `reset`, and `rebase --dry-run` on supported metadata layouts.
+- Common flows exist for `find-rev`, `info`, `log` modes/ranges/pathspecs, `gc`, `reset`, and rebase on supported metadata layouts.
 - `find-rev` resolves revision queries through the current or explicit tree-ish identity and commit queries through the commit identity, reading only that rev_map. Same-numbered revisions on other refs are not flattened into the result; explicit invalid or ambiguous tree-ish scopes fail.
 - `noMetadata` remains a one-shot import mode: initial import and rev_map-backed `find-rev`/`info` work, while later fetch/rebase, log, and dcommit fail before ref/rev_map or SVN mutation.
 - Reset serializes with dcommit, rejects active write journals, persists the expected old/new ref identity and rev_map target, moves the ref with expected-old CAS, and recovers crashes before or after the ref update. Other resolver-backed commands fail closed while a reset journal is pending.
 - Log derives the frozen SVN author from an unambiguous authors-file reverse mapping or email login fallback, formats author epochs in the local SVN date shape, preserves message whitespace, and skips leading blank lines in oneline mode.
 - Log follows requested numeric range direction, emits revision-first `--oneline --show-commit`, and pads lower-width oneline revisions to the first displayed revision width.
 - Log record framing preserves per-commit `--stat`, `--raw`, and patch passthrough blocks without contaminating the next commit identity.
-- The remaining readonly flows are not yet fully compatible because broader rebase behavior and strict external comparison remain incomplete.
+- Rebase resolves the current first-parent SVN identity before fetch, carries runtime fetch/auth options to that identity only, rejects dirty worktrees before mutation, and leaves unrelated concrete mappings unchanged.
+- The remaining readonly flows are not yet fully compatible because merge/strategy behavior, conservative gc cleanup, and strict external comparison remain incomplete.
 
 ### Local write preview
 
@@ -98,7 +99,7 @@ The repository is a substantial preview implementation with useful local fixture
 - Working-copy production dcommit preserves full messages and executes `DcommitPlanBuilder`/`SvnCommitEditor` through the recovery coordinator. Exact plan-projected tree verification accounts for SVN properties/keywords and `.gitattributes` mappings that intentionally differ from the original local commit.
 - Dcommit target selection uses the nearest first-parent rev_map identity with footer URL/UUID/revision validation; local merge ranges and dirty pre-submit worktrees are rejected. Broader commit-URL intent/auth profile validation remains incomplete.
 - The `Ready -> submit -> Submitted` persistence gap is now fail-closed through a durable pre-submit in-flight marker. Automatic resubmission is prohibited when the outcome is unknown; an explicit, evidence-based manual reconciliation/adoption path remains to be defined.
-- Broader rebase behavior remains incomplete after Log range/passthrough formatting, scoped `find-rev`, explicit noMetadata limitations, and reset transaction recovery were implemented.
+- Rebase now fetches only the current first-parent tracking identity and fails before mutation on dirty worktrees; merge/strategy exactness and broader external comparison remain incomplete.
 - Fetch-time authors/filters/localtime/metadata/empty-dir options overlay persisted config; identity-changing overrides are rejected after import. `log-window-size` and `fetch --parent` now fail explicitly until implemented.
 - Strict fetch revision forms (`N`, `N:M`, `HEAD`, `BASE:N`, `N:HEAD`, `BASE:HEAD`) are implemented; BASE uses the slowest configured mapping for the selected remote/UUID.
 - Fetcher still lacks binary-property transport, complete persistent-placeholder/follow-parent behavior, and recoverable multi-artifact publication.
@@ -156,6 +157,7 @@ Current linked evidence from 2026-07-13 supersedes the callback-race result abov
 - On 2026-07-16 the production coordinator and projected-tree slices pass coordinator 9/9, disk restart 4/4, dcommit unit 4/4, tree projection 5/5, Git cleanliness 1/1, and the real dcommit CLI matrix 43/43. The real file-SVN recovery regression proves a submitted revision survives post-fetch failure and resumes without a duplicate SVN commit; the in-flight disk restart regression proves an unknown outcome is never resubmitted.
 - On 2026-07-17 `cargo test --workspace` passes in about 556.5 seconds after scoped find-rev, noMetadata limits, and reset transactions: real clone/fetch 23/23, dcommit 43/43, readonly 42/42, core library 65, golden 25/25, and reset recovery 3/3. Workspace clippy with `-D warnings`, formatting, and `git diff --check` also pass.
 - On 2026-07-20 frozen Log author/date/message alignment passes core library 68/68, formatter 9/9, readonly 42/42, and golden 26/26. `cargo test --workspace` passes in about 878.3 seconds; workspace clippy with `-D warnings`, formatting, and `git diff --check` pass.
+- On 2026-07-20 current-parent rebase fetch and clean-worktree preflight pass focused core/import/CLI tests. A full `cargo test --workspace` rerun passes in about 951 seconds: real clone/fetch 23/23, dcommit 43/43, readonly 47/47, core library 68/68, import mock 9/9, formatter 11/11, and golden 26/26. All-target/all-feature clippy, formatting, diff checks, and the `svn-libsvn` backend integration suite 33/33 pass after linkage-scoping test-only accessors.
 
 Previously recorded passing commands remain useful developer evidence, but the audit results above take precedence for current gate status.
 
@@ -188,6 +190,8 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `f97c729`: frozen SVN log author/date/message formatting and structured golden comparison.
 - `293fb4c`: frozen log range direction, revision-first show-commit, and oneline width padding.
 - `8876d0f0`: record-safe stat/raw/patch passthrough output for offline SVN log.
+- `4858009`: current first-parent rebase resolution, selective fetch/import, clean-worktree preflight, and multi-ref state-isolation regressions.
+- `0e8d795`: link-state-aware libsvn test accessors restoring the all-feature clippy gate.
 
 ### Golden harness
 
@@ -203,19 +207,13 @@ Previously recorded passing commands remain useful developer evidence, but the a
 
 ## Corrected Next Steps
 
-Do not continue protocol breadth or additional callback coverage before these steps:
+Continue in this order unless new verification changes priority:
 
-1. Phase 2/5: implement canonical URL/session/mapping paths and add the failing single-subdirectory fixture.
-2. Phase 5/8: import real SVN timestamps/timezones and compare exact graph identity.
-3. Phase 5/8: implement default clone branch/HEAD/worktree and `--no-checkout` behavior.
-4. Phase 1/2/5: complete revision forms and make every inert option implemented or explicitly rejected.
-5. Phase 3/7: replace dcommit target resolution with first-parent validated identity before any further write support.
-6. Phase 8: replace weak object/clone normalizers and provision non-skippable Perl compatibility CI.
-7. Phase 7: make all production sinks execute one `DcommitPlan` and add partial-success resume.
-8. Phase 6/3: finish scoped readonly resolution and migration policy.
-9. Phase 4/5: define binary-property transport, finish persistent-placeholder/follow-parent behavior, and validate HTTP(S)/svn+ssh profiles.
-
-The first four corrected P0 items were completed on 2026-07-12; preserve their regression tests while continuing with exact golden identity and dcommit preflight.
+1. Phase 6/3: make `gc` lock cleanup conservative and finish migration policy.
+2. Phase 7: define explicit manual reconciliation/adoption for ambiguous submissions.
+3. Phase 5: make ref/rev_map publication recoverable and finish persistent-placeholder/follow-parent behavior.
+4. Phase 8: provision non-skippable frozen Perl compatibility CI and close remaining output parity gaps.
+5. Phase 4/5/7: define binary-property transport and validate HTTP(S)/svn+ssh read/write authentication profiles.
 
 ## Handoff Notes
 
