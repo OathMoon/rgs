@@ -48,6 +48,7 @@ fn resolve_tracked_svn_impl(
     treeish: &str,
     require_history_identity: bool,
 ) -> Result<TrackedSvn, String> {
+    crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
     reset_transaction::ensure_no_pending(&git)?;
     let config = read_remote_config(&git, "svn")?;

@@ -1190,6 +1190,31 @@ fn gc_preserves_unverifiable_legacy_rev_map_lock_files() {
 }
 
 #[test]
+fn gc_rejects_mixed_legacy_metadata_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    let svn = work.join(".git/svn/git-svn");
+    std::fs::create_dir_all(&svn).unwrap();
+    let rev_db = svn.join(".rev_db.uuid");
+    let rev_map = svn.join(".rev_map.uuid");
+    std::fs::write(&rev_db, b"legacy").unwrap();
+    std::fs::write(&rev_map, b"current").unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .arg("gc")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "ambiguous mixed legacy and v5 git-svn metadata",
+        ));
+
+    assert_eq!(std::fs::read(rev_db).unwrap(), b"legacy");
+    assert_eq!(std::fs::read(rev_map).unwrap(), b"current");
+}
+
+#[test]
 fn gc_compresses_unhandled_log_and_removes_index_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

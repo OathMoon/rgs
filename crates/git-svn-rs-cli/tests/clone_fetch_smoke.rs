@@ -1,4 +1,29 @@
 use assert_cmd::Command;
+use predicates::prelude::*;
+
+#[test]
+fn fetch_rejects_legacy_rev_db_without_creating_rev_map() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    let svn = work.join(".git/svn/git-svn");
+    std::fs::create_dir_all(&svn).unwrap();
+    let rev_db = svn.join(".rev_db.uuid");
+    let rev_map = svn.join(".rev_map.uuid");
+    std::fs::write(&rev_db, b"legacy").unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .arg("fetch")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "legacy git-svn rev_db metadata requires migration",
+        ));
+
+    assert_eq!(std::fs::read(rev_db).unwrap(), b"legacy");
+    assert!(!rev_map.exists());
+}
 
 #[test]
 fn clone_uses_mock_import_shell_for_mock_urls() {

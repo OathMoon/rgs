@@ -14,7 +14,9 @@ pub fn run(_args: GcArgs) -> Result<(), String> {
 }
 
 pub fn run_in_work_tree(work_tree: impl Into<std::path::PathBuf>) -> Result<(), String> {
-    let git = GitCli::new(work_tree.into());
+    let work_tree = work_tree.into();
+    crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
+    let git = GitCli::new(work_tree);
     let git_dir = git.git_dir()?;
     let svn_dir = git.work_tree().join(git_dir).join("svn");
     if !svn_dir.exists() {
