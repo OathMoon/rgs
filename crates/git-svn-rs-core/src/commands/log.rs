@@ -39,8 +39,7 @@ pub fn run_in_work_tree(
     );
     let verbose_path_prefix = verbose_path_prefix(&tracked.svn_path, &tracked.config.url);
     let authors = load_authors(&tracked)?;
-    let mut out = String::new();
-    let mut included = 0_u32;
+    let mut entries = Vec::new();
     for record in raw.split('\x1e') {
         let record = record.trim_matches('\n');
         if record.is_empty() {
@@ -59,7 +58,10 @@ pub fn run_in_work_tree(
         {
             continue;
         }
-        if args.limit.is_some_and(|limit| included >= limit) {
+        if args
+            .limit
+            .is_some_and(|limit| entries.len() >= limit as usize)
+        {
             break;
         }
         let changed_paths = if args.verbose {
@@ -72,20 +74,36 @@ pub fn run_in_work_tree(
         } else {
             Vec::new()
         };
-        out.push_str(&formatter.format_entry(&GitSvnLogEntry {
+        entries.push(GitSvnLogEntry {
             revision: id.revision,
             author: svn_author(authors.as_ref(), fields[1], fields[2]),
             date: format_svn_date(fields[3])?,
             message,
             commit: fields[0].to_string(),
             changed_paths,
-        }));
-        included += 1;
+        });
     }
-    if included > 0 && !args.oneline && !args.incremental {
+    if revision_filter
+        .as_ref()
+        .is_some_and(|filter| filter.ascending)
+    {
+        entries.reverse();
+    }
+    let revision_width = args
+        .oneline
+        .then(|| entries.first().map_or(0, |entry| digits(entry.revision)));
+    let mut out = String::new();
+    for entry in &entries {
+        out.push_str(&formatter.format_entry_with_revision_width(entry, revision_width));
+    }
+    if !entries.is_empty() && !args.oneline && !args.incremental {
         out.push_str("------------------------------------------------------------------------\n");
     }
     Ok(out)
+}
+
+fn digits(revision: u32) -> usize {
+    revision.checked_ilog10().unwrap_or(0) as usize + 1
 }
 
 fn load_authors(
@@ -191,6 +209,7 @@ fn line_ending_start_before(message: &str, end: usize) -> Option<usize> {
 struct RevisionFilter {
     start: Option<u32>,
     end: Option<u32>,
+    ascending: bool,
 }
 
 impl RevisionFilter {
@@ -210,15 +229,21 @@ fn parse_revision_filter(value: &str) -> Result<RevisionFilter, String> {
             return Ok(RevisionFilter {
                 start: Some(end),
                 end: Some(start),
+                ascending: false,
             });
         }
-        return Ok(RevisionFilter { start, end });
+        return Ok(RevisionFilter {
+            start,
+            end,
+            ascending: matches!((start, end), (Some(start), Some(end)) if start < end),
+        });
     }
 
     let revision = parse_revision(value)?;
     Ok(RevisionFilter {
         start: Some(revision),
         end: Some(revision),
+        ascending: false,
     })
 }
 

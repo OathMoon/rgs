@@ -656,7 +656,7 @@ fn log_oneline_show_commit_prints_git_commit_prefix() {
         .args(["log", "--oneline", "--show-commit"])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^[0-9a-f]{40} \\| r2 \\| add trunk file\n$").unwrap());
+        .stdout(predicate::str::is_match("^r2 \\| [0-9a-f]{40} \\| add trunk file\n$").unwrap());
 }
 
 #[test]
@@ -877,9 +877,7 @@ fn log_revision_range_filters_to_requested_svn_revisions() {
         .args(["log", "--revision", "1:2", "--oneline"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("r1 | first"))
-        .stdout(predicate::str::contains("r2 | second"))
-        .stdout(predicate::str::contains("r3 | third").not());
+        .stdout("r1 | first\nr2 | second\n");
 }
 
 #[test]
@@ -914,9 +912,7 @@ fn log_revision_reverse_range_filters_to_requested_svn_revisions() {
         .args(["log", "--revision", "3:1", "--oneline"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("r3 | third"))
-        .stdout(predicate::str::contains("r2 | second"))
-        .stdout(predicate::str::contains("r1 | first"));
+        .stdout("r3 | third\nr2 | second\nr1 | first\n");
 }
 
 #[test]
@@ -1057,6 +1053,35 @@ fn log_limit_orders_latest_svn_revisions_newest_first() {
         .assert()
         .success()
         .stdout("r3 | third\nr2 | second\n");
+}
+
+#[test]
+fn log_oneline_pads_revisions_to_the_first_displayed_width() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev9 = commit_file(
+        work,
+        "nine.txt",
+        "nine\n",
+        "nine\n\ngit-svn-id: mock://repo@9 mock-uuid",
+    );
+    let rev10 = commit_file(
+        work,
+        "ten.txt",
+        "ten\n",
+        "ten\n\ngit-svn-id: mock://repo@10 mock-uuid",
+    );
+    write_rev_map_for_short_ref(work, "git-svn", &[(9, &rev9), (10, &rev10)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev10]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--oneline"])
+        .assert()
+        .success()
+        .stdout("r10 | ten\nr9  | nine\n");
 }
 
 #[test]

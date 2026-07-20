@@ -1651,11 +1651,13 @@ fn normalize_oneline_show_commit_log(output: &str) -> String {
             if parts.len() < 3 {
                 return None;
             }
-            let revision_index = parts.iter().position(|part| part.trim().starts_with('r'))?;
-            let commit = parts.first()?.trim();
-            let revision = parts.get(revision_index)?.trim();
-            let subject = parts.get(revision_index + 1)?.trim();
-            Some(format!("{commit} | {revision} | {subject}"))
+            let revision = parts.first()?.trim();
+            if !revision.starts_with('r') {
+                return None;
+            }
+            let commit = parts.get(1)?.trim();
+            let subject = parts.get(2)?.trim();
+            Some(format!("{revision} | {commit} | {subject}"))
         })
         .collect::<Vec<_>>()
         .join("\n")

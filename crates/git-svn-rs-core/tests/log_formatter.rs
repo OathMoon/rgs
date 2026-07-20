@@ -69,7 +69,24 @@ fn oneline_log_entry_can_show_commit() {
 
     let rendered = GitSvnLogFormatter::new(true, true, false).format_entry(&entry);
 
-    assert_eq!(rendered, "abc123def456 | r14 | show commit\n");
+    assert_eq!(rendered, "r14 | abc123def456 | show commit\n");
+}
+
+#[test]
+fn oneline_revision_is_right_padded_to_the_first_entry_width() {
+    let entry = GitSvnLogEntry {
+        revision: 9,
+        author: "alice".to_string(),
+        date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
+        message: "subject".to_string(),
+        commit: "0123456789abcdef".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    assert_eq!(
+        GitSvnLogFormatter::oneline().format_entry_with_revision_width(&entry, Some(2)),
+        "r9  | subject\n"
+    );
 }
 
 #[test]

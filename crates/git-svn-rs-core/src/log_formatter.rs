@@ -46,16 +46,27 @@ impl GitSvnLogFormatter {
     }
 
     pub fn format_entry(&self, entry: &GitSvnLogEntry) -> String {
+        self.format_entry_with_revision_width(entry, None)
+    }
+
+    pub fn format_entry_with_revision_width(
+        &self,
+        entry: &GitSvnLogEntry,
+        revision_width: Option<usize>,
+    ) -> String {
         if self.oneline {
+            let revision = match revision_width {
+                Some(width) => format!("{:<width$}", entry.revision),
+                None => entry.revision.to_string(),
+            };
             if self.show_commit {
                 return format!(
-                    "{} | r{} | {}\n",
+                    "r{revision} | {} | {}\n",
                     entry.commit,
-                    entry.revision,
                     first_line(&entry.message)
                 );
             }
-            return format!("r{} | {}\n", entry.revision, first_line(&entry.message));
+            return format!("r{revision} | {}\n", first_line(&entry.message));
         }
 
         let mut out = String::new();
