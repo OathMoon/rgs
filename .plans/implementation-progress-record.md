@@ -2,8 +2,8 @@
 
 Last audited: 2026-07-20
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `c14d9f7 fix: reject ambiguous rev-map identities`
-Latest implementation commit: `c14d9f7 fix: reject ambiguous rev-map identities`
+Committed HEAD at audit: `8405e79 fix: make import ref-map publication recoverable`
+Latest implementation commit: `8405e79 fix: make import ref-map publication recoverable`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -25,9 +25,9 @@ The repository is a substantial preview implementation with useful local fixture
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | workspace, CLI, shim, diagnose, unsupported commands | remaining inert options and global verbosity contract |
 | 2 config/mapping | `structural-pass` | basic config/glob/authors/filter/layout units, CLI subdirectory session paths | full layout URLs and metadata runtime semantics |
-| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, non-creating reads, managed OS locks/fsync/reset, gitfile discovery, explicit legacy and multi-UUID rejection | import transaction/recovery and remote/mapping ambiguity |
+| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, non-creating reads, managed OS locks/fsync/reset, gitfile discovery, explicit legacy/multi-UUID rejection, recoverable single-mapping publication | whole-batch import recovery and remote/mapping ambiguity |
 | 4 SVN adapters | `in-progress` | CLI/libsvn share the RA editor contract; native update/switch/checksums/errors | auth profiles, binary properties, broader remote validation |
-| 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay | windowing/parent fetch, atomic publication, remaining Fetcher semantics |
+| 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay, journaled ref/rev_map publication | whole-batch/unhandled-log recovery, windowing/parent fetch, remaining Fetcher semantics |
 | 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata/legacy limits, recoverable reset, conservative gc, SVN-style Log output, and current-parent rebase fetch | merge/strategy compatibility and external exactness |
 | 7 dcommit | `in-progress` | production working-copy sink runs through the durable coordinator with clean preflight, in-flight markers, and plan-projected tree checks | explicit manual reconciliation for ambiguous submissions and remote profiles |
 | 8 golden/release | `structural-pass` | exact refs/graph/rev_map and clone-state artifacts | strict Perl execution and remaining command-output parity |
@@ -54,6 +54,7 @@ The repository is a substantial preview implementation with useful local fixture
 - SVN CLI subdirectory sessions now separate repository-root content URLs from session-relative changed paths; real `file://.../trunk` clone coverage passes.
 - Import parses SVN RFC3339 dates (including fractional seconds), writes author/committer epoch and offset, and supports historical local offsets for `--localtime`.
 - Clone materializes the primary tracking ref into the initial local branch and worktree; `--no-checkout` resolves the branch without populating files.
+- Each imported mapping is first written to a unique internal staging ref, then published through a durable journal. Recovery accepts only the expected old or target ref identity, resumes a partially appended rev_map suffix idempotently, and retains the journal on concurrent ref movement or metadata mismatch. Successful imports remove both staging ref and journal.
 
 ### Readonly preview
 
@@ -105,8 +106,8 @@ The repository is a substantial preview implementation with useful local fixture
 - Rebase now fetches only the current first-parent tracking identity and fails before mutation on dirty worktrees; merge/strategy exactness and broader external comparison remain incomplete.
 - Fetch-time authors/filters/localtime/metadata/empty-dir options overlay persisted config; identity-changing overrides are rejected after import. `log-window-size` and `fetch --parent` now fail explicitly until implemented.
 - Strict fetch revision forms (`N`, `N:M`, `HEAD`, `BASE:N`, `N:HEAD`, `BASE:HEAD`) are implemented; BASE uses the slowest configured mapping for the selected remote/UUID.
-- Fetcher still lacks binary-property transport, complete persistent-placeholder/follow-parent behavior, and recoverable multi-artifact publication.
-- Ref/rev_map publication is not a complete recoverable transaction.
+- Fetcher still lacks binary-property transport and complete persistent-placeholder/follow-parent behavior.
+- Single-mapping ref/rev_map publication is recoverable, but `unhandled.log` and multiple mappings are not yet coordinated as one recoverable import batch.
 - Migration is inspection only.
 
 ## Capability Profile State
@@ -165,6 +166,7 @@ Current linked evidence from 2026-07-13 supersedes the callback-race result abov
 - On 2026-07-20 non-creating rev_map reads pass rev_map 11/11, import mock 9/9, readonly 47/47, and the full workspace in about 701 seconds, including dcommit 43/43. All-target/all-feature clippy, formatting, and diff checks pass; production `RevMap::open` calls are now confined to write coordination.
 - On 2026-07-20 explicit legacy-layout policy passes migration 8/8 plus process-level fetch/gc no-mutation regressions. `cargo test --workspace` passes in about 788 seconds: clone/fetch smoke 8/8, dcommit 43/43, readonly 48/48, and all remaining suites; all-target/all-feature clippy, formatting, and diff checks pass.
 - On 2026-07-20 multi-UUID rev_map ambiguity passes its process-level no-mutation regression and readonly 49/49; all-target/all-feature clippy, formatting, and diff checks pass on top of the immediately preceding full-workspace gate.
+- On 2026-07-20 import publication recovery passes 4/4 focused transaction tests, import mock 9/9, clone/fetch smoke 8/8, and `cargo test --workspace` in about 889.3 seconds. The workspace gate includes real clone/fetch 23/23, dcommit 43/43, readonly 49/49, golden 26/26, rev_map 11/11, and migration 8/8; all-target/all-feature clippy, formatting, and diff checks pass.
 
 Previously recorded passing commands remain useful developer evidence, but the audit results above take precedence for current gate status.
 
@@ -203,6 +205,8 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `c191e9b`: explicit non-creating rev_map reads across resolver, fetch, reset, dcommit verification, and copy-parent lookup.
 - `181e762`: actionable non-mutating v0-v5/rev_db/mixed-layout and empty svn-remote rejection policy.
 - `c14d9f7`: deterministic rev_map discovery and fail-closed multi-UUID identity ambiguity.
+- `4bf1ebb`, `0ee499e`: non-creating import inspection and compare-and-swap ref deletion prerequisites.
+- `8405e79`: staging-ref import plus durable, idempotent CAS ref/rev_map publication recovery.
 
 ### Golden harness
 
@@ -220,7 +224,7 @@ Previously recorded passing commands remain useful developer evidence, but the a
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 3/5: make import ref/rev_map publication recoverable and close remaining identity ambiguity.
+1. Phase 3/5: extend import recovery across `unhandled.log` and multi-mapping batches, then close remaining identity ambiguity.
 2. Phase 7: define explicit manual reconciliation/adoption for ambiguous submissions.
 3. Phase 5: finish persistent-placeholder/follow-parent behavior.
 4. Phase 8: provision non-skippable frozen Perl compatibility CI and close remaining output parity gaps.
@@ -246,3 +250,4 @@ Continue in this order unless new verification changes priority:
 - Frozen documentation defines noMetadata as one-shot and explicitly excludes log. Real initial import plus readonly 42/42 now prove footer-free import succeeds, later mutating operations fail before state changes, and rev_map-backed find-rev/info remain usable.
 - Reset now persists its old/new ref and rev_map target before CAS. Unit recovery covers crashes on either side of the ref update and rejects journal paths outside `.git/svn`; the full workspace passes with resolver-wide pending-reset guards.
 - Log now reads full Git author identity plus epoch, reverses configured authors-file identities when unique, emits the frozen local SVN date shape, preserves message boundaries, follows numeric range direction, pads oneline revisions, preserves stat/raw/patch blocks, and feeds author/date/count/message/path into golden comparison. Strict Perl execution is still unavailable, so external exactness is unproven.
+- Import no longer advances the final tracking ref directly from fast-import. Commit objects land on an internal staging ref, which is CAS-deleted before a durable journal publishes the final ref and exact rev_map suffix. Fetch resumes pending publication; resolver-backed readonly/write commands fail closed. This covers one mapping's ref/rev_map pair, not `unhandled.log` or a multi-mapping batch.
