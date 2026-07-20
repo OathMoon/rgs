@@ -1177,7 +1177,7 @@ fn log_passthrough_patch_and_raw_output_are_preserved() {
 }
 
 #[test]
-fn gc_removes_stale_rev_map_lock_files() {
+fn gc_preserves_unverifiable_legacy_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
     let lock = work.join(".git/svn/git-svn/.rev_map.mock-uuid.lock");
@@ -1186,7 +1186,7 @@ fn gc_removes_stale_rev_map_lock_files() {
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
     cmd.current_dir(&work).arg("gc").assert().success();
 
-    assert!(!lock.exists());
+    assert!(lock.exists());
 }
 
 #[test]

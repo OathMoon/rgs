@@ -2,6 +2,10 @@ use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
+use fs2::FileExt;
+
+pub(crate) const REV_MAP_LOCK_MARKER: &str = "git-svn-rs rev-map-lock v1\n";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ObjectFormat {
     Sha1,
@@ -218,15 +222,32 @@ impl RevMap {
 
 struct RevMapLock {
     path: PathBuf,
+    file: File,
 }
 
 impl RevMapLock {
     fn acquire(rev_map_path: &Path) -> Result<Self, String> {
         let path = lock_path(rev_map_path);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => {
-                file.sync_all().map_err(|e| e.to_string())?;
-                Ok(Self { path })
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                if let Err(error) = file
+                    .try_lock_exclusive()
+                    .and_then(|_| file.write_all(REV_MAP_LOCK_MARKER.as_bytes()))
+                    .and_then(|_| file.sync_all())
+                {
+                    drop(file);
+                    let _ = std::fs::remove_file(&path);
+                    return Err(format!(
+                        "failed to initialize rev_map lock {}: {error}",
+                        path.display()
+                    ));
+                }
+                Ok(Self { path, file })
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {
                 Err(format!("rev_map lock exists: {}", path.display()))
@@ -238,6 +259,7 @@ impl RevMapLock {
 
 impl Drop for RevMapLock {
     fn drop(&mut self) {
+        let _ = FileExt::unlock(&self.file);
         let _ = std::fs::remove_file(&self.path);
     }
 }
