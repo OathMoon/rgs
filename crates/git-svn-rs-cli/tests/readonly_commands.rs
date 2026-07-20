@@ -1115,6 +1115,68 @@ fn log_passes_pathspec_args_to_git_log() {
 }
 
 #[test]
+fn log_passthrough_stat_keeps_each_commit_and_its_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "two.txt",
+        "two\n",
+        "second\n\ngit-svn-id: mock://repo@2 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--stat"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("r2 |"))
+        .stdout(predicate::str::contains("two.txt | 1 +"))
+        .stdout(predicate::str::contains("r1 |"))
+        .stdout(predicate::str::contains("one.txt | 1 +"));
+}
+
+#[test]
+fn log_passthrough_patch_and_raw_output_are_preserved() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "-p"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("diff --git a/one.txt b/one.txt"));
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--raw"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("A\tone.txt"));
+}
+
+#[test]
 fn gc_removes_stale_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

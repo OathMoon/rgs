@@ -54,6 +54,15 @@ impl GitSvnLogFormatter {
         entry: &GitSvnLogEntry,
         revision_width: Option<usize>,
     ) -> String {
+        self.format_entry_with_git_output(entry, revision_width, "")
+    }
+
+    pub fn format_entry_with_git_output(
+        &self,
+        entry: &GitSvnLogEntry,
+        revision_width: Option<usize>,
+        git_output: &str,
+    ) -> String {
         if self.oneline {
             let revision = match revision_width {
                 Some(width) => format!("{:<width$}", entry.revision),
@@ -95,6 +104,12 @@ impl GitSvnLogFormatter {
         out.push('\n');
         out.push_str(&entry.message);
         if !entry.message.ends_with('\n') {
+            out.push('\n');
+        }
+        let git_output = git_output.trim_matches(['\r', '\n']);
+        if !git_output.is_empty() {
+            out.push('\n');
+            out.push_str(git_output);
             out.push('\n');
         }
         out

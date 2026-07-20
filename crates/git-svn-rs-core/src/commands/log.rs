@@ -41,10 +41,11 @@ pub fn run_in_work_tree(
     let authors = load_authors(&tracked)?;
     let mut entries = Vec::new();
     for record in raw.split('\x1e') {
-        let record = record.trim_matches('\n');
+        let record = record.trim_start_matches(['\r', '\n']);
         if record.is_empty() {
             continue;
         }
+        let (record, git_output) = record.split_once('\x1d').unwrap_or((record, ""));
         let fields = record.splitn(5, '\x1f').collect::<Vec<_>>();
         if fields.len() != 5 {
             continue;
@@ -74,14 +75,17 @@ pub fn run_in_work_tree(
         } else {
             Vec::new()
         };
-        entries.push(GitSvnLogEntry {
-            revision: id.revision,
-            author: svn_author(authors.as_ref(), fields[1], fields[2]),
-            date: format_svn_date(fields[3])?,
-            message,
-            commit: fields[0].to_string(),
-            changed_paths,
-        });
+        entries.push((
+            GitSvnLogEntry {
+                revision: id.revision,
+                author: svn_author(authors.as_ref(), fields[1], fields[2]),
+                date: format_svn_date(fields[3])?,
+                message,
+                commit: fields[0].to_string(),
+                changed_paths,
+            },
+            git_output.to_string(),
+        ));
     }
     if revision_filter
         .as_ref()
@@ -89,12 +93,14 @@ pub fn run_in_work_tree(
     {
         entries.reverse();
     }
-    let revision_width = args
-        .oneline
-        .then(|| entries.first().map_or(0, |entry| digits(entry.revision)));
+    let revision_width = args.oneline.then(|| {
+        entries
+            .first()
+            .map_or(0, |(entry, _)| digits(entry.revision))
+    });
     let mut out = String::new();
-    for entry in &entries {
-        out.push_str(&formatter.format_entry_with_revision_width(entry, revision_width));
+    for (entry, git_output) in &entries {
+        out.push_str(&formatter.format_entry_with_git_output(entry, revision_width, git_output));
     }
     if !entries.is_empty() && !args.oneline && !args.incremental {
         out.push_str("------------------------------------------------------------------------\n");

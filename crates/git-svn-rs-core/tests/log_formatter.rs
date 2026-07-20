@@ -193,3 +193,23 @@ fn preserves_trailing_message_whitespace_and_counts_a_trailing_blank_line() {
     let rendered = GitSvnLogFormatter::new(false, false, false).format_entry(&entry);
     assert!(rendered.contains(" | 2 lines\n\nsubject  \n"));
 }
+
+#[test]
+fn normal_log_preserves_passthrough_git_output_after_the_message() {
+    let entry = GitSvnLogEntry {
+        revision: 20,
+        author: "alice".to_string(),
+        date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
+        message: "subject".to_string(),
+        commit: "0123456789abcdef".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    let rendered = GitSvnLogFormatter::new(false, false, false).format_entry_with_git_output(
+        &entry,
+        None,
+        "\n file.txt | 1 +\n",
+    );
+
+    assert!(rendered.contains("\nsubject\n\n file.txt | 1 +\n"));
+}
