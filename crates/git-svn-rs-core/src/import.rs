@@ -11,13 +11,17 @@ use crate::filters::{FilterDecision, PathFilters};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::glob_spec::GlobSpec;
+use crate::import_transaction::{ImportPublication, complete as complete_import_publication};
 use crate::mapping::RefMapping;
-use crate::rev_map::RevMap;
+use crate::rev_map::{RevMap, RevMapRecord};
 use crate::svn::editor::FetchEditor;
 use crate::svn::ra::{RaSession, UpdateRequest};
 use crate::svn::{ChangeAction, NodeKind, RevisionEvent, SvnBackend};
 use chrono::{DateTime, Local};
 use fancy_regex::Regex;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+static IMPORT_STAGING_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ImportOptions {
@@ -46,6 +50,7 @@ pub fn import_mock_revisions_for_ref(
     options: ImportOptions,
     selected_ref: Option<&str>,
 ) -> Result<ImportSummary, String> {
+    crate::import_transaction::recover_pending(git)?;
     let end = options.end_revision.unwrap_or(backend.latest_revnum()?);
     if options.start_revision > end {
         return Ok(ImportSummary {
@@ -101,6 +106,7 @@ pub fn import_ra_revisions_for_ref(
     options: ImportOptions,
     selected_ref: Option<&str>,
 ) -> Result<ImportSummary, String> {
+    crate::import_transaction::recover_pending(git)?;
     let end = options.end_revision.unwrap_or(session.latest_revnum()?);
     if options.start_revision > end {
         return Ok(ImportSummary {
@@ -162,6 +168,7 @@ fn import_revisions_for_mapping(
         .ok()
         .map(|commit| commit.trim().to_string());
     let authors = author_mapper(config)?;
+    let staging_ref = next_import_staging_ref();
 
     for revision in revisions {
         if revision.revision <= max_imported_revision {
@@ -185,7 +192,7 @@ fn import_revisions_for_mapping(
         let timestamp = svn_git_timestamp(&revision.timestamp, config.localtime)?;
         stream = stream.commit(&FastImportCommit {
             mark: imported_revisions.len() as u32,
-            refname: mapping.git_ref.clone(),
+            refname: staging_ref.clone(),
             author: author_ident(&revision.author, Some(&authors))?,
             committer: author_ident(&revision.author, Some(&authors))?,
             timestamp: timestamp.seconds,
@@ -203,7 +210,14 @@ fn import_revisions_for_mapping(
     }
 
     git.fast_import(&stream.finish())?;
-    write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
+    publish_imported_revisions(
+        git,
+        &mapping.git_ref,
+        uuid,
+        existing_parent_ref.as_deref(),
+        &staging_ref,
+        &imported_revisions,
+    )?;
 
     Ok(ImportSummary { imported_revisions })
 }
@@ -227,6 +241,7 @@ fn import_ra_revisions_for_mapping(
         .ok()
         .map(|commit| commit.trim().to_string());
     let authors = author_mapper(config)?;
+    let staging_ref = next_import_staging_ref();
 
     for revision in revisions {
         if revision.revision <= max_imported_revision {
@@ -250,7 +265,7 @@ fn import_ra_revisions_for_mapping(
         let timestamp = svn_git_timestamp(&revision.timestamp, config.localtime)?;
         let plan = FetchCommitPlan {
             mark: imported_revisions.len() as u32 + 1,
-            refname: mapping.git_ref.clone(),
+            refname: staging_ref.clone(),
             author: author_ident(&revision.author, Some(&authors))?,
             committer: author_ident(&revision.author, Some(&authors))?,
             timestamp: timestamp.seconds,
@@ -307,7 +322,14 @@ fn import_ra_revisions_for_mapping(
     }
 
     git.fast_import(&stream.finish())?;
-    write_rev_map(git, &mapping.git_ref, uuid, &imported_revisions)?;
+    publish_imported_revisions(
+        git,
+        &mapping.git_ref,
+        uuid,
+        existing_parent_ref.as_deref(),
+        &staging_ref,
+        &imported_revisions,
+    )?;
     append_unhandled_log(git, &mapping.git_ref, &unhandled_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
@@ -1071,26 +1093,64 @@ mod timestamp_tests {
     }
 }
 
-fn write_rev_map(git: &GitCli, refname: &str, uuid: &str, revisions: &[u32]) -> Result<(), String> {
-    let commits = git.run_for_test(["rev-list", "--reverse", refname])?;
-    let object_ids = commits
-        .lines()
-        .rev()
-        .take(revisions.len())
-        .collect::<Vec<_>>()
+fn next_import_staging_ref() -> String {
+    let sequence = IMPORT_STAGING_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+    format!("refs/git-svn-rs/import/{}-{sequence}", std::process::id())
+}
+
+fn publish_imported_revisions(
+    git: &GitCli,
+    refname: &str,
+    uuid: &str,
+    expected_old_oid: Option<&str>,
+    staging_ref: &str,
+    revisions: &[u32],
+) -> Result<(), String> {
+    let history = git.first_parent_history(staging_ref)?;
+    if history.len() < revisions.len() {
+        return Err("import staging ref does not contain every imported revision".to_string());
+    }
+    if let Some(expected_old_oid) = expected_old_oid
+        && history.get(revisions.len()).map(String::as_str) != Some(expected_old_oid)
+    {
+        return Err(
+            "import staging history does not descend from the expected ref tip".to_string(),
+        );
+    }
+    let mut object_ids = history
         .into_iter()
-        .rev()
+        .take(revisions.len())
         .collect::<Vec<_>>();
-
-    if object_ids.len() != revisions.len() {
-        return Err("git rev-list did not return imported commits".to_string());
-    }
-
-    let mut rev_map = RevMap::open(rev_map_path(git, refname, uuid)?, git.object_format()?)?;
-    for (revision, object_id) in revisions.iter().zip(object_ids) {
-        rev_map.append(*revision, object_id)?;
-    }
-    Ok(())
+    object_ids.reverse();
+    let records = revisions
+        .iter()
+        .copied()
+        .zip(object_ids)
+        .map(|(revision, object_id_hex)| RevMapRecord {
+            revision,
+            object_id_hex,
+        })
+        .collect::<Vec<_>>();
+    let target_oid = records
+        .last()
+        .ok_or_else(|| "import publication has no records".to_string())?
+        .object_id_hex
+        .clone();
+    git.delete_ref_expected(staging_ref, &target_oid)?;
+    let object_format = git.object_format()?;
+    let expected_old_oid = expected_old_oid
+        .map(str::to_string)
+        .unwrap_or_else(|| "0".repeat(object_format.hex_len()));
+    complete_import_publication(
+        git,
+        ImportPublication {
+            refname: refname.to_string(),
+            expected_old_oid,
+            target_oid,
+            rev_map_path: rev_map_path(git, refname, uuid)?,
+            records,
+        },
+    )
 }
 
 fn rev_map_path(git: &GitCli, refname: &str, uuid: &str) -> Result<PathBuf, String> {

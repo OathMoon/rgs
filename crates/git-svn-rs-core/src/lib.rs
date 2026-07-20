@@ -12,6 +12,7 @@ pub mod git;
 pub mod git_svn_id;
 pub mod glob_spec;
 pub mod import;
+pub mod import_transaction;
 pub mod log_formatter;
 pub mod mapping;
 pub mod metadata;

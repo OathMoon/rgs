@@ -24,6 +24,7 @@ pub fn run_in_work_tree(
     let work_tree = work_tree.into();
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
+    crate::import_transaction::recover_pending(&git)?;
     let remotes = if args.fetch_all {
         svn_remote_names(&git)?
     } else {
@@ -50,6 +51,7 @@ pub(crate) fn run_for_tracking_identity(
     let work_tree = work_tree.into();
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
+    crate::import_transaction::recover_pending(&git)?;
     fetch_config(&git, config, shared, Some(refname))
 }
 

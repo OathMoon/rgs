@@ -53,6 +53,8 @@ fn imports_mock_revisions_into_git_and_rev_map() {
     .unwrap();
     assert!(rev_map.get(1).unwrap().is_some());
     assert!(rev_map.get(2).unwrap().is_some());
+    assert!(git.refs_under("refs/git-svn-rs/import").unwrap().is_empty());
+    assert!(!dir.path().join(".git/svn/import-journal").exists());
 }
 
 #[test]

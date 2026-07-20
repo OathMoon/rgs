@@ -50,6 +50,7 @@ fn resolve_tracked_svn_impl(
 ) -> Result<TrackedSvn, String> {
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
+    crate::import_transaction::ensure_no_pending(&git)?;
     reset_transaction::ensure_no_pending(&git)?;
     let config = read_remote_config(&git, "svn")?;
     let first_mapping = config
