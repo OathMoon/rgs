@@ -82,8 +82,10 @@ impl GitSvnLogFormatter {
             }
         }
         out.push('\n');
-        out.push_str(entry.message.trim_end());
-        out.push('\n');
+        out.push_str(&entry.message);
+        if !entry.message.ends_with('\n') {
+            out.push('\n');
+        }
         out
     }
 }
@@ -95,9 +97,12 @@ impl Default for GitSvnLogFormatter {
 }
 
 fn first_line(message: &str) -> &str {
-    message.lines().next().unwrap_or_default()
+    message
+        .lines()
+        .find(|line| !line.trim().is_empty())
+        .unwrap_or_default()
 }
 
 fn line_count(message: &str) -> usize {
-    message.lines().count().max(1)
+    message.split('\n').count().max(1)
 }

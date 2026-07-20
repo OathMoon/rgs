@@ -144,3 +144,35 @@ fn counts_internal_blank_lines_and_empty_messages() {
             .contains("r16 | frank | 2026-01-06T00:00:00Z | 1 line\n")
     );
 }
+
+#[test]
+fn oneline_skips_leading_blank_lines_like_frozen_log_pm() {
+    let entry = GitSvnLogEntry {
+        revision: 18,
+        author: "alice".to_string(),
+        date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
+        message: "\n\nsubject\nbody".to_string(),
+        commit: "0123456789abcdef".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    assert_eq!(
+        GitSvnLogFormatter::oneline().format_entry(&entry),
+        "r18 | subject\n"
+    );
+}
+
+#[test]
+fn preserves_trailing_message_whitespace_and_counts_a_trailing_blank_line() {
+    let entry = GitSvnLogEntry {
+        revision: 19,
+        author: "alice".to_string(),
+        date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
+        message: "subject  \n".to_string(),
+        commit: "0123456789abcdef".to_string(),
+        changed_paths: Vec::new(),
+    };
+
+    let rendered = GitSvnLogFormatter::new(false, false, false).format_entry(&entry);
+    assert!(rendered.contains(" | 2 lines\n\nsubject  \n"));
+}

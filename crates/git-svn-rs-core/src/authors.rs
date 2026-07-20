@@ -15,6 +15,14 @@ impl AuthorResolver {
     pub fn resolve(&self, login: &str) -> Option<&Author> {
         self.by_login.get(login)
     }
+
+    pub fn reverse_resolve(&self, name: &str, email: &str) -> Option<&str> {
+        let mut matches = self.by_login.iter().filter_map(|(login, author)| {
+            (author.name == name && author.email == email).then_some(login.as_str())
+        });
+        let login = matches.next()?;
+        matches.next().is_none().then_some(login)
+    }
 }
 
 pub fn parse_authors_file(input: &str) -> Result<AuthorResolver, String> {
@@ -48,4 +56,28 @@ pub fn parse_authors_file(input: &str) -> Result<AuthorResolver, String> {
         );
     }
     Ok(resolver)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_authors_file;
+
+    #[test]
+    fn reverse_resolution_requires_an_unambiguous_identity() {
+        let resolver = parse_authors_file(
+            "alice = Alice Example <alice@example.com>\n\
+             duplicate = Alice Example <alice@example.com>\n\
+             bob = Bob Example <bob@example.com>\n",
+        )
+        .unwrap();
+
+        assert_eq!(
+            resolver.reverse_resolve("Bob Example", "bob@example.com"),
+            Some("bob")
+        );
+        assert_eq!(
+            resolver.reverse_resolve("Alice Example", "alice@example.com"),
+            None
+        );
+    }
 }

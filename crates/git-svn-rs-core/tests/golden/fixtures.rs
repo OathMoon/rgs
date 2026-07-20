@@ -1684,20 +1684,12 @@ fn normalize_incremental_log(output: &str) -> String {
     output
         .lines()
         .filter_map(|line| {
-            if line.starts_with("r") && line.contains(" | ") {
-                let parts = line.split(" | ").collect::<Vec<_>>();
-                parts
-                    .first()
-                    .map(|revision| format!("revision {}", revision.trim()))
-            } else if let Some(subject) = line.strip_prefix("  ") {
-                let subject = subject.trim();
-                if subject.is_empty() {
-                    None
-                } else {
-                    Some(format!("subject {subject}"))
-                }
-            } else {
+            if let Some(header) = normalize_log_header(line) {
+                Some(header)
+            } else if line.is_empty() || line == "Changed paths:" {
                 None
+            } else {
+                Some(format!("message {line}"))
             }
         })
         .collect::<Vec<_>>()
@@ -1708,27 +1700,38 @@ fn normalize_verbose_log(output: &str) -> String {
     output
         .lines()
         .filter_map(|line| {
-            if line.starts_with("r") && line.contains(" | ") {
-                let revision = line.split(" | ").next()?.trim();
-                Some(format!("revision {revision}"))
+            if let Some(header) = normalize_log_header(line) {
+                Some(header)
+            } else if line.is_empty()
+                || line == "Changed paths:"
+                || line
+                    == "------------------------------------------------------------------------"
+            {
+                None
             } else if let Some((action, path)) = parse_changed_path_line(line) {
                 Some(format!("path {action} {path}"))
-            } else if let Some(subject) = line.strip_prefix("  ") {
-                let subject = subject.trim();
-                if subject.is_empty()
-                    || subject == "Changed paths:"
-                    || subject.starts_with("commit ")
-                {
-                    None
-                } else {
-                    Some(format!("subject {subject}"))
-                }
             } else {
-                None
+                Some(format!("message {line}"))
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+fn normalize_log_header(line: &str) -> Option<String> {
+    let parts = line.split(" | ").map(str::trim).collect::<Vec<_>>();
+    if parts.len() != 4
+        || !parts[0]
+            .strip_prefix('r')
+            .is_some_and(|revision| revision.chars().all(|ch| ch.is_ascii_digit()))
+        || !parts[3].ends_with(" line") && !parts[3].ends_with(" lines")
+    {
+        return None;
+    }
+    Some(format!(
+        "revision {}\nauthor {}\ndate {}\ncount {}",
+        parts[0], parts[1], parts[2], parts[3]
+    ))
 }
 
 fn parse_changed_path_line(line: &str) -> Option<(String, String)> {
@@ -2347,6 +2350,25 @@ mod tests {
                 reason: "git svn resolved to git-svn-rs shim, not Perl git-svn: git-svn-rs 0.1.0"
                     .to_string()
             }
+        );
+    }
+
+    #[test]
+    fn structured_log_normalizers_retain_identity_date_count_and_message() {
+        let header = "r2 | alice | 2026-01-01 08:00:00 +0800 (Thu, 01 Jan 2026) | 2 lines";
+        let incremental = format!("{header}\n\nsubject\nbody\n");
+        let verbose = format!(
+            "------------------------------------------------------------------------\n{header}\nChanged paths:\n   M /trunk/src/lib.rs\n\nsubject\nbody\n------------------------------------------------------------------------\n"
+        );
+        let expected_header = "revision r2\nauthor alice\ndate 2026-01-01 08:00:00 +0800 (Thu, 01 Jan 2026)\ncount 2 lines";
+
+        assert_eq!(
+            normalize_incremental_log(&incremental),
+            format!("{expected_header}\nmessage subject\nmessage body")
+        );
+        assert_eq!(
+            normalize_verbose_log(&verbose),
+            format!("{expected_header}\npath M src/lib.rs\nmessage subject\nmessage body")
         );
     }
 

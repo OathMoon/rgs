@@ -1,3 +1,6 @@
+use chrono::{Local, TimeZone};
+
+use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::cli::LogArgs;
 use crate::commands::resolver::resolve_tracked_svn;
 use crate::git_svn_id::GitSvnId;
@@ -35,6 +38,7 @@ pub fn run_in_work_tree(
         args.incremental,
     );
     let verbose_path_prefix = verbose_path_prefix(&tracked.svn_path, &tracked.config.url);
+    let authors = load_authors(&tracked)?;
     let mut out = String::new();
     let mut included = 0_u32;
     for record in raw.split('\x1e') {
@@ -42,11 +46,11 @@ pub fn run_in_work_tree(
         if record.is_empty() {
             continue;
         }
-        let fields = record.splitn(4, '\x1f').collect::<Vec<_>>();
-        if fields.len() != 4 {
+        let fields = record.splitn(5, '\x1f').collect::<Vec<_>>();
+        if fields.len() != 5 {
             continue;
         }
-        let Some((id, message)) = split_git_svn_footer(fields[3]) else {
+        let Some((id, message)) = split_git_svn_footer(fields[4]) else {
             continue;
         };
         if revision_filter
@@ -70,8 +74,8 @@ pub fn run_in_work_tree(
         };
         out.push_str(&formatter.format_entry(&GitSvnLogEntry {
             revision: id.revision,
-            author: fields[1].to_string(),
-            date: fields[2].to_string(),
+            author: svn_author(authors.as_ref(), fields[1], fields[2]),
+            date: format_svn_date(fields[3])?,
             message,
             commit: fields[0].to_string(),
             changed_paths,
@@ -82,6 +86,44 @@ pub fn run_in_work_tree(
         out.push_str("------------------------------------------------------------------------\n");
     }
     Ok(out)
+}
+
+fn load_authors(
+    tracked: &crate::commands::resolver::TrackedSvn,
+) -> Result<Option<AuthorResolver>, String> {
+    let Some(path) = tracked.config.authors_file.as_deref() else {
+        return Ok(None);
+    };
+    let path = std::path::Path::new(path);
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        tracked.git.work_tree().join(path)
+    };
+    let contents = std::fs::read_to_string(&path)
+        .map_err(|error| format!("failed to read authors file {}: {error}", path.display()))?;
+    parse_authors_file(&contents).map(Some)
+}
+
+fn svn_author(authors: Option<&AuthorResolver>, name: &str, email: &str) -> String {
+    authors
+        .and_then(|authors| authors.reverse_resolve(name.trim(), email.trim()))
+        .map(str::to_string)
+        .or_else(|| email.rsplit_once('@').map(|(login, _)| login.to_string()))
+        .unwrap_or_else(|| name.trim().to_string())
+}
+
+fn format_svn_date(epoch: &str) -> Result<String, String> {
+    let epoch = epoch
+        .parse::<i64>()
+        .map_err(|_| format!("invalid Git author timestamp: {epoch}"))?;
+    let date = Local
+        .timestamp_opt(epoch, 0)
+        .single()
+        .ok_or_else(|| format!("Git author timestamp is out of range: {epoch}"))?;
+    Ok(date
+        .format("%Y-%m-%d %H:%M:%S %z (%a, %d %b %Y)")
+        .to_string())
 }
 
 fn verbose_path_prefix(svn_path: &str, url: &str) -> String {
@@ -197,7 +239,8 @@ fn parse_revision(value: &str) -> Result<u32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::split_git_svn_footer;
+    use super::{format_svn_date, split_git_svn_footer, svn_author};
+    use crate::authors::parse_authors_file;
 
     const FOOTER: &str = "git-svn-id: mock://repo/trunk@2 mock-uuid";
 
@@ -229,5 +272,30 @@ mod tests {
         let (_, message) = split_git_svn_footer(&format!("subject\n\n\n{FOOTER}")).unwrap();
 
         assert_eq!(message, "subject\n");
+    }
+
+    #[test]
+    fn author_uses_reverse_mapping_then_email_login_fallback() {
+        let authors = parse_authors_file("svn-alice = Alice Example <dev@example.com>\n").unwrap();
+
+        assert_eq!(
+            svn_author(Some(&authors), "Alice Example", "dev@example.com"),
+            "svn-alice"
+        );
+        assert_eq!(svn_author(None, "Alice Example", "dev@example.com"), "dev");
+        assert_eq!(
+            svn_author(None, "Alice Example", "invalid"),
+            "Alice Example"
+        );
+    }
+
+    #[test]
+    fn date_uses_frozen_svn_log_shape() {
+        let formatted = format_svn_date("1767225600").unwrap();
+
+        assert!(formatted.starts_with("2026-01-01 "));
+        assert!(formatted.ends_with("(Thu, 01 Jan 2026)"));
+        assert_eq!(formatted.as_bytes()[19], b' ');
+        assert!(matches!(formatted.as_bytes()[20], b'+' | b'-'));
     }
 }

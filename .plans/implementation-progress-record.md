@@ -1,9 +1,9 @@
 # git-svn-rs Implementation Progress Record
 
-Last audited: 2026-07-17
+Last audited: 2026-07-20
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `7aa266d fix: enforce no-metadata command limits`
-Latest implementation commit: `7aa266d fix: enforce no-metadata command limits`
+Committed HEAD at audit: `19ad4ef feat: recover interrupted reset transactions`
+Latest implementation commit: `19ad4ef feat: recover interrupted reset transactions`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -28,7 +28,7 @@ The repository is a substantial preview implementation with useful local fixture
 | 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, locks/fsync/reset, gitfile discovery | read/create split, transaction/recovery, ambiguity, real migration |
 | 4 SVN adapters | `in-progress` | CLI/libsvn share the RA editor contract; native update/switch/checksums/errors | auth profiles, binary properties, broader remote validation |
 | 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay | windowing/parent fetch, atomic publication, remaining Fetcher semantics |
-| 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata limits, and common info/log/reset/rebase/gc subset | remaining Log formatting and reset transaction behavior |
+| 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata limits, recoverable reset, and SVN-style Log identity/date/message output | Log range ordering/passthrough modes and broader rebase behavior |
 | 7 dcommit | `in-progress` | production working-copy sink runs through the durable coordinator with clean preflight, in-flight markers, and plan-projected tree checks | explicit manual reconciliation for ambiguous submissions and remote profiles |
 | 8 golden/release | `structural-pass` | exact refs/graph/rev_map and clone-state artifacts | strict Perl execution and remaining command-output parity |
 
@@ -58,7 +58,9 @@ The repository is a substantial preview implementation with useful local fixture
 - Common flows exist for `find-rev`, `info`, `log` modes/ranges/pathspecs, `gc`, `reset`, and `rebase --dry-run` on supported metadata layouts.
 - `find-rev` resolves revision queries through the current or explicit tree-ish identity and commit queries through the commit identity, reading only that rev_map. Same-numbered revisions on other refs are not flattened into the result; explicit invalid or ambiguous tree-ish scopes fail.
 - `noMetadata` remains a one-shot import mode: initial import and rev_map-backed `find-rev`/`info` work, while later fetch/rebase, log, and dcommit fail before ref/rev_map or SVN mutation.
-- The remaining readonly flows are not yet fully compatible because Log formatting and reset transaction behavior remain incomplete.
+- Reset serializes with dcommit, rejects active write journals, persists the expected old/new ref identity and rev_map target, moves the ref with expected-old CAS, and recovers crashes before or after the ref update. Other resolver-backed commands fail closed while a reset journal is pending.
+- Log derives the frozen SVN author from an unambiguous authors-file reverse mapping or email login fallback, formats author epochs in the local SVN date shape, preserves message whitespace, and skips leading blank lines in oneline mode.
+- The remaining readonly flows are not yet fully compatible because Log formatting and broader rebase behavior remain incomplete.
 
 ### Local write preview
 
@@ -79,13 +81,13 @@ The repository is a substantial preview implementation with useful local fixture
 
 - Deterministic SVN fixture and artifact capture/comparison infrastructure exists.
 - Current artifacts cover exact ref tips, remote-reachable commit graph identity, rev_map object IDs, default/no-checkout clone HEAD/index/worktree state, configs, modes, properties, tree content, and readonly outputs.
-- Find-rev and show-commit artifacts now retain exact commit IDs, and clone output retains status/stdout/stderr. Remaining log/output normalization and missing strict Perl execution still prevent an exact compatibility claim.
+- Find-rev and show-commit artifacts retain exact commit IDs, clone output retains status/stdout/stderr, and structured log artifacts retain author, local date, line count, message, and changed paths. Missing strict Perl execution and remaining output modes still prevent an exact compatibility claim.
 
 ## Audited Critical Gaps
 
 ### P0
 
-1. Strict Perl comparison currently skips because Perl `git-svn` is unavailable; several presentation normalizers still omit log author/date details.
+1. Strict Perl comparison currently skips because Perl `git-svn` is unavailable.
 
 ### P1
 
@@ -94,7 +96,7 @@ The repository is a substantial preview implementation with useful local fixture
 - Working-copy production dcommit preserves full messages and executes `DcommitPlanBuilder`/`SvnCommitEditor` through the recovery coordinator. Exact plan-projected tree verification accounts for SVN properties/keywords and `.gitattributes` mappings that intentionally differ from the original local commit.
 - Dcommit target selection uses the nearest first-parent rev_map identity with footer URL/UUID/revision validation; local merge ranges and dirty pre-submit worktrees are rejected. Broader commit-URL intent/auth profile validation remains incomplete.
 - The `Ready -> submit -> Submitted` persistence gap is now fail-closed through a durable pre-submit in-flight marker. Automatic resubmission is prohibited when the outcome is unknown; an explicit, evidence-based manual reconciliation/adoption path remains to be defined.
-- Readonly Log formatting and reset transaction recovery remain incomplete after scoped `find-rev` and explicit noMetadata limitations were implemented.
+- Readonly Log range ordering and Git passthrough output modes plus broader rebase behavior remain incomplete after author/date/message formatting, scoped `find-rev`, explicit noMetadata limitations, and reset transaction recovery were implemented.
 - Fetch-time authors/filters/localtime/metadata/empty-dir options overlay persisted config; identity-changing overrides are rejected after import. `log-window-size` and `fetch --parent` now fail explicitly until implemented.
 - Strict fetch revision forms (`N`, `N:M`, `HEAD`, `BASE:N`, `N:HEAD`, `BASE:HEAD`) are implemented; BASE uses the slowest configured mapping for the selected remote/UUID.
 - Fetcher still lacks binary-property transport, complete persistent-placeholder/follow-parent behavior, and recoverable multi-artifact publication.
@@ -149,7 +151,9 @@ Current linked evidence from 2026-07-13 supersedes the callback-race result abov
 - Current Phase 7 foundation verification passes 34 core library tests, 5 commit-editor tests, 3 legacy planner tests, and 2 typed plan-builder tests. Journal tests cover whole-queue persistence, strict state ordering, roundtrip, truncated-snapshot fallback, and lock exclusion.
 - The next Phase 7 slice adds 7 coordinator fault-injection tests, 4 repository journal-registry tests, typed mock rename/copy execution, and CLI fail-closed checks proving unfinished/completed journal guards leave the tracking ref and rev_map bytes unchanged.
 - `cargo test --workspace` passes after the Phase 7 foundation slice (about 458 seconds). `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all -- --check`, and `git diff --check` also pass.
-- On 2026-07-16 the production coordinator and projected-tree slices pass coordinator 9/9, disk restart 4/4, dcommit unit 4/4, tree projection 5/5, Git cleanliness 1/1, and the real dcommit CLI matrix 43/43. The real file-SVN recovery regression proves a submitted revision survives post-fetch failure and resumes without a duplicate SVN commit; the in-flight disk restart regression proves an unknown outcome is never resubmitted. `cargo test --workspace` passes in about 405.7 seconds; workspace clippy with `-D warnings`, formatting, and `git diff --check` also pass.
+- On 2026-07-16 the production coordinator and projected-tree slices pass coordinator 9/9, disk restart 4/4, dcommit unit 4/4, tree projection 5/5, Git cleanliness 1/1, and the real dcommit CLI matrix 43/43. The real file-SVN recovery regression proves a submitted revision survives post-fetch failure and resumes without a duplicate SVN commit; the in-flight disk restart regression proves an unknown outcome is never resubmitted.
+- On 2026-07-17 `cargo test --workspace` passes in about 556.5 seconds after scoped find-rev, noMetadata limits, and reset transactions: real clone/fetch 23/23, dcommit 43/43, readonly 42/42, core library 65, golden 25/25, and reset recovery 3/3. Workspace clippy with `-D warnings`, formatting, and `git diff --check` also pass.
+- On 2026-07-20 frozen Log author/date/message alignment passes core library 68/68, formatter 9/9, readonly 42/42, and golden 26/26. `cargo test --workspace` passes in about 878.3 seconds; workspace clippy with `-D warnings`, formatting, and `git diff --check` pass.
 
 Previously recorded passing commands remain useful developer evidence, but the audit results above take precedence for current gate status.
 
@@ -178,6 +182,7 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `7e27bcf`: v2 in-flight submission journal state and fail-closed ambiguous-command/restart recovery.
 - `13811f7`: identity-scoped `find-rev`, optional tree-ish syntax, and same-revision multi-ref regression.
 - `7aa266d`: one-shot noMetadata enforcement for fetch/rebase/log/dcommit with rev_map-backed queries retained.
+- `19ad4ef`: reset expected-old CAS, durable transaction journal, dcommit serialization, and crash recovery.
 
 ### Golden harness
 
@@ -225,3 +230,5 @@ The first four corrected P0 items were completed on 2026-07-12; preserve their r
 - Dcommit now preserves complete `%B` messages and both mock and working-copy sinks execute the shared typed plan. Production file/svn write-back is connected to `CommitSink`/`PostSubmit`, exact rev_map/ref/footer and plan-projected tree verification, durable active-journal reconstruction, clean and repository-UUID preflight, and retry-safe in-flight/submitted/fetched/rebase states. Real file-SVN recovery proves post-fetch failure does not duplicate submission, an in-flight restart refuses ambiguous resubmission, and a two-repository regression proves a wrong `--commit-url` cannot write. Next, define explicit manual reconciliation for ambiguous outcomes and broaden remote/auth profile validation before claiming the Phase 7 behavioral gate.
 - `find-rev` no longer recursively aggregates every rev_map. HEAD/commit identity and an optional explicit tree-ish select one validated mapping; the readonly 41/41 and golden 25/25 suites cover branch commit lookup and same-numbered trunk/branch revision scoping.
 - Frozen documentation defines noMetadata as one-shot and explicitly excludes log. Real initial import plus readonly 42/42 now prove footer-free import succeeds, later mutating operations fail before state changes, and rev_map-backed find-rev/info remain usable.
+- Reset now persists its old/new ref and rev_map target before CAS. Unit recovery covers crashes on either side of the ref update and rejects journal paths outside `.git/svn`; the full workspace passes with resolver-wide pending-reset guards.
+- Log now reads full Git author identity plus epoch, reverses configured authors-file identities when unique, emits the frozen local SVN date shape, preserves message boundaries, and feeds author/date/count/message/path into golden comparison. Remaining Log work includes revision-range ordering and passthrough raw/stat/diff behavior; strict Perl execution is still unavailable.
