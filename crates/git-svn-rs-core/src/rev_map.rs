@@ -60,6 +60,17 @@ impl RevMap {
         Ok(Self { path, format })
     }
 
+    pub fn open_existing(path: impl AsRef<Path>, format: ObjectFormat) -> Result<Self, String> {
+        let path = path.as_ref().to_path_buf();
+        File::open(&path).map_err(|error| {
+            format!(
+                "failed to open existing rev_map {}: {error}",
+                path.display()
+            )
+        })?;
+        Ok(Self { path, format })
+    }
+
     pub fn append(&mut self, revision: u32, object_id_hex: &str) -> Result<(), String> {
         if object_id_hex.len() != self.format.hex_len() {
             return Err(format!(

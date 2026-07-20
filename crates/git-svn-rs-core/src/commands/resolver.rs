@@ -20,7 +20,7 @@ pub struct TrackedSvn {
 
 impl TrackedSvn {
     pub fn open_rev_map(&self) -> Result<RevMap, String> {
-        RevMap::open(&self.rev_map_path, self.git.object_format()?)
+        RevMap::open_existing(&self.rev_map_path, self.git.object_format()?)
     }
 
     pub fn records(&self) -> Result<Vec<RevMapRecord>, String> {
@@ -141,7 +141,7 @@ fn rev_map_first_parent_identity(
     tracked: &TrackedSvn,
     first_parent_history: &[String],
 ) -> Result<Option<(usize, RevMapRecord)>, String> {
-    let rev_map = RevMap::open(&tracked.rev_map_path, tracked.git.object_format()?)?;
+    let rev_map = RevMap::open_existing(&tracked.rev_map_path, tracked.git.object_format()?)?;
     let records = rev_map.records()?;
     Ok(first_parent_history
         .iter()

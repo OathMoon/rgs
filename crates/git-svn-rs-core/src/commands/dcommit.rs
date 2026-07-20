@@ -420,7 +420,7 @@ struct WorkingCopyCommitSink<'a> {
 impl CommitSink for WorkingCopyCommitSink<'_> {
     fn remote_head(&mut self, target: &DcommitTargetIdentity) -> Result<RemoteHead, String> {
         let revision = svn_last_changed_revision(&target.commit_url, self.options)?;
-        let tracking_oid = RevMap::open(self.rev_map_path, self.git.object_format()?)?
+        let tracking_oid = RevMap::open_existing(self.rev_map_path, self.git.object_format()?)?
             .max_record(true)?
             .ok_or_else(|| "dcommit target rev_map is empty".to_string())?
             .object_id_hex;
@@ -535,7 +535,7 @@ fn verify_imported_dcommit(
     revision: u32,
     expected: ImportedDcommitExpectation<'_>,
 ) -> Result<String, String> {
-    let mapped_oid = RevMap::open(&target.rev_map_path, git.object_format()?)?
+    let mapped_oid = RevMap::open_existing(&target.rev_map_path, git.object_format()?)?
         .get(revision)?
         .ok_or_else(|| format!("rev_map has no object for r{revision}"))?;
     let ref_oid = git.rev_parse(&target.mapping_ref)?;

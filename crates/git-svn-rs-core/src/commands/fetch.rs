@@ -517,7 +517,7 @@ fn imported_base_revision(
         if !path.exists() {
             return Ok(0);
         }
-        let revision = RevMap::open(path, object_format)?
+        let revision = RevMap::open_existing(path, object_format)?
             .max_revision(false)?
             .unwrap_or(0);
         base = base.min(revision);

@@ -60,7 +60,7 @@ pub fn recover_pending(git: &GitCli) -> Result<(), String> {
             journal.refname, journal.expected_old_oid, journal.target_oid
         ));
     }
-    RevMap::open(&canonical_rev_map, git.object_format()?)?
+    RevMap::open_existing(&canonical_rev_map, git.object_format()?)?
         .reset_to(journal.target_revision, &journal.target_oid)?;
     remove(&path)
 }
@@ -89,7 +89,7 @@ pub fn execute(
         remove(&path)?;
         return Err(error);
     }
-    RevMap::open(&journal.rev_map_path, git.object_format()?)?
+    RevMap::open_existing(&journal.rev_map_path, git.object_format()?)?
         .reset_to(journal.target_revision, &journal.target_oid)?;
     remove(&path)
 }

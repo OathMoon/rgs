@@ -2,6 +2,21 @@ use git_svn_rs_core::rev_map::{ObjectFormat, RevMap, RevMapRecord};
 use tempfile::tempdir;
 
 #[test]
+fn open_existing_does_not_create_missing_metadata() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("missing/metadata/.rev_map.uuid");
+
+    let error = match RevMap::open_existing(&path, ObjectFormat::Sha1) {
+        Ok(_) => panic!("missing rev_map unexpectedly opened"),
+        Err(error) => error,
+    };
+
+    assert!(error.contains("failed to open existing rev_map"));
+    assert!(!path.exists());
+    assert!(!path.parent().unwrap().exists());
+}
+
+#[test]
 fn writes_sha1_records_as_24_bytes() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".rev_map.uuid");

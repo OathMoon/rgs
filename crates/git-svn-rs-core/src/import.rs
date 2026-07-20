@@ -545,7 +545,7 @@ fn copy_parent_source(
     if !path.exists() {
         return Ok(None);
     };
-    let rev_map = RevMap::open(&path, git.object_format()?)?;
+    let rev_map = RevMap::open_existing(&path, git.object_format()?)?;
     let Some(commit) = resolve_copy_commit(
         &rev_map,
         copy_source_revision,
@@ -640,7 +640,9 @@ fn copy_from_parent_ref(
         if !path.exists() {
             continue;
         }
-        if let Some(commit) = RevMap::open(path, git.object_format()?)?.get(source_revision)? {
+        if let Some(commit) =
+            RevMap::open_existing(path, git.object_format()?)?.get(source_revision)?
+        {
             return Ok(Some(commit));
         }
     }
