@@ -171,17 +171,17 @@ impl LibSvnBackend {
         self
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     pub(crate) fn configured_username(&self) -> Option<&str> {
         self.username.as_deref()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     pub(crate) fn configured_config_dir(&self) -> Option<&str> {
         self.config_dir.as_deref()
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     pub(crate) fn configured_password(&self) -> Option<&str> {
         self.password.as_deref()
     }
