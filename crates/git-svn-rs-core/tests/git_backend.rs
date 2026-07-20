@@ -13,6 +13,30 @@ fn initializes_git_repo_and_reports_git_dir() {
 }
 
 #[test]
+fn delete_ref_expected_uses_compare_and_swap() {
+    let dir = tempfile::tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let oid = git
+        .run_for_test(["hash-object", "-w", "-t", "blob", "--stdin"])
+        .unwrap();
+    let oid = oid.trim();
+    git.update_ref("refs/git-svn-rs/test", oid).unwrap();
+
+    assert!(
+        git.delete_ref_expected(
+            "refs/git-svn-rs/test",
+            "1111111111111111111111111111111111111111"
+        )
+        .is_err()
+    );
+    assert!(git.rev_parse("refs/git-svn-rs/test").is_ok());
+    git.delete_ref_expected("refs/git-svn-rs/test", oid)
+        .unwrap();
+    assert!(git.rev_parse("refs/git-svn-rs/test").is_err());
+}
+
+#[test]
 fn config_set_and_get_round_trip() {
     let dir = tempdir().unwrap();
     let git = GitCli::new(dir.path());

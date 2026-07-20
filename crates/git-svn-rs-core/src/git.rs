@@ -249,6 +249,11 @@ impl GitCli {
             .map(|_| ())
     }
 
+    pub fn delete_ref_expected(&self, refname: &str, expected_old: &str) -> Result<(), String> {
+        self.run(["update-ref", "-d", refname, expected_old])
+            .map(|_| ())
+    }
+
     pub fn materialize_initial_branch(
         &self,
         tracking_ref: &str,
