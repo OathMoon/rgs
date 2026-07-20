@@ -295,6 +295,7 @@ fn expand_ref_mapping(mapping: &RefMapping, refs: &[String]) -> Vec<RefMapping> 
 
 fn find_rev_map(metadata_dir: &Path) -> Result<(String, PathBuf), String> {
     let entries = std::fs::read_dir(metadata_dir).map_err(|e| e.to_string())?;
+    let mut candidates = Vec::new();
     for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
@@ -302,11 +303,25 @@ fn find_rev_map(metadata_dir: &Path) -> Result<(String, PathBuf), String> {
         };
         if let Some(uuid) = name.strip_prefix(".rev_map.")
             && !uuid.ends_with(".lock")
+            && path.is_file()
         {
-            return Ok((uuid.to_string(), path));
+            candidates.push((uuid.to_string(), path));
         }
     }
-    Err(format!("missing .rev_map in {}", metadata_dir.display()))
+    candidates.sort_by(|left, right| left.1.cmp(&right.1));
+    match candidates.len() {
+        0 => Err(format!("missing .rev_map in {}", metadata_dir.display())),
+        1 => Ok(candidates.pop().expect("one rev_map candidate")),
+        _ => Err(format!(
+            "ambiguous .rev_map files in {}: {}",
+            metadata_dir.display(),
+            candidates
+                .iter()
+                .map(|(_, path)| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+    }
 }
 
 fn short_ref_for_metadata(refname: &str) -> String {

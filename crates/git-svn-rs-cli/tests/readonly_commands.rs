@@ -15,6 +15,33 @@ fn find_rev_maps_svn_revision_to_git_commit() {
 }
 
 #[test]
+fn resolver_rejects_multiple_rev_maps_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let metadata = work.join(".git/svn/git-svn");
+    let original = metadata.join(".rev_map.mock-uuid");
+    let ambiguous = metadata.join(".rev_map.other-uuid");
+    let original_bytes = std::fs::read(&original).unwrap();
+    std::fs::write(&ambiguous, &original_bytes).unwrap();
+    let ref_before = git_output(&work, ["rev-parse", "refs/remotes/git-svn"]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "--url"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous .rev_map files"));
+
+    assert_eq!(std::fs::read(original).unwrap(), original_bytes);
+    assert_eq!(std::fs::read(ambiguous).unwrap(), original_bytes);
+    assert_eq!(
+        git_output(&work, ["rev-parse", "refs/remotes/git-svn"]),
+        ref_before
+    );
+}
+
+#[test]
 fn find_rev_maps_git_commit_to_svn_revision() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
