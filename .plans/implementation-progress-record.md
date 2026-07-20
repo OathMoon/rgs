@@ -2,8 +2,8 @@
 
 Last audited: 2026-07-20
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `e8ef1d4 fix: make rev-map lock cleanup conservative`
-Latest implementation commit: `e8ef1d4 fix: make rev-map lock cleanup conservative`
+Committed HEAD at audit: `c191e9b fix: separate rev-map reads from creation`
+Latest implementation commit: `c191e9b fix: separate rev-map reads from creation`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -25,7 +25,7 @@ The repository is a substantial preview implementation with useful local fixture
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | workspace, CLI, shim, diagnose, unsupported commands | remaining inert options and global verbosity contract |
 | 2 config/mapping | `structural-pass` | basic config/glob/authors/filter/layout units, CLI subdirectory session paths | full layout URLs and metadata runtime semantics |
-| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, managed OS locks/fsync/reset, gitfile discovery | read/create split, transaction/recovery, ambiguity, real migration |
+| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, non-creating reads, managed OS locks/fsync/reset, gitfile discovery | import transaction/recovery, ambiguity, real migration |
 | 4 SVN adapters | `in-progress` | CLI/libsvn share the RA editor contract; native update/switch/checksums/errors | auth profiles, binary properties, broader remote validation |
 | 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay | windowing/parent fetch, atomic publication, remaining Fetcher semantics |
 | 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata limits, recoverable reset, conservative gc, SVN-style Log output, and current-parent rebase fetch | merge/strategy compatibility, migration policy, and external exactness |
@@ -39,7 +39,7 @@ The repository is a substantial preview implementation with useful local fixture
 - Rust workspace with CLI, core library, and opt-in `git-svn` shim.
 - Typed core command surface and explicit v1 unsupported commands.
 - Basic Git CLI wrapper, config serialization, `GlobSpec`, authors, filters, URL helpers, and metadata option conflict checks.
-- Binary rev_map primitives for SHA-1/SHA-256, zero records, append order, locks, fsync, reset, gitfile, and commondir.
+- Binary rev_map primitives for SHA-1/SHA-256, zero records, explicit create versus non-creating reads, append order, locks, fsync, reset, gitfile, and commondir.
 
 ### Local read/import preview
 
@@ -160,6 +160,7 @@ Current linked evidence from 2026-07-13 supersedes the callback-race result abov
 - On 2026-07-20 frozen Log author/date/message alignment passes core library 68/68, formatter 9/9, readonly 42/42, and golden 26/26. `cargo test --workspace` passes in about 878.3 seconds; workspace clippy with `-D warnings`, formatting, and `git diff --check` pass.
 - On 2026-07-20 current-parent rebase fetch and clean-worktree preflight pass focused core/import/CLI tests. A full `cargo test --workspace` rerun passes in about 951 seconds: real clone/fetch 23/23, dcommit 43/43, readonly 47/47, core library 68/68, import mock 9/9, formatter 11/11, and golden 26/26. All-target/all-feature clippy, formatting, diff checks, and the `svn-libsvn` backend integration suite 33/33 pass after linkage-scoping test-only accessors.
 - On 2026-07-20 conservative GC lock probing passes managed stale/live/legacy unit coverage, rev_map 10/10, and GC CLI 2/2. `cargo test --workspace` passes in about 746 seconds, including real clone/fetch 23/23, dcommit 43/43, and readonly 47/47; all-target/all-feature clippy, formatting, and diff checks pass.
+- On 2026-07-20 non-creating rev_map reads pass rev_map 11/11, import mock 9/9, readonly 47/47, and the full workspace in about 701 seconds, including dcommit 43/43. All-target/all-feature clippy, formatting, and diff checks pass; production `RevMap::open` calls are now confined to write coordination.
 
 Previously recorded passing commands remain useful developer evidence, but the audit results above take precedence for current gate status.
 
@@ -195,6 +196,7 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `4858009`: current first-parent rebase resolution, selective fetch/import, clean-worktree preflight, and multi-ref state-isolation regressions.
 - `0e8d795`: link-state-aware libsvn test accessors restoring the all-feature clippy gate.
 - `e8ef1d4`: versioned OS-held rev_map locks and conservative GC cleanup with live/legacy preservation.
+- `c191e9b`: explicit non-creating rev_map reads across resolver, fetch, reset, dcommit verification, and copy-parent lookup.
 
 ### Golden harness
 
