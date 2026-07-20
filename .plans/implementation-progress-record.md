@@ -2,8 +2,8 @@
 
 Last audited: 2026-07-20
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `181e762 fix: reject unsupported legacy metadata layouts`
-Latest implementation commit: `181e762 fix: reject unsupported legacy metadata layouts`
+Committed HEAD at audit: `c14d9f7 fix: reject ambiguous rev-map identities`
+Latest implementation commit: `c14d9f7 fix: reject ambiguous rev-map identities`
 
 This is a concise handoff record. Product requirements live in `.plans/git-svn-rs-plan.md`; architecture/order live in `.plans/00-git-svn-rs-review-and-roadmap.md`; the evidence behind the status correction lives in `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
@@ -25,7 +25,7 @@ The repository is a substantial preview implementation with useful local fixture
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | workspace, CLI, shim, diagnose, unsupported commands | remaining inert options and global verbosity contract |
 | 2 config/mapping | `structural-pass` | basic config/glob/authors/filter/layout units, CLI subdirectory session paths | full layout URLs and metadata runtime semantics |
-| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, non-creating reads, managed OS locks/fsync/reset, gitfile discovery, explicit legacy rejection | import transaction/recovery and remaining ambiguity |
+| 3 metadata/rev_map | `structural-pass` | SHA-1/SHA-256 rev_map, non-creating reads, managed OS locks/fsync/reset, gitfile discovery, explicit legacy and multi-UUID rejection | import transaction/recovery and remote/mapping ambiguity |
 | 4 SVN adapters | `in-progress` | CLI/libsvn share the RA editor contract; native update/switch/checksums/errors | auth profiles, binary properties, broader remote validation |
 | 5 import/clone/fetch | `in-progress` | local replay, unhandled metadata, timestamps, checkout, strict revision forms/runtime overlay | windowing/parent fetch, atomic publication, remaining Fetcher semantics |
 | 6 readonly | `in-progress` | identity-scoped find-rev, explicit noMetadata/legacy limits, recoverable reset, conservative gc, SVN-style Log output, and current-parent rebase fetch | merge/strategy compatibility and external exactness |
@@ -41,6 +41,7 @@ The repository is a substantial preview implementation with useful local fixture
 - Basic Git CLI wrapper, config serialization, `GlobSpec`, authors, filters, URL helpers, and metadata option conflict checks.
 - Binary rev_map primitives for SHA-1/SHA-256, zero records, explicit create versus non-creating reads, append order, locks, fsync, reset, gitfile, and commondir.
 - Frozen v0-v5 metadata layouts are inspected before fetch/query/gc mutations. Rev_db, v0-v2 roots, empty svn-remote sections, and mixed legacy/v5 layouts receive actionable non-mutating rejection; v5 compatibility `info/url` and gitfile/commondir discovery remain accepted.
+- Resolver rev_map discovery is deterministic: zero candidates report missing, one is selected, and multiple UUID candidates fail closed with sorted paths without changing refs or metadata.
 
 ### Local read/import preview
 
@@ -163,6 +164,7 @@ Current linked evidence from 2026-07-13 supersedes the callback-race result abov
 - On 2026-07-20 conservative GC lock probing passes managed stale/live/legacy unit coverage, rev_map 10/10, and GC CLI 2/2. `cargo test --workspace` passes in about 746 seconds, including real clone/fetch 23/23, dcommit 43/43, and readonly 47/47; all-target/all-feature clippy, formatting, and diff checks pass.
 - On 2026-07-20 non-creating rev_map reads pass rev_map 11/11, import mock 9/9, readonly 47/47, and the full workspace in about 701 seconds, including dcommit 43/43. All-target/all-feature clippy, formatting, and diff checks pass; production `RevMap::open` calls are now confined to write coordination.
 - On 2026-07-20 explicit legacy-layout policy passes migration 8/8 plus process-level fetch/gc no-mutation regressions. `cargo test --workspace` passes in about 788 seconds: clone/fetch smoke 8/8, dcommit 43/43, readonly 48/48, and all remaining suites; all-target/all-feature clippy, formatting, and diff checks pass.
+- On 2026-07-20 multi-UUID rev_map ambiguity passes its process-level no-mutation regression and readonly 49/49; all-target/all-feature clippy, formatting, and diff checks pass on top of the immediately preceding full-workspace gate.
 
 Previously recorded passing commands remain useful developer evidence, but the audit results above take precedence for current gate status.
 
@@ -200,6 +202,7 @@ Previously recorded passing commands remain useful developer evidence, but the a
 - `e8ef1d4`: versioned OS-held rev_map locks and conservative GC cleanup with live/legacy preservation.
 - `c191e9b`: explicit non-creating rev_map reads across resolver, fetch, reset, dcommit verification, and copy-parent lookup.
 - `181e762`: actionable non-mutating v0-v5/rev_db/mixed-layout and empty svn-remote rejection policy.
+- `c14d9f7`: deterministic rev_map discovery and fail-closed multi-UUID identity ambiguity.
 
 ### Golden harness
 
