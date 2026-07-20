@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 
 use git_svn_rs_core::config::SvnRemoteConfig;
 use git_svn_rs_core::git::GitCli;
-use git_svn_rs_core::import::{ImportOptions, import_mock_revisions, import_ra_revisions};
+use git_svn_rs_core::import::{
+    ImportOptions, import_mock_revisions, import_mock_revisions_for_ref, import_ra_revisions,
+};
 use git_svn_rs_core::mapping::{build_single_path, build_standard_layout};
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
 use git_svn_rs_core::svn::editor::FetchEditor;
@@ -109,6 +111,37 @@ fn branch_copy_import_uses_source_revision_as_parent() {
         .unwrap();
 
     assert_eq!(branch_parent.trim(), trunk_commit.trim());
+}
+
+#[test]
+fn selected_ref_import_keeps_other_concrete_mappings_unchanged() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", branch_copy_revisions());
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+
+    let summary = import_mock_revisions_for_ref(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+        Some("refs/remotes/origin/trunk"),
+    )
+    .unwrap();
+
+    assert_eq!(summary.imported_revisions, vec![1]);
+    assert!(
+        git.run_for_test(["rev-parse", "--verify", "refs/remotes/origin/trunk"])
+            .is_ok()
+    );
+    assert!(
+        git.run_for_test(["rev-parse", "--verify", "refs/remotes/origin/main"])
+            .is_err()
+    );
 }
 
 #[test]

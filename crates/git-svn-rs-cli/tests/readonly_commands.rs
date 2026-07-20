@@ -1263,6 +1263,14 @@ fn rebase_dry_run_prints_planned_actions() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
+    let tracked = commit_file(
+        work,
+        "tracked.txt",
+        "tracked\n",
+        "tracked\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    write_rev_map(work, &[&tracked]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &tracked]);
 
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
     cmd.current_dir(work)
@@ -1273,6 +1281,84 @@ fn rebase_dry_run_prints_planned_actions() {
         .stdout(predicate::str::contains(
             "would run git rebase refs/remotes/git-svn",
         ));
+}
+
+#[test]
+fn rebase_dry_run_uses_current_first_parent_tracking_identity() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            "branches/main:refs/remotes/origin/main",
+        ],
+    );
+    let trunk = commit_file(
+        work,
+        "trunk.txt",
+        "trunk\n",
+        "trunk\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/trunk", &trunk]);
+    write_rev_map_for_short_ref(work, "origin.trunk", &[(1, &trunk)]);
+    let branch = commit_file(
+        work,
+        "branch.txt",
+        "branch\n",
+        "branch\n\ngit-svn-id: mock://repo/branches/main@2 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/main", &branch]);
+    write_rev_map_for_short_ref(work, "origin.main", &[(2, &branch)]);
+    git(work, ["checkout", "-b", "topic", &branch]);
+    commit_file(work, "local.txt", "local\n", "local");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["rebase", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "would run git rebase refs/remotes/origin/main",
+        ));
+}
+
+#[test]
+fn rebase_rejects_dirty_work_tree_before_fetch_mutates_tracking_state() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let tracked = commit_file(
+        work,
+        "tracked.txt",
+        "clean\n",
+        "tracked\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    write_rev_map(work, &[&tracked]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &tracked]);
+    let rev_map_path = work.join(".git/svn/git-svn/.rev_map.mock-uuid");
+    let rev_map_before = std::fs::read(&rev_map_path).unwrap();
+    std::fs::write(work.join("tracked.txt"), "dirty\n").unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .arg("rebase")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "rebase requires a clean index and work tree",
+        ));
+
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+        tracked
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
 }
 
 #[test]

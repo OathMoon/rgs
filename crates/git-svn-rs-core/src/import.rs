@@ -36,6 +36,16 @@ pub fn import_mock_revisions(
     config: &SvnRemoteConfig,
     options: ImportOptions,
 ) -> Result<ImportSummary, String> {
+    import_mock_revisions_for_ref(backend, git, config, options, None)
+}
+
+pub fn import_mock_revisions_for_ref(
+    backend: &impl SvnBackend,
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    options: ImportOptions,
+    selected_ref: Option<&str>,
+) -> Result<ImportSummary, String> {
     let end = options.end_revision.unwrap_or(backend.latest_revnum()?);
     if options.start_revision > end {
         return Ok(ImportSummary {
@@ -59,7 +69,10 @@ pub fn import_mock_revisions(
     }
     let mut all_imported_revisions = Vec::new();
 
-    for mapping in &mappings {
+    for mapping in mappings
+        .iter()
+        .filter(|mapping| selected_ref.is_none_or(|selected| mapping.git_ref == selected))
+    {
         let summary =
             import_revisions_for_mapping(git, config, &uuid, mapping, &mappings, &revisions)?;
         all_imported_revisions.extend(summary.imported_revisions);
@@ -78,6 +91,16 @@ pub fn import_ra_revisions(
     config: &SvnRemoteConfig,
     options: ImportOptions,
 ) -> Result<ImportSummary, String> {
+    import_ra_revisions_for_ref(session, git, config, options, None)
+}
+
+pub fn import_ra_revisions_for_ref(
+    session: &impl RaSession,
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    options: ImportOptions,
+    selected_ref: Option<&str>,
+) -> Result<ImportSummary, String> {
     let end = options.end_revision.unwrap_or(session.latest_revnum()?);
     if options.start_revision > end {
         return Ok(ImportSummary {
@@ -95,7 +118,10 @@ pub fn import_ra_revisions(
     let uuid = session.uuid()?;
     let mappings = concrete_mappings(config, &revisions)?;
     let mut all_imported_revisions = Vec::new();
-    for mapping in &mappings {
+    for mapping in mappings
+        .iter()
+        .filter(|mapping| selected_ref.is_none_or(|selected| mapping.git_ref == selected))
+    {
         let mapping_revisions = revisions_for_mapping(&revisions, &mapping.svn_path);
         if mapping_revisions.is_empty() {
             continue;

@@ -1,4 +1,4 @@
-use crate::cli::{FetchArgs, RebaseArgs};
+use crate::cli::RebaseArgs;
 use crate::commands::{fetch, resolver::resolve_tracked_svn};
 
 pub fn run(args: RebaseArgs) -> Result<String, String> {
@@ -10,35 +10,28 @@ pub fn run_in_work_tree(
     args: RebaseArgs,
 ) -> Result<String, String> {
     let work_tree = work_tree.into();
-    let refname =
-        configured_refname(&work_tree).unwrap_or_else(|| "refs/remotes/git-svn".to_string());
+    let tracked = resolve_tracked_svn(work_tree.clone())?;
+    if tracked.config.no_metadata {
+        return Err("fetch is unavailable after a --no-metadata one-shot import".to_string());
+    }
     if args.dry_run {
-        return Ok(format!("would run fetch\nwould run git rebase {refname}\n"));
+        return Ok(format!(
+            "would run fetch\nwould run git rebase {}\n",
+            tracked.refname
+        ));
+    }
+    if !tracked.git.is_work_tree_clean()? {
+        return Err("rebase requires a clean index and work tree".to_string());
     }
 
-    fetch::run_in_work_tree(
+    fetch::run_for_tracking_identity(
         work_tree.clone(),
-        FetchArgs {
-            remote: None,
-            shared: args.shared,
-            fetch_all: false,
-            parent: false,
-        },
+        tracked.config,
+        &tracked.refname,
+        &args.shared,
     )?;
     let tracked = resolve_tracked_svn(work_tree)?;
     tracked
         .git
         .rebase(&tracked.refname, args.merge, args.strategy.as_deref())
-}
-
-fn configured_refname(work_tree: &std::path::Path) -> Option<String> {
-    let git = crate::git::GitCli::new(work_tree);
-    git.config_get_all("svn-remote.svn.fetch")
-        .ok()?
-        .into_iter()
-        .find_map(|mapping| {
-            mapping
-                .split_once(':')
-                .map(|(_, refname)| refname.to_string())
-        })
 }

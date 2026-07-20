@@ -1,8 +1,7 @@
 use crate::cli::{FetchArgs, SharedFetchArgs};
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
-use crate::import::import_ra_revisions;
-use crate::import::{ImportOptions, import_mock_revisions};
+use crate::import::{ImportOptions, import_mock_revisions_for_ref, import_ra_revisions_for_ref};
 use crate::mapping::{MappingKind, RefMapping};
 use crate::rev_map::RevMap;
 use crate::svn::SvnBackend;
@@ -37,10 +36,28 @@ pub fn run_in_work_tree(
 
 fn fetch_remote(git: &GitCli, remote: &str, shared: &SharedFetchArgs) -> Result<(), String> {
     let config = read_remote_config(git, remote)?;
+    fetch_config(git, config, shared, None)
+}
 
+pub(crate) fn run_for_tracking_identity(
+    work_tree: impl Into<std::path::PathBuf>,
+    config: SvnRemoteConfig,
+    refname: &str,
+    shared: &SharedFetchArgs,
+) -> Result<(), String> {
+    let git = GitCli::new(work_tree.into());
+    fetch_config(&git, config, shared, Some(refname))
+}
+
+fn fetch_config(
+    git: &GitCli,
+    config: SvnRemoteConfig,
+    shared: &SharedFetchArgs,
+    selected_ref: Option<&str>,
+) -> Result<(), String> {
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
-        let base_revision = imported_base_revision(git, &config, "mock-uuid")?;
+        let base_revision = imported_base_revision(git, &config, "mock-uuid", selected_ref)?;
         let config = effective_fetch_config(config, shared, base_revision)?;
         let start_revision = base_revision.saturating_add(1);
         let import_options = import_options(
@@ -48,18 +65,19 @@ fn fetch_remote(git: &GitCli, remote: &str, shared: &SharedFetchArgs) -> Result<
             session.latest_revnum()?,
             shared.revision.as_deref(),
         )?;
-        import_mock_revisions(
+        import_mock_revisions_for_ref(
             &MockBackendFromSession(&session),
             git,
             &config,
             import_options,
+            selected_ref,
         )?;
         return Ok(());
     }
 
     let backend = configured_backend(&config, shared)?;
     let uuid = backend.uuid()?;
-    let base_revision = imported_base_revision(git, &config, &uuid)?;
+    let base_revision = imported_base_revision(git, &config, &uuid, selected_ref)?;
     let config = effective_fetch_config(config, shared, base_revision)?;
     let start_revision = base_revision.saturating_add(1);
     let import_options = import_options(
@@ -67,7 +85,7 @@ fn fetch_remote(git: &GitCli, remote: &str, shared: &SharedFetchArgs) -> Result<
         backend.latest_revnum()?,
         shared.revision.as_deref(),
     )?;
-    backend.import_revisions(git, &config, import_options)?;
+    backend.import_revisions(git, &config, import_options, selected_ref)?;
     Ok(())
 }
 
@@ -199,14 +217,15 @@ impl ConfiguredBackend {
         git: &GitCli,
         config: &SvnRemoteConfig,
         options: ImportOptions,
+        selected_ref: Option<&str>,
     ) -> Result<(), String> {
         match self {
             Self::Cli(backend) => {
-                import_ra_revisions(backend, git, config, options)?;
+                import_ra_revisions_for_ref(backend, git, config, options, selected_ref)?;
             }
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(backend) => {
-                import_ra_revisions(backend, git, config, options)?;
+                import_ra_revisions_for_ref(backend, git, config, options, selected_ref)?;
             }
         }
         Ok(())
@@ -456,6 +475,7 @@ fn imported_base_revision(
     git: &GitCli,
     config: &SvnRemoteConfig,
     uuid: &str,
+    selected_ref: Option<&str>,
 ) -> Result<u32, String> {
     let git_dir = git.git_dir()?;
     let svn_dir = git.work_tree().join(git_dir).join("svn");
@@ -479,6 +499,9 @@ fn imported_base_revision(
     }
     refnames.sort();
     refnames.dedup();
+    if let Some(selected_ref) = selected_ref {
+        refnames.retain(|refname| refname == selected_ref);
+    }
     if refnames.is_empty() {
         return Ok(0);
     }
@@ -671,7 +694,10 @@ mod tests {
             rev_map.append(revision, &object_id).unwrap();
         }
 
-        assert_eq!(imported_base_revision(&git, &config, "uuid").unwrap(), 5);
+        assert_eq!(
+            imported_base_revision(&git, &config, "uuid", None).unwrap(),
+            5
+        );
     }
 
     #[test]
