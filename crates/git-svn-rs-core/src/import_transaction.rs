@@ -1,11 +1,21 @@
 use crate::git::GitCli;
 use crate::rev_map::{ObjectFormat, RevMap, RevMapRecord};
+use fs2::FileExt;
+use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-const MAGIC: &str = "git-svn-rs-import-journal-v1";
+const MAGIC_V1: &str = "git-svn-rs-import-journal-v1";
+const MAGIC: &str = "git-svn-rs-import-journal-v2";
 const JOURNAL_FILE: &str = "import-journal";
+const LOCK_FILE: &str = "import.lock";
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportAppend {
+    pub path: PathBuf,
+    pub payload: Vec<u8>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportPublication {
@@ -14,6 +24,7 @@ pub struct ImportPublication {
     pub target_oid: String,
     pub rev_map_path: PathBuf,
     pub records: Vec<RevMapRecord>,
+    pub append: Option<ImportAppend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -21,6 +32,10 @@ struct ImportJournal {
     publication: ImportPublication,
     original_record_count: usize,
     original_tail: Option<RevMapRecord>,
+    append_original_len: usize,
+    append_original_sha256: String,
+    append_payload_len: usize,
+    append_payload_sha256: String,
 }
 
 /// Persist and complete one mapping's ref/rev_map publication.
@@ -29,6 +44,10 @@ struct ImportJournal {
 /// `expected_old_oid`. Once the journal is durable, recovery can finish every
 /// state produced by this function without recreating commits.
 pub fn complete(git: &GitCli, publication: ImportPublication) -> Result<(), String> {
+    with_exclusive_lock(git, || complete_locked(git, publication))
+}
+
+fn complete_locked(git: &GitCli, publication: ImportPublication) -> Result<(), String> {
     let path = journal_path(git)?;
     if path.exists() {
         return Err(format!(
@@ -40,10 +59,26 @@ pub fn complete(git: &GitCli, publication: ImportPublication) -> Result<(), Stri
     let format = git.object_format()?;
     let existing = existing_records(&publication.rev_map_path, format)?;
     validate_new_records(&existing, &publication.records)?;
+    let append_original = publication
+        .append
+        .as_ref()
+        .map(|append| read_or_empty(&append.path))
+        .transpose()?
+        .unwrap_or_default();
     let journal = ImportJournal {
+        append_payload_len: publication
+            .append
+            .as_ref()
+            .map_or(0, |append| append.payload.len()),
+        append_payload_sha256: publication
+            .append
+            .as_ref()
+            .map_or_else(|| sha256(&[]), |append| sha256(&append.payload)),
         publication,
         original_record_count: existing.len(),
         original_tail: existing.last().cloned(),
+        append_original_len: append_original.len(),
+        append_original_sha256: sha256(&append_original),
     };
     save(&path, &journal)?;
     finish(git, &path, &journal)
@@ -51,6 +86,10 @@ pub fn complete(git: &GitCli, publication: ImportPublication) -> Result<(), Stri
 
 /// Resume a durable import publication. Returns `true` when a journal existed.
 pub fn recover_pending(git: &GitCli) -> Result<bool, String> {
+    with_exclusive_lock(git, || recover_pending_locked(git))
+}
+
+fn recover_pending_locked(git: &GitCli) -> Result<bool, String> {
     let path = journal_path(git)?;
     let Some(journal) = load(&path)? else {
         return Ok(false);
@@ -74,6 +113,7 @@ pub fn ensure_no_pending(git: &GitCli) -> Result<(), String> {
 
 fn finish(git: &GitCli, path: &Path, journal: &ImportJournal) -> Result<(), String> {
     let publication = &journal.publication;
+    validate_append_prefix(journal)?;
     let current = current_ref_oid(git, &publication.refname)?;
     if current == publication.expected_old_oid {
         git.update_ref_expected(
@@ -113,6 +153,7 @@ fn finish(git: &GitCli, path: &Path, journal: &ImportJournal) -> Result<(), Stri
             publication.target_oid
         ));
     }
+    finish_append(journal)?;
     remove(path)
 }
 
@@ -145,7 +186,159 @@ fn validate_publication(git: &GitCli, publication: &ImportPublication) -> Result
             publication.rev_map_path.display()
         ));
     }
+    ensure_no_symlink_components(&root, &publication.rev_map_path)?;
+    if let Some(append) = &publication.append {
+        let expected = publication
+            .rev_map_path
+            .parent()
+            .ok_or_else(|| "import rev_map path has no parent".to_string())?
+            .join("unhandled.log");
+        if append.path != expected {
+            return Err(format!(
+                "import journal append path does not match its rev_map: {}",
+                append.path.display()
+            ));
+        }
+        ensure_no_symlink_components(&root, &append.path)?;
+    }
     Ok(())
+}
+
+fn ensure_no_symlink_components(root: &Path, target: &Path) -> Result<(), String> {
+    let relative = target
+        .strip_prefix(root)
+        .map_err(|_| "import metadata path escapes SVN metadata root".to_string())?;
+    let mut current = root.to_path_buf();
+    check_not_symlink(&current)?;
+    for component in relative.components() {
+        if let std::path::Component::Normal(component) = component {
+            current.push(component);
+        } else {
+            continue;
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "import metadata path contains a symbolic link: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    Ok(())
+}
+
+fn check_not_symlink(path: &Path) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "import metadata path contains a symbolic link: {}",
+            path.display()
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn finish_append(journal: &ImportJournal) -> Result<(), String> {
+    let Some(append) = &journal.publication.append else {
+        if journal.append_original_len != 0 || journal.append_original_sha256 != sha256(&[]) {
+            return Err("import journal has unexpected append state".to_string());
+        }
+        return Ok(());
+    };
+    let existing = validate_append_prefix(journal)?;
+    let appended = &existing[journal.append_original_len..];
+    if appended.len() < append.payload.len() {
+        let parent = append
+            .path
+            .parent()
+            .ok_or_else(|| "import append target has no parent".to_string())?;
+        fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&append.path)
+            .map_err(|error| error.to_string())?;
+        file.write_all(&append.payload[appended.len()..])
+            .map_err(|error| error.to_string())?;
+        file.sync_all().map_err(|error| error.to_string())?;
+        sync_directory(parent)?;
+    }
+    let final_bytes = read_or_empty(&append.path)?;
+    if final_bytes.len() != journal.append_original_len + append.payload.len()
+        || sha256(&final_bytes[..journal.append_original_len]) != journal.append_original_sha256
+        || final_bytes[journal.append_original_len..] != append.payload
+    {
+        return Err(
+            "import append target verification did not reach the journal target".to_string(),
+        );
+    }
+    Ok(())
+}
+
+fn validate_append_prefix(journal: &ImportJournal) -> Result<Vec<u8>, String> {
+    let Some(append) = &journal.publication.append else {
+        if journal.append_original_len != 0
+            || journal.append_original_sha256 != sha256(&[])
+            || journal.append_payload_len != 0
+            || journal.append_payload_sha256 != sha256(&[])
+        {
+            return Err("import journal has unexpected append state".to_string());
+        }
+        return Ok(Vec::new());
+    };
+    if append.payload.len() != journal.append_payload_len
+        || sha256(&append.payload) != journal.append_payload_sha256
+    {
+        return Err("import journal append payload checksum mismatch".to_string());
+    }
+    let existing = read_or_empty(&append.path)?;
+    if existing.len() < journal.append_original_len {
+        return Err("import append target was truncated after the journal was written".to_string());
+    }
+    if sha256(&existing[..journal.append_original_len]) != journal.append_original_sha256 {
+        return Err("import append target prefix does not match the journal".to_string());
+    }
+    let appended = &existing[journal.append_original_len..];
+    if appended.len() > append.payload.len() || !append.payload.starts_with(appended) {
+        return Err("import append target suffix does not match the journal".to_string());
+    }
+    Ok(existing)
+}
+
+fn read_or_empty(path: &Path) -> Result<Vec<u8>, String> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    hex::encode(Sha256::digest(bytes))
+}
+
+pub fn with_exclusive_lock<T>(
+    git: &GitCli,
+    operation: impl FnOnce() -> Result<T, String>,
+) -> Result<T, String> {
+    let root = svn_metadata_root(git)?;
+    fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    let path = root.join(LOCK_FILE);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|error| error.to_string())?;
+    file.try_lock_exclusive()
+        .map_err(|error| format!("cannot lock import recovery at {}: {error}", path.display()))?;
+    operation()
 }
 
 fn validate_oid(oid: &str, format: ObjectFormat) -> Result<(), String> {
@@ -249,8 +442,18 @@ fn save(path: &Path, journal: &ImportJournal) -> Result<(), String> {
 
 fn encode(journal: &ImportJournal) -> String {
     let publication = &journal.publication;
+    let append_path = publication
+        .append
+        .as_ref()
+        .map(|append| escape(&append.path.to_string_lossy()))
+        .unwrap_or_else(|| "-".to_string());
+    let append_payload = publication
+        .append
+        .as_ref()
+        .map(|append| hex::encode(&append.payload))
+        .unwrap_or_else(|| "-".to_string());
     let mut output = format!(
-        "{MAGIC}\nrefname\t{}\nexpected_old_oid\t{}\ntarget_oid\t{}\nrev_map_path\t{}\noriginal_record_count\t{}\noriginal_tail\t{}\nrecord_count\t{}\n",
+        "{MAGIC}\nrefname\t{}\nexpected_old_oid\t{}\ntarget_oid\t{}\nrev_map_path\t{}\noriginal_record_count\t{}\noriginal_tail\t{}\nappend_path\t{}\nappend_original_len\t{}\nappend_original_sha256\t{}\nappend_payload_len\t{}\nappend_payload_sha256\t{}\nappend_payload\t{}\nrecord_count\t{}\n",
         escape(&publication.refname),
         publication.expected_old_oid,
         publication.target_oid,
@@ -261,6 +464,12 @@ fn encode(journal: &ImportJournal) -> String {
             .as_ref()
             .map(encode_record)
             .unwrap_or_else(|| "-".to_string()),
+        append_path,
+        journal.append_original_len,
+        journal.append_original_sha256,
+        journal.append_payload_len,
+        journal.append_payload_sha256,
+        append_payload,
         publication.records.len()
     );
     for record in &publication.records {
@@ -275,7 +484,10 @@ fn load(path: &Path) -> Result<Option<ImportJournal>, String> {
     }
     let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
     let mut lines = text.lines();
-    if lines.next() != Some(MAGIC) {
+    let version = lines
+        .next()
+        .ok_or_else(|| "invalid import journal header".to_string())?;
+    if version != MAGIC && version != MAGIC_V1 {
         return Err("invalid import journal header".to_string());
     }
     let refname = unescape(field(&mut lines, "refname")?)?;
@@ -288,6 +500,39 @@ fn load(path: &Path) -> Result<Option<ImportJournal>, String> {
         None
     } else {
         Some(decode_record(tail)?)
+    };
+    let (
+        append,
+        append_original_len,
+        append_original_sha256,
+        append_payload_len,
+        append_payload_sha256,
+    ) = if version == MAGIC {
+        let append_path = field(&mut lines, "append_path")?;
+        let append_original_len = parse_usize(field(&mut lines, "append_original_len")?)?;
+        let append_original_sha256 = field(&mut lines, "append_original_sha256")?.to_string();
+        let append_payload_len = parse_usize(field(&mut lines, "append_payload_len")?)?;
+        let append_payload_sha256 = field(&mut lines, "append_payload_sha256")?.to_string();
+        let append_payload = field(&mut lines, "append_payload")?;
+        let append = match (append_path, append_payload) {
+            ("-", "-") => None,
+            ("-", _) | (_, "-") => {
+                return Err("import journal has incomplete append fields".to_string());
+            }
+            (path, payload) => Some(ImportAppend {
+                path: PathBuf::from(unescape(path)?),
+                payload: hex::decode(payload).map_err(|error| error.to_string())?,
+            }),
+        };
+        (
+            append,
+            append_original_len,
+            append_original_sha256,
+            append_payload_len,
+            append_payload_sha256,
+        )
+    } else {
+        (None, 0, sha256(&[]), 0, sha256(&[]))
     };
     let record_count = parse_usize(field(&mut lines, "record_count")?)?;
     let mut records = Vec::with_capacity(record_count);
@@ -304,9 +549,14 @@ fn load(path: &Path) -> Result<Option<ImportJournal>, String> {
             target_oid,
             rev_map_path,
             records,
+            append,
         },
         original_record_count,
         original_tail,
+        append_original_len,
+        append_original_sha256,
+        append_payload_len,
+        append_payload_sha256,
     }))
 }
 
@@ -452,6 +702,7 @@ mod tests {
                 revision: 1,
                 object_id_hex: f.target.clone(),
             }],
+            append: None,
         }
     }
 
@@ -460,6 +711,27 @@ mod tests {
             publication: publication(f),
             original_record_count: 0,
             original_tail: None,
+            append_original_len: 0,
+            append_original_sha256: sha256(&[]),
+            append_payload_len: 0,
+            append_payload_sha256: sha256(&[]),
+        }
+    }
+
+    fn journal_with_append(f: &Fixture, original: &[u8], payload: &[u8]) -> ImportJournal {
+        let mut publication = publication(f);
+        publication.append = Some(ImportAppend {
+            path: f.rev_map.parent().unwrap().join("unhandled.log"),
+            payload: payload.to_vec(),
+        });
+        ImportJournal {
+            publication,
+            original_record_count: 0,
+            original_tail: None,
+            append_original_len: original.len(),
+            append_original_sha256: sha256(original),
+            append_payload_len: payload.len(),
+            append_payload_sha256: sha256(payload),
         }
     }
 
@@ -524,5 +796,67 @@ mod tests {
             .records()
             .unwrap();
         assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn completes_ref_map_and_append_together() {
+        let f = fixture();
+        let log = f.rev_map.parent().unwrap().join("unhandled.log");
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(&log, b"original\n").unwrap();
+        let mut publication = publication(&f);
+        publication.append = Some(ImportAppend {
+            path: log.clone(),
+            payload: b"r1\n  +file_prop: trunk/a custom:value x\n".to_vec(),
+        });
+
+        complete(&f.git, publication).unwrap();
+
+        assert_eq!(
+            fs::read(&log).unwrap(),
+            b"original\nr1\n  +file_prop: trunk/a custom:value x\n"
+        );
+        assert!(!journal_path(&f.git).unwrap().exists());
+    }
+
+    #[test]
+    fn recovers_a_partially_appended_payload() {
+        let f = fixture();
+        let original = b"original\n";
+        let payload = b"r1\nmetadata\n";
+        let journal = journal_with_append(&f, original, payload);
+        let log = journal.publication.append.as_ref().unwrap().path.clone();
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(&log, [original.as_slice(), &payload[..5]].concat()).unwrap();
+        save(&journal_path(&f.git).unwrap(), &journal).unwrap();
+        f.git
+            .update_ref_expected(&f.refname, &f.target, &f.old)
+            .unwrap();
+        let mut map = RevMap::open(&f.rev_map, ObjectFormat::Sha1).unwrap();
+        map.append(1, &f.target).unwrap();
+
+        assert!(recover_pending(&f.git).unwrap());
+        assert_eq!(
+            fs::read(log).unwrap(),
+            [original.as_slice(), payload].concat()
+        );
+        assert!(!journal_path(&f.git).unwrap().exists());
+    }
+
+    #[test]
+    fn append_conflict_is_detected_before_ref_or_map_mutation() {
+        let f = fixture();
+        let journal = journal_with_append(&f, b"original\n", b"r1\nmetadata\n");
+        let log = journal.publication.append.as_ref().unwrap().path.clone();
+        fs::create_dir_all(log.parent().unwrap()).unwrap();
+        fs::write(&log, b"changed!\n").unwrap();
+        save(&journal_path(&f.git).unwrap(), &journal).unwrap();
+
+        let error = recover_pending(&f.git).unwrap_err();
+
+        assert!(error.contains("prefix does not match"));
+        assert_eq!(current_ref_oid(&f.git, &f.refname).unwrap(), f.old);
+        assert!(!f.rev_map.exists());
+        assert!(journal_path(&f.git).unwrap().exists());
     }
 }

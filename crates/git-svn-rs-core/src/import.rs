@@ -1,5 +1,3 @@
-use std::fs::OpenOptions;
-use std::io::Write;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -11,7 +9,9 @@ use crate::filters::{FilterDecision, PathFilters};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::glob_spec::GlobSpec;
-use crate::import_transaction::{ImportPublication, complete as complete_import_publication};
+use crate::import_transaction::{
+    ImportAppend, ImportPublication, complete as complete_import_publication,
+};
 use crate::mapping::RefMapping;
 use crate::rev_map::{RevMap, RevMapRecord};
 use crate::svn::editor::FetchEditor;
@@ -217,6 +217,7 @@ fn import_revisions_for_mapping(
         existing_parent_ref.as_deref(),
         &staging_ref,
         &imported_revisions,
+        None,
     )?;
 
     Ok(ImportSummary { imported_revisions })
@@ -322,6 +323,7 @@ fn import_ra_revisions_for_mapping(
     }
 
     git.fast_import(&stream.finish())?;
+    let append = unhandled_append(git, &mapping.git_ref, &unhandled_revisions)?;
     publish_imported_revisions(
         git,
         &mapping.git_ref,
@@ -329,8 +331,8 @@ fn import_ra_revisions_for_mapping(
         existing_parent_ref.as_deref(),
         &staging_ref,
         &imported_revisions,
+        append,
     )?;
-    append_unhandled_log(git, &mapping.git_ref, &unhandled_revisions)?;
 
     Ok(ImportSummary { imported_revisions })
 }
@@ -1105,6 +1107,7 @@ fn publish_imported_revisions(
     expected_old_oid: Option<&str>,
     staging_ref: &str,
     revisions: &[u32],
+    append: Option<ImportAppend>,
 ) -> Result<(), String> {
     let history = git.first_parent_history(staging_ref)?;
     if history.len() < revisions.len() {
@@ -1149,6 +1152,7 @@ fn publish_imported_revisions(
             target_oid,
             rev_map_path: rev_map_path(git, refname, uuid)?,
             records,
+            append,
         },
     )
 }
@@ -1167,30 +1171,29 @@ fn rev_map_path(git: &GitCli, refname: &str, uuid: &str) -> Result<PathBuf, Stri
         .join(format!(".rev_map.{uuid}")))
 }
 
-fn append_unhandled_log(
+fn unhandled_append(
     git: &GitCli,
     refname: &str,
     revisions: &[(u32, UnhandledMetadata)],
-) -> Result<(), String> {
+) -> Result<Option<ImportAppend>, String> {
     if revisions.is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let metadata_dir = rev_map_path(git, refname, "metadata")?
         .parent()
         .ok_or_else(|| "rev_map path has no parent directory".to_string())?
         .to_path_buf();
-    std::fs::create_dir_all(&metadata_dir).map_err(|error| error.to_string())?;
-    let mut log = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(metadata_dir.join("unhandled.log"))
-        .map_err(|error| error.to_string())?;
+    let mut payload = String::new();
     for (revision, metadata) in revisions {
-        writeln!(log, "r{revision}").map_err(|error| error.to_string())?;
+        payload.push_str(&format!("r{revision}\n"));
         for line in metadata.lines() {
-            writeln!(log, "{line}").map_err(|error| error.to_string())?;
+            payload.push_str(&line);
+            payload.push('\n');
         }
     }
-    Ok(())
+    Ok(Some(ImportAppend {
+        path: metadata_dir.join("unhandled.log"),
+        payload: payload.into_bytes(),
+    }))
 }

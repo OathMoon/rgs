@@ -182,6 +182,22 @@ fn imports_ra_session_update_into_git_and_rev_map() {
         std::fs::read_to_string(dir.path().join(".git/svn/origin.trunk/unhandled.log")).unwrap(),
         "r2\n  +file_prop: trunk/src/lib.rs svn:eol-style LF\n"
     );
+
+    let repeated = import_ra_revisions(
+        &session,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+    assert!(repeated.imported_revisions.is_empty());
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join(".git/svn/origin.trunk/unhandled.log")).unwrap(),
+        "r2\n  +file_prop: trunk/src/lib.rs svn:eol-style LF\n"
+    );
 }
 
 #[test]

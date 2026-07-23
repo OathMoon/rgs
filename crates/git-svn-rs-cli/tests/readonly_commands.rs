@@ -1261,6 +1261,34 @@ fn gc_compresses_unhandled_log_and_removes_index_files() {
 }
 
 #[test]
+fn gc_preserves_metadata_while_import_publication_is_pending() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let svn_root = work.join(".git/svn");
+    let svn_dir = svn_root.join("git-svn");
+    let journal = svn_root.join("import-journal");
+    let unhandled = svn_dir.join("unhandled.log");
+    let compressed = svn_dir.join("unhandled.log.gz");
+    let index = svn_dir.join("index");
+    std::fs::write(&journal, "pending\n").unwrap();
+    std::fs::write(&unhandled, "property svn:ignore\n").unwrap();
+    std::fs::write(&index, "stale index\n").unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("gc")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unfinished import journal"));
+
+    assert!(journal.exists());
+    assert!(unhandled.exists());
+    assert!(!compressed.exists());
+    assert!(index.exists());
+}
+
+#[test]
 fn reset_moves_tracked_ref_and_truncates_rev_map() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();

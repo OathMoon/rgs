@@ -22,7 +22,10 @@ pub fn run_in_work_tree(work_tree: impl Into<std::path::PathBuf>) -> Result<(), 
     if !svn_dir.exists() {
         return Ok(());
     }
-    clean_svn_metadata(&svn_dir)
+    crate::import_transaction::with_exclusive_lock(&git, || {
+        crate::import_transaction::ensure_no_pending(&git)?;
+        clean_svn_metadata(&svn_dir)
+    })
 }
 
 fn clean_svn_metadata(path: &Path) -> Result<(), String> {
