@@ -384,6 +384,12 @@ fn dcommit_resumes_post_fetch_failure_without_duplicate_file_svn_commit() {
             "recover post fetch",
         ],
     );
+    make_commit(
+        &work,
+        "queued-after-recovery.txt",
+        "queued\n",
+        "recover queued commit",
+    );
     recovery_authors_prog(temp.path(), true);
     let before = svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
         .trim()
@@ -402,6 +408,26 @@ fn dcommit_resumes_post_fetch_failure_without_duplicate_file_svn_commit() {
         .parse::<u32>()
         .unwrap();
     assert_eq!(submitted, before + 1);
+    let journal_directory = find_dcommit_journal(&work);
+    let store = JournalStore::new(&journal_directory);
+    let interrupted = store.load().unwrap().expect("interrupted dcommit journal");
+    assert_eq!(interrupted.entries.len(), 2);
+    assert!(matches!(
+        interrupted.entries[0].state,
+        EntryState::Submitted { svn_revision } if svn_revision == u64::from(submitted)
+    ));
+    assert!(matches!(interrupted.entries[1].state, EntryState::Queued));
+    let first_log = svn_stdout(&["log", "--xml", &fixture.url()]);
+    assert_eq!(
+        first_log.matches("<msg>recover post fetch</msg>").count(),
+        1
+    );
+    assert_eq!(
+        first_log
+            .matches("<msg>recover queued commit</msg>")
+            .count(),
+        0
+    );
 
     recovery_authors_prog(temp.path(), false);
     Command::cargo_bin("git-svn-rs")
@@ -410,18 +436,74 @@ fn dcommit_resumes_post_fetch_failure_without_duplicate_file_svn_commit() {
         .args(["dcommit", "--no-rebase"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("recover post fetch"));
+        .stdout(predicate::str::contains("recover post fetch"))
+        .stdout(predicate::str::contains("recover queued commit"));
+    let completed_revision = svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
+        .trim()
+        .parse::<u32>()
+        .unwrap();
     assert_eq!(
-        svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
-            .trim()
-            .parse::<u32>()
-            .unwrap(),
-        submitted,
-        "resuming a Submitted journal must not create another SVN revision"
+        completed_revision,
+        before + 2,
+        "resume must fetch the first submission and submit only the queued commit"
+    );
+    let final_log = svn_stdout(&["log", "--xml", &fixture.url()]);
+    assert_eq!(
+        final_log.matches("<msg>recover post fetch</msg>").count(),
+        1
+    );
+    assert_eq!(
+        final_log
+            .matches("<msg>recover queued commit</msg>")
+            .count(),
+        1
     );
     assert_eq!(
         git_stdout(&work, &["show", "refs/remotes/origin/trunk:src/lib.rs"]),
         "pub fn answer() -> u8 { 51 }"
+    );
+    assert_eq!(
+        git_stdout(
+            &work,
+            &[
+                "show",
+                "refs/remotes/origin/trunk:queued-after-recovery.txt"
+            ]
+        ),
+        "queued"
+    );
+    let completed = store.load().unwrap().expect("completed dcommit journal");
+    assert_eq!(completed.batch_state, BatchState::Complete);
+    assert_eq!(completed.entries.len(), 2);
+    let rev_map_path = std::path::PathBuf::from(&completed.target.rev_map_path);
+    let rev_map_path = if rev_map_path.is_absolute() {
+        rev_map_path
+    } else {
+        work.join(rev_map_path)
+    };
+    let rev_map = RevMap::open_existing(rev_map_path, ObjectFormat::Sha1).unwrap();
+    for entry in &completed.entries {
+        let EntryState::FetchedVerified {
+            svn_revision,
+            imported_oid,
+        } = &entry.state
+        else {
+            panic!("recovered queue entry was not verified: {:?}", entry.state);
+        };
+        assert_eq!(
+            rev_map
+                .get(u32::try_from(*svn_revision).unwrap())
+                .unwrap()
+                .as_deref(),
+            Some(imported_oid.as_str())
+        );
+    }
+    let EntryState::FetchedVerified { imported_oid, .. } = &completed.entries[1].state else {
+        unreachable!()
+    };
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/origin/trunk"]),
+        *imported_oid
     );
 }
 
@@ -514,6 +596,257 @@ fn dcommit_adopts_verified_in_flight_file_svn_revision_without_resubmitting() {
             svn_revision,
             ..
         } if svn_revision == submitted
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn dcommit_adopts_revision_after_submitted_journal_save_failure() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 62 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "recover failed submitted save",
+        ],
+    );
+
+    let journal_directory = work.join(".git/svn/refs/remotes/origin/trunk/dcommit-journal");
+    assert!(!journal_directory.to_string_lossy().contains('"'));
+    let hook = fixture.root().join("repo/hooks/post-commit");
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nchmod 0555 \"{}\"\n",
+            journal_directory.display()
+        ),
+    )
+    .unwrap();
+    let mut hook_permissions = std::fs::metadata(&hook).unwrap().permissions();
+    hook_permissions.set_mode(0o755);
+    std::fs::set_permissions(&hook, hook_permissions).unwrap();
+    let before = fixture.latest_revision();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("durable outcome is ambiguous"))
+        .stderr(predicate::str::contains(
+            "submitted state could not be persisted",
+        ));
+    let submitted = fixture.latest_revision();
+    assert_eq!(submitted, before + 1);
+
+    let mut journal_permissions = std::fs::metadata(&journal_directory).unwrap().permissions();
+    journal_permissions.set_mode(0o755);
+    std::fs::set_permissions(&journal_directory, journal_permissions).unwrap();
+    let store = JournalStore::new(&journal_directory);
+    let journal = store.load().unwrap().expect("in-flight journal");
+    assert!(matches!(
+        journal.entries[0].state,
+        EntryState::SubmissionInFlight { .. }
+    ));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("outcome is ambiguous"));
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "automatic retry of the in-flight journal must not resubmit"
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--adopt-revision",
+            &submitted.to_string(),
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "manual adoption must not submit another SVN revision"
+    );
+    let recovered = store.load().unwrap().expect("reconciled dcommit journal");
+    assert_eq!(recovered.batch_state, BatchState::Complete);
+    assert!(matches!(
+        recovered.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision,
+            ..
+        } if svn_revision == u64::from(submitted)
+    ));
+}
+
+#[cfg(unix)]
+#[test]
+fn dcommit_adopts_revision_after_svn_commit_success_response_is_lost() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 63 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "recover lost submit response",
+        ],
+    );
+
+    let original_path = std::env::var_os("PATH").expect("PATH for svn fixture");
+    let real_svn = std::env::split_paths(&original_path)
+        .map(|directory| directory.join("svn"))
+        .find(|candidate| candidate.is_file())
+        .expect("real svn executable on PATH");
+    let wrapper_directory = temp.path().join("svn-wrapper");
+    std::fs::create_dir(&wrapper_directory).unwrap();
+    let wrapper = wrapper_directory.join("svn");
+    let marker = wrapper_directory.join("commit-response-lost");
+    assert!(!real_svn.to_string_lossy().contains('"'));
+    assert!(!marker.to_string_lossy().contains('"'));
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nis_commit=0\nfor arg in \"$@\"; do\n  if [ \"$arg\" = commit ]; then is_commit=1; fi\ndone\nif [ \"$is_commit\" = 1 ] && [ ! -e \"{}\" ]; then\n  : > \"{}\"\n  \"{}\" \"$@\" || exit $?\n  exit 1\nfi\nexec \"{}\" \"$@\"\n",
+            marker.display(),
+            marker.display(),
+            real_svn.display(),
+            real_svn.display()
+        ),
+    )
+    .unwrap();
+    let mut wrapper_permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+    wrapper_permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, wrapper_permissions).unwrap();
+    let wrapped_path = std::env::join_paths(
+        std::iter::once(wrapper_directory.clone()).chain(std::env::split_paths(&original_path)),
+    )
+    .unwrap();
+    let before = fixture.latest_revision();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .env("PATH", &wrapped_path)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("outcome is ambiguous"));
+    let submitted = fixture.latest_revision();
+    assert_eq!(submitted, before + 1);
+
+    let journal_directory = find_dcommit_journal(&work);
+    let store = JournalStore::new(&journal_directory);
+    let journal = store.load().unwrap().expect("in-flight journal");
+    assert!(matches!(
+        journal.entries[0].state,
+        EntryState::SubmissionInFlight { .. }
+    ));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("outcome is ambiguous"));
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "automatic retry after a lost response must not resubmit"
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--adopt-revision",
+            &submitted.to_string(),
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "manual adoption must not submit another SVN revision"
+    );
+    let recovered = store.load().unwrap().expect("reconciled dcommit journal");
+    assert_eq!(recovered.batch_state, BatchState::Complete);
+    assert!(matches!(
+        recovered.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision,
+            ..
+        } if svn_revision == u64::from(submitted)
     ));
 }
 
