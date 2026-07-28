@@ -2,11 +2,11 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `afe3fb4 Test submitted journal acknowledgement loss`
+Committed HEAD at audit: `7968d5e Cover multi-entry dcommit restart boundaries`
 Latest implementation commits:
 
-- `23bf393 Prove dcommit unknown-outcome recovery`
 - `afe3fb4 Test submitted journal acknowledgement loss`
+- `7968d5e Cover multi-entry dcommit restart boundaries`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -175,7 +175,8 @@ workflow has not yet had its first successful run.
   rejected, as is changing bound authors-file content.
 - Lost-submit-response and Submitted-save failures stay in-flight until verified
   adoption; a visible Submitted snapshot with lost acknowledgement restarts
-  without a sink call. Two-entry fetch recovery neither duplicates nor skips.
+  without a sink call. Two-entry verified/Submitted save faults neither duplicate
+  nor skip commits and preserve the verified queue prefix.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
   options consistently.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
@@ -202,7 +203,7 @@ Verified on 2026-07-28:
 - `cargo fmt --all -- --check`
 - `cargo test --workspace` (core unit suite 116/116)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (63/63)
-- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49)
+- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49); `cargo test -p git-svn-rs-core --test dcommit_restart` (7/7)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (37/37; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (37/37; HTTP DAV skipped without Apache)
@@ -224,8 +225,7 @@ Verified on 2026-07-28:
   streaming for release-level output fidelity.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
-- Extend multi-entry persistence-boundary and post-rebase tombstone fault
-  injection.
+- Add post-rebase Complete-tombstone fault injection.
 - Decide whether an explicit `--placeholder-filename` without
   `--preserve-empty-dirs` should fail rather than remain a low-risk no-op.
 
@@ -274,7 +274,8 @@ Verified on 2026-07-28:
 - `046bf41`: v4 effective post-fetch intent, authors-content binding, and v2/v3
   compatible recovery migration.
 - `23bf393`: real unknown-outcome, Submitted-save, and two-entry recovery evidence.
-- `afe3fb4`: durable Submitted-save acknowledgement-loss restart evidence.
+- `afe3fb4`, `7968d5e`: Submitted acknowledgement-loss and multi-entry durable
+  restart boundaries.
 
 ## Next Steps
 
