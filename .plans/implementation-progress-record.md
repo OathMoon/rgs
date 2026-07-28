@@ -2,12 +2,11 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `23bf393 Prove dcommit unknown-outcome recovery`
+Committed HEAD at audit: `afe3fb4 Test submitted journal acknowledgement loss`
 Latest implementation commits:
 
-- `53707fe Harden dcommit recovery client intent`
-- `046bf41 Bind dcommit post-fetch recovery intent`
 - `23bf393 Prove dcommit unknown-outcome recovery`
+- `afe3fb4 Test submitted journal acknowledgement loss`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -174,9 +173,9 @@ workflow has not yet had its first successful run.
 - A post-submit password rotation resumes with the same username and new secret
   without credential leakage or a duplicate SVN revision; changing username is
   rejected, as is changing bound authors-file content.
-- Real lost-submit-response and Submitted-save failures remain durably in-flight
-  until explicit verified adoption. A two-commit queue resumes after first-fetch
-  failure without duplicating or skipping either SVN revision.
+- Lost-submit-response and Submitted-save failures stay in-flight until verified
+  adoption; a visible Submitted snapshot with lost acknowledgement restarts
+  without a sink call. Two-entry fetch recovery neither duplicates nor skips.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
   options consistently.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
@@ -275,6 +274,7 @@ Verified on 2026-07-28:
 - `046bf41`: v4 effective post-fetch intent, authors-content binding, and v2/v3
   compatible recovery migration.
 - `23bf393`: real unknown-outcome, Submitted-save, and two-entry recovery evidence.
+- `afe3fb4`: durable Submitted-save acknowledgement-loss restart evidence.
 
 ## Next Steps
 
