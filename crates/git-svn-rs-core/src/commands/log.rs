@@ -33,11 +33,13 @@ pub fn run_in_work_tree(
     let exact_revision = revision_filter
         .as_ref()
         .and_then(RevisionFilter::exact_revision);
-    let log_target = if let Some(revision) = exact_revision {
-        tracked.records()?.into_iter().find_map(|record| {
-            (record.revision == revision && !record.has_zero_object_id())
-                .then_some(record.object_id_hex)
-        })
+    let log_target = if let Some(filter) = revision_filter.as_ref() {
+        tracked
+            .records()?
+            .into_iter()
+            .filter(|record| filter.contains(record.revision) && !record.has_zero_object_id())
+            .max_by_key(|record| record.revision)
+            .map(|record| record.object_id_hex)
     } else {
         Some(tracked.refname.clone())
     };
@@ -65,11 +67,11 @@ pub fn run_in_work_tree(
             continue;
         }
         let (record, git_output) = record.split_once('\x1d').unwrap_or((record, ""));
-        let fields = record.splitn(5, '\x1f').collect::<Vec<_>>();
-        if fields.len() != 5 {
+        let fields = record.splitn(7, '\x1f').collect::<Vec<_>>();
+        if fields.len() != 7 {
             continue;
         }
-        let Some((id, message)) = split_git_svn_footer(fields[4]) else {
+        let Some((id, message)) = split_git_svn_footer(fields[6]) else {
             continue;
         };
         if last_revision == Some(id.revision) {
@@ -101,10 +103,11 @@ pub fn run_in_work_tree(
         entries.push((
             GitSvnLogEntry {
                 revision: id.revision,
-                author: svn_author(authors.as_ref(), fields[1], fields[2]),
-                date: format_svn_date(fields[3])?,
+                author: svn_author(authors.as_ref(), fields[2], fields[3]),
+                date: format_svn_date(fields[4], author_timezone(fields[5])?)?,
                 message,
                 commit: fields[0].to_string(),
+                abbreviated_commit: Some(fields[1].to_string()),
                 changed_paths,
             },
             git_output.to_string(),
@@ -177,10 +180,20 @@ fn svn_author(authors: Option<&AuthorResolver>, name: &str, email: &str) -> Stri
         .unwrap_or_else(|| name.trim().to_string())
 }
 
-fn format_svn_date(epoch: &str) -> Result<String, String> {
+fn author_timezone(author_date: &str) -> Result<&str, String> {
+    author_date
+        .split_whitespace()
+        .next_back()
+        .ok_or_else(|| format!("invalid Git author date: {author_date}"))
+}
+
+fn format_svn_date(epoch: &str, timezone: &str) -> Result<String, String> {
     let epoch = epoch
         .parse::<i64>()
         .map_err(|_| format!("invalid Git author timestamp: {epoch}"))?;
+    let epoch = epoch
+        .checked_add(parse_timezone_offset(timezone)?)
+        .ok_or_else(|| format!("Git author timestamp is out of range: {epoch} {timezone}"))?;
     let date = Local
         .timestamp_opt(epoch, 0)
         .single()
@@ -188,6 +201,27 @@ fn format_svn_date(epoch: &str) -> Result<String, String> {
     Ok(date
         .format("%Y-%m-%d %H:%M:%S %z (%a, %d %b %Y)")
         .to_string())
+}
+
+fn parse_timezone_offset(timezone: &str) -> Result<i64, String> {
+    let bytes = timezone.as_bytes();
+    if bytes.len() != 5
+        || !matches!(bytes[0], b'+' | b'-')
+        || !bytes[1..].iter().all(u8::is_ascii_digit)
+    {
+        return Err(format!("invalid Git author timezone: {timezone}"));
+    }
+    let hours = timezone[1..3]
+        .parse::<i64>()
+        .map_err(|_| format!("invalid Git author timezone: {timezone}"))?;
+    let minutes = timezone[3..5]
+        .parse::<i64>()
+        .map_err(|_| format!("invalid Git author timezone: {timezone}"))?;
+    if hours > 23 || minutes > 59 {
+        return Err(format!("invalid Git author timezone: {timezone}"));
+    }
+    let seconds = hours * 3600 + minutes * 60;
+    Ok(if bytes[0] == b'-' { -seconds } else { seconds })
 }
 
 fn verbose_path_prefix(svn_path: &str, url: &str) -> String {
@@ -314,7 +348,7 @@ fn parse_revision(value: &str) -> Result<u32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_svn_date, split_git_svn_footer, svn_author};
+    use super::{format_svn_date, parse_timezone_offset, split_git_svn_footer, svn_author};
     use crate::authors::parse_authors_file;
 
     const FOOTER: &str = "git-svn-id: mock://repo/trunk@2 mock-uuid";
@@ -366,11 +400,21 @@ mod tests {
 
     #[test]
     fn date_uses_frozen_svn_log_shape() {
-        let formatted = format_svn_date("1767225600").unwrap();
+        let formatted = format_svn_date("1767225600", "+0000").unwrap();
 
         assert!(formatted.starts_with("2026-01-01 "));
         assert!(formatted.ends_with("(Thu, 01 Jan 2026)"));
         assert_eq!(formatted.as_bytes()[19], b' ');
         assert!(matches!(formatted.as_bytes()[20], b'+' | b'-'));
+    }
+
+    #[test]
+    fn author_timezone_offset_matches_frozen_log_pm_adjustment() {
+        assert_eq!(parse_timezone_offset("+0800").unwrap(), 8 * 3600);
+        assert_eq!(
+            parse_timezone_offset("-0530").unwrap(),
+            -(5 * 3600 + 30 * 60)
+        );
+        assert!(parse_timezone_offset("+2460").is_err());
     }
 }

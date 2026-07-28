@@ -706,9 +706,10 @@ fn log_default_ends_with_svn_log_separator() {
 }
 
 #[test]
-fn log_oneline_show_commit_prints_git_commit_prefix() {
+fn log_oneline_show_commit_honors_git_abbreviation_length() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
+    git(&work, ["config", "core.abbrev", "12"]);
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -716,7 +717,42 @@ fn log_oneline_show_commit_prints_git_commit_prefix() {
         .args(["log", "--oneline", "--show-commit"])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^r2 \\| [0-9a-f]{7} \\| add trunk file\n$").unwrap());
+        .stdout(predicate::str::is_match("^r2 \\| [0-9a-f]{12} \\| add trunk file\n$").unwrap());
+}
+
+#[test]
+fn log_applies_author_timezone_like_frozen_log_pm() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    std::fs::write(work.join("dated.txt"), "dated\n").unwrap();
+    git(work, ["add", "dated.txt"]);
+    let status = std::process::Command::new("git")
+        .current_dir(work)
+        .env("GIT_AUTHOR_DATE", "@1767225600 +0800")
+        .env("GIT_COMMITTER_DATE", "@1767225600 +0800")
+        .args([
+            "commit",
+            "-m",
+            "dated\n\ngit-svn-id: mock://repo@1 mock-uuid",
+        ])
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let commit = git_output(work, ["rev-parse", "HEAD"]).trim().to_string();
+    write_rev_map_for_short_ref(work, "git-svn", &[(1, &commit)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &commit]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .env("TZ", "UTC")
+        .args(["log", "--revision", "1"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "2026-01-01 08:00:00 +0000 (Thu, 01 Jan 2026)",
+        ));
 }
 
 #[test]
@@ -935,7 +971,7 @@ fn log_limit_counts_showable_svn_revisions_not_raw_git_commits() {
 }
 
 #[test]
-fn log_exact_revision_ignores_footer_not_present_in_rev_map() {
+fn log_revision_selection_ignores_footer_not_present_in_rev_map() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
@@ -949,7 +985,7 @@ fn log_exact_revision_ignores_footer_not_present_in_rev_map() {
         work,
         "forged.txt",
         "forged\n",
-        "forged\n\ngit-svn-id: mock://repo@99 mock-uuid",
+        "forged\n\ngit-svn-id: mock://repo@2 mock-uuid",
     );
     write_rev_map_for_short_ref(work, "git-svn", &[(1, &rev1)]);
     git(work, ["update-ref", "refs/remotes/git-svn", &forged]);
@@ -957,10 +993,18 @@ fn log_exact_revision_ignores_footer_not_present_in_rev_map() {
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(work)
-        .args(["log", "--revision", "99", "--oneline"])
+        .args(["log", "--revision", "2", "--oneline"])
         .assert()
         .success()
         .stdout("");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--revision", "1:2", "--oneline"])
+        .assert()
+        .success()
+        .stdout("r1 | first\n");
 }
 
 #[test]

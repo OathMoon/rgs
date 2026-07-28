@@ -8,6 +8,7 @@ fn formats_svn_style_log_entry() {
         date: "2026-01-01T00:00:00Z".to_string(),
         message: "add file\n\nbody".to_string(),
         commit: "abcdef1234567890".to_string(),
+        abbreviated_commit: None,
         changed_paths: vec!["M\ttrunk/src/lib.rs".to_string()],
     };
 
@@ -31,6 +32,7 @@ fn normal_log_entry_without_show_commit_keeps_svn_header() {
         date: "2026-01-01T00:00:00Z".to_string(),
         message: "add file".to_string(),
         commit: "abcdef1234567890".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -48,6 +50,7 @@ fn formats_oneline_log_entry() {
         date: "2026-01-02T00:00:00Z".to_string(),
         message: "update file\n\nignored body".to_string(),
         commit: "1234567890abcdef".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -64,6 +67,7 @@ fn oneline_log_entry_can_show_commit() {
         date: "2026-01-04T00:00:00Z".to_string(),
         message: "show commit".to_string(),
         commit: "abc123def456".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -80,6 +84,7 @@ fn oneline_revision_is_right_padded_to_the_first_entry_width() {
         date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
         message: "subject".to_string(),
         commit: "0123456789abcdef".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -97,6 +102,7 @@ fn incremental_log_entry_keeps_leading_separator() {
         date: "2026-01-03T00:00:00Z".to_string(),
         message: "incremental entry".to_string(),
         commit: "fedcba0987654321".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -119,6 +125,7 @@ fn incremental_log_entry_can_show_short_commit_without_trailing_separator() {
         date: "2026-01-07T00:00:00Z".to_string(),
         message: "incremental commit".to_string(),
         commit: "abcdef1234567890".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -138,6 +145,7 @@ fn counts_internal_blank_lines_and_empty_messages() {
         date: "2026-01-05T00:00:00Z".to_string(),
         message: "subject\n\nbody".to_string(),
         commit: "0123456789abcdef".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
     let empty_entry = GitSvnLogEntry {
@@ -146,6 +154,7 @@ fn counts_internal_blank_lines_and_empty_messages() {
         date: "2026-01-06T00:00:00Z".to_string(),
         message: String::new(),
         commit: "0123456789abcdef".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -171,6 +180,7 @@ fn oneline_skips_leading_blank_lines_like_frozen_log_pm() {
         date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
         message: "\n\nsubject\nbody".to_string(),
         commit: "0123456789abcdef".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -188,6 +198,7 @@ fn preserves_trailing_message_whitespace_and_counts_a_trailing_blank_line() {
         date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
         message: "subject  \n".to_string(),
         commit: "0123456789abcdef".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 
@@ -203,6 +214,7 @@ fn normal_log_preserves_passthrough_git_output_after_the_message() {
         date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
         message: "subject".to_string(),
         commit: "0123456789abcdef".to_string(),
+        abbreviated_commit: None,
         changed_paths: Vec::new(),
     };
 

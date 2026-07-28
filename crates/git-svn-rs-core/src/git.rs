@@ -293,7 +293,7 @@ impl GitCli {
     ) -> Result<String, String> {
         let mut args = vec![
             "log".to_string(),
-            "--format=%x1e%H%x1f%an%x1f%ae%x1f%at%x1f%B%x1d".to_string(),
+            "--format=%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%ai%x1f%B%x1d".to_string(),
         ];
         if let Some(limit) = limit {
             args.push(format!("-n{limit}"));

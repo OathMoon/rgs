@@ -5,6 +5,7 @@ pub struct GitSvnLogEntry {
     pub date: String,
     pub message: String,
     pub commit: String,
+    pub abbreviated_commit: Option<String>,
     pub changed_paths: Vec<String>,
 }
 
@@ -71,7 +72,10 @@ impl GitSvnLogFormatter {
             if self.show_commit {
                 return format!(
                     "r{revision} | {} | {}\n",
-                    short_commit(&entry.commit),
+                    entry
+                        .abbreviated_commit
+                        .as_deref()
+                        .unwrap_or_else(|| short_commit(&entry.commit)),
                     first_line(&entry.message)
                 );
             }
@@ -85,7 +89,13 @@ impl GitSvnLogFormatter {
         let line_label = if line_count == 1 { "line" } else { "lines" };
         out.push_str(&format!("r{} | ", entry.revision));
         if self.show_commit {
-            out.push_str(&format!("{} | ", short_commit(&entry.commit)));
+            out.push_str(&format!(
+                "{} | ",
+                entry
+                    .abbreviated_commit
+                    .as_deref()
+                    .unwrap_or_else(|| short_commit(&entry.commit))
+            ));
         }
         out.push_str(&format!(
             "{} | {} | {line_count} {line_label}\n",
