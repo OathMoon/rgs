@@ -541,6 +541,81 @@ fn clone_stdlayout_svn_url_imports_trunk_history() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn clone_and_incremental_fetch_use_real_svn_ssh_tunnel() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let wrapper = temp.path().join("svn-ssh");
+    std::fs::write(
+        &wrapper,
+        "#!/bin/sh\nexec svnserve -t -r \"$GIT_SVN_RS_SVN_ROOT\"\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, permissions).unwrap();
+
+    let work = temp.path().join("work");
+    let url = "svn+ssh://fixture/repo/trunk";
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("SVN_SSH", &wrapper)
+        .env("GIT_SVN_RS_SVN_ROOT", fixture.root())
+        .args(["clone", url, "work"])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/git-svn:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+    let before = git
+        .run_for_test(["rev-parse", "refs/remotes/git-svn"])
+        .unwrap();
+
+    fixture
+        .modify_run_script_content("#!/bin/sh\necho tunneled\n")
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .env("SVN_SSH", &wrapper)
+        .env("GIT_SVN_RS_SVN_ROOT", fixture.root())
+        .arg("fetch")
+        .assert()
+        .success();
+
+    let after = git
+        .run_for_test(["rev-parse", "refs/remotes/git-svn"])
+        .unwrap();
+    assert_ne!(after, before);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/git-svn:run.sh"])
+            .unwrap(),
+        "#!/bin/sh\necho tunneled\n"
+    );
+    assert!(
+        git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/git-svn"])
+            .unwrap()
+            .contains("git-svn-id: svn+ssh://fixture/repo/trunk@5 ")
+    );
+}
+
 #[test]
 fn clone_stdlayout_authenticated_svn_url_imports_with_password() {
     match require_svn_tools().and_then(|()| require_svnserve()) {

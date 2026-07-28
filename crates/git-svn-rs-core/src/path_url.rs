@@ -85,12 +85,11 @@ pub fn svn_url_profile(url: &str) -> SvnUrlProfile {
 
 pub fn validate_fetch_url(url: &str) -> Result<(), String> {
     match svn_url_profile(url) {
-        SvnUrlProfile::Mock | SvnUrlProfile::File | SvnUrlProfile::Svn => Ok(()),
+        SvnUrlProfile::Mock | SvnUrlProfile::File | SvnUrlProfile::Svn | SvnUrlProfile::SvnSsh => {
+            Ok(())
+        }
         SvnUrlProfile::Http => Err(format!(
             "HTTP(S) SVN fetch is deferred until the remote protocol profile is validated: {url}"
-        )),
-        SvnUrlProfile::SvnSsh => Err(format!(
-            "svn+ssh SVN fetch is deferred until the remote protocol profile is validated: {url}"
         )),
         SvnUrlProfile::Unsupported => Err(format!("unsupported SVN URL scheme: {url}")),
     }

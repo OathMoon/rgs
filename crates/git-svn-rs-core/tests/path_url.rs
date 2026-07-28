@@ -33,19 +33,15 @@ fn adds_path_to_url_without_double_slashes() {
 }
 
 #[test]
-fn remote_protocol_profiles_fail_closed_until_validated() {
+fn remote_protocol_profiles_match_validated_read_boundaries() {
     assert_eq!(svn_url_profile("file:///repo"), SvnUrlProfile::File);
     assert_eq!(svn_url_profile("svn://host/repo"), SvnUrlProfile::Svn);
     assert_eq!(svn_url_profile("HTTPS://host/repo"), SvnUrlProfile::Http);
     assert!(validate_fetch_url("file:///repo").is_ok());
     assert!(validate_fetch_url("svn://host/repo").is_ok());
+    assert!(validate_fetch_url("svn+ssh://host/repo").is_ok());
     assert!(
         validate_fetch_url("https://host/repo")
-            .unwrap_err()
-            .contains("deferred")
-    );
-    assert!(
-        validate_fetch_url("svn+ssh://host/repo")
             .unwrap_err()
             .contains("deferred")
     );
