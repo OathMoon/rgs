@@ -172,6 +172,8 @@ pub struct LogArgs {
     pub revision: Option<String>,
     #[arg(short = 'A', long = "authors-file")]
     pub authors_file: Option<String>,
+    #[arg(long = "non-recursive")]
+    pub non_recursive: bool,
     #[arg(short = 'n', long)]
     pub limit: Option<u32>,
     #[arg(short = 'v', long)]

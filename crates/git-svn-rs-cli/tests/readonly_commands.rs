@@ -814,6 +814,20 @@ fn log_authors_file_overrides_the_persisted_mapping_for_display() {
 }
 
 #[test]
+fn log_non_recursive_omits_the_frozen_recursive_diff_flag() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--non-recursive", "--oneline"])
+        .assert()
+        .success()
+        .stdout("r2 | add trunk file\n");
+}
+
+#[test]
 fn log_incremental_keeps_record_separator_but_omits_trailing_separator() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

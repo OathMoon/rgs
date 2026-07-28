@@ -139,6 +139,16 @@ fn parses_log_authors_file() {
 }
 
 #[test]
+fn parses_log_non_recursive() {
+    let cli = Cli::parse_from(["git-svn-rs", "log", "--non-recursive"]);
+
+    let Command::Log(args) = cli.command else {
+        panic!("expected log");
+    };
+    assert!(args.non_recursive);
+}
+
+#[test]
 fn find_rev_before_and_after_conflict() {
     let err =
         Cli::try_parse_from(["git-svn-rs", "find-rev", "--before", "--after", "r3"]).unwrap_err();

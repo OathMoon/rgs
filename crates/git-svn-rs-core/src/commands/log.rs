@@ -44,11 +44,12 @@ pub fn run_in_work_tree(
         Some(tracked.refname.clone())
     };
     let raw = match log_target {
-        Some(log_target) => {
-            tracked
-                .git
-                .log_records(&log_target, exact_revision.map(|_| 1), &git_log_args)?
-        }
+        Some(log_target) => tracked.git.log_records(
+            &log_target,
+            exact_revision.map(|_| 1),
+            !args.non_recursive,
+            &git_log_args,
+        )?,
         None => String::new(),
     };
     let formatter = GitSvnLogFormatter::with_incremental(

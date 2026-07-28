@@ -289,18 +289,10 @@ impl GitCli {
         &self,
         rev: &str,
         limit: Option<u32>,
+        recursive: bool,
         passthrough_args: &[String],
     ) -> Result<String, String> {
-        let mut args = vec![
-            "log".to_string(),
-            "--format=%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%ai%x1f%B%x1d".to_string(),
-        ];
-        if let Some(limit) = limit {
-            args.push(format!("-n{limit}"));
-        }
-        args.push(rev.to_string());
-        args.extend(passthrough_args.iter().cloned());
-        self.run_args(args)
+        self.run_args(log_record_args(rev, limit, recursive, passthrough_args))
     }
 
     pub fn commit_summaries_between(
@@ -505,6 +497,27 @@ impl GitCli {
             Err(stderr_or_status(output))
         }
     }
+}
+
+fn log_record_args(
+    rev: &str,
+    limit: Option<u32>,
+    recursive: bool,
+    passthrough_args: &[String],
+) -> Vec<String> {
+    let mut args = vec![
+        "log".to_string(),
+        "--format=%x1e%H%x1f%h%x1f%an%x1f%ae%x1f%at%x1f%ai%x1f%B%x1d".to_string(),
+    ];
+    if recursive {
+        args.push("-r".to_string());
+    }
+    if let Some(limit) = limit {
+        args.push(format!("-n{limit}"));
+    }
+    args.push(rev.to_string());
+    args.extend(passthrough_args.iter().cloned());
+    args
 }
 
 fn rebase_args(upstream: &str, merge: bool, strategy: Option<&str>) -> Vec<String> {
@@ -774,7 +787,26 @@ fn parse_ls_tree_files(raw: &[u8]) -> Result<Vec<(String, String)>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GitCli, GitRawDiffEntry, GitRawDiffStatus, parse_raw_diff, rebase_args};
+    use super::{
+        GitCli, GitRawDiffEntry, GitRawDiffStatus, log_record_args, parse_raw_diff, rebase_args,
+    };
+
+    #[test]
+    fn log_recursive_arguments_match_frozen_git_svn() {
+        assert_eq!(
+            log_record_args("refs/remotes/git-svn", None, true, &[])[2..],
+            ["-r", "refs/remotes/git-svn"]
+        );
+        assert_eq!(
+            log_record_args(
+                "refs/remotes/git-svn",
+                Some(2),
+                false,
+                &["--raw".to_string()]
+            )[2..],
+            ["-n2", "refs/remotes/git-svn", "--raw"]
+        );
+    }
 
     #[test]
     fn rebase_arguments_match_frozen_git_svn_order() {
