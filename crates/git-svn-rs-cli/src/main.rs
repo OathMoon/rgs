@@ -24,7 +24,7 @@ fn main() -> Result<()> {
         Command::Rebase(args) => {
             print!(
                 "{}",
-                commands::rebase::run(args).map_err(anyhow::Error::msg)?
+                commands::rebase::run_with_inherited_stderr(args).map_err(anyhow::Error::msg)?
             );
             Ok(())
         }

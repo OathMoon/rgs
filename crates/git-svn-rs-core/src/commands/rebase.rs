@@ -6,9 +6,21 @@ pub fn run(args: RebaseArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
 }
 
+pub fn run_with_inherited_stderr(args: RebaseArgs) -> Result<String, String> {
+    run_in_work_tree_mode(".", args, true)
+}
+
 pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: RebaseArgs,
+) -> Result<String, String> {
+    run_in_work_tree_mode(work_tree, args, false)
+}
+
+fn run_in_work_tree_mode(
+    work_tree: impl Into<std::path::PathBuf>,
+    args: RebaseArgs,
+    inherit_rebase_stderr: bool,
 ) -> Result<String, String> {
     let work_tree = work_tree.into();
     let tracked = resolve_tracked_svn(work_tree.clone())?;
@@ -43,11 +55,21 @@ pub fn run_in_work_tree(
             )?;
         }
     }
-    tracked.git.rebase(
-        &tracked.refname,
-        args.verbose,
-        args.merge,
-        args.strategy.as_deref(),
-        args.rebase_merges,
-    )
+    if inherit_rebase_stderr {
+        tracked.git.rebase_with_inherited_stderr(
+            &tracked.refname,
+            args.verbose,
+            args.merge,
+            args.strategy.as_deref(),
+            args.rebase_merges,
+        )
+    } else {
+        tracked.git.rebase(
+            &tracked.refname,
+            args.verbose,
+            args.merge,
+            args.strategy.as_deref(),
+            args.rebase_merges,
+        )
+    }
 }

@@ -485,6 +485,33 @@ impl GitCli {
         ))
     }
 
+    pub fn rebase_with_inherited_stderr(
+        &self,
+        upstream: &str,
+        verbose: bool,
+        merge: bool,
+        strategy: Option<&str>,
+        rebase_merges: bool,
+    ) -> Result<String, String> {
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(rebase_args(
+                upstream,
+                verbose,
+                merge,
+                strategy,
+                rebase_merges,
+            ))
+            .stderr(Stdio::inherit())
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        } else {
+            Err(format!("git exited with status {}", output.status))
+        }
+    }
+
     pub fn run_for_test<const N: usize>(&self, args: [&str; N]) -> Result<String, String> {
         self.run(args)
     }

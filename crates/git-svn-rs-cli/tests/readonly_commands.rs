@@ -1794,6 +1794,72 @@ fn rebase_local_skips_remote_fetch() {
     assert!(!missing_repository.exists());
 }
 
+#[cfg(unix)]
+#[test]
+fn rebase_streams_successful_git_stderr() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    init_git_svn_work_tree(&work);
+    let base = commit_file(
+        &work,
+        "base.txt",
+        "base\n",
+        "base\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let upstream = commit_file(
+        &work,
+        "upstream.txt",
+        "upstream\n",
+        "upstream\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map(&work, &[&base, &upstream]);
+    git(&work, ["update-ref", "refs/remotes/git-svn", &upstream]);
+    git(&work, ["checkout", "-b", "topic", &base]);
+    commit_file(&work, "topic.txt", "topic\n", "topic");
+
+    let original_path = std::env::var_os("PATH").expect("PATH for git fixture");
+    let real_git = std::env::split_paths(&original_path)
+        .map(|directory| directory.join("git"))
+        .find(|candidate| candidate.is_file())
+        .expect("real git executable on PATH");
+    let wrapper_directory = temp.path().join("git-wrapper");
+    std::fs::create_dir(&wrapper_directory).unwrap();
+    let wrapper = wrapper_directory.join("git");
+    assert!(!real_git.to_string_lossy().contains('"'));
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = rebase ]; then\n  \"{}\" \"$@\" || exit $?\n  echo git-rebase-success-marker >&2\n  exit 0\nfi\nexec \"{}\" \"$@\"\n",
+            real_git.display(),
+            real_git.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, permissions).unwrap();
+    let wrapped_path = std::env::join_paths(
+        std::iter::once(wrapper_directory).chain(std::env::split_paths(&original_path)),
+    )
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .env("PATH", wrapped_path)
+        .args(["rebase", "--local"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("git-rebase-success-marker"));
+    assert_eq!(
+        git_output(&work, ["merge-base", "HEAD", "refs/remotes/git-svn"]).trim(),
+        upstream
+    );
+}
+
 #[test]
 fn rebase_merges_preserves_local_merge_topology() {
     let temp = tempfile::tempdir().unwrap();
