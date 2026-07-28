@@ -24,6 +24,7 @@ struct UpdateBaton<'a> {
     copy_sources: BTreeMap<String, (String, u32)>,
     copy_contents: BTreeMap<String, Vec<u8>>,
     path_prefix: String,
+    strip_reporter_prefix: Option<String>,
     error: Option<String>,
 }
 
@@ -47,11 +48,22 @@ impl UpdateBaton<'_> {
 
     fn map_path(&self, path: &str) -> String {
         let path = editor_path(path);
+        let path = self
+            .strip_reporter_prefix
+            .as_deref()
+            .and_then(|prefix| {
+                if path == prefix {
+                    Some("")
+                } else {
+                    path.strip_prefix(&format!("{prefix}/"))
+                }
+            })
+            .unwrap_or(&path);
         if self.path_prefix.is_empty()
             || path == self.path_prefix
             || path.starts_with(&format!("{}/", self.path_prefix))
         {
-            path
+            path.to_string()
         } else if path.is_empty() {
             self.path_prefix.clone()
         } else {
@@ -200,10 +212,26 @@ fn drive_report(
         }
 
         let target = target.trim_matches('/');
-        let (path_prefix, update_target) = target
+        let session_path = session_path.trim_matches('/');
+        let session_root_update = target.is_empty() && !session_path.is_empty();
+        let reporter_target = if session_root_update {
+            session_path
+        } else {
+            target
+        };
+        let (reporter_parent, update_target) = reporter_target
             .rsplit_once('/')
-            .map_or(("", target), |(parent, name)| (parent, name));
-        let session_url = add_path_to_url(backend.url(), path_prefix);
+            .map_or(("", reporter_target), |(parent, name)| (parent, name));
+        let path_prefix = if session_root_update {
+            ""
+        } else {
+            reporter_parent
+        };
+        let session_url = if session_root_update {
+            add_path_to_url(backend.repos_root(), reporter_parent)
+        } else {
+            add_path_to_url(backend.url(), path_prefix)
+        };
         let session_url =
             CString::new(session_url).map_err(|_| "SVN reparent URL contains NUL".to_string())?;
         svn_call(
@@ -224,6 +252,7 @@ fn drive_report(
             copy_sources,
             copy_contents,
             path_prefix: path_prefix.to_string(),
+            strip_reporter_prefix: session_root_update.then(|| reporter_target.to_string()),
             error: None,
         };
         (*editor).set_target_revision = Some(set_target_revision);
@@ -343,12 +372,6 @@ unsafe fn path(raw: *const c_char) -> Option<String> {
     })
 }
 
-unsafe fn copy_from(raw: *const c_char, revision: c_long) -> Option<(String, u32)> {
-    let path = unsafe { path(raw) }?;
-    let revision = u32::try_from(revision).ok()?;
-    Some((editor_path(&path), revision))
-}
-
 unsafe extern "C" fn set_target_revision(
     edit_baton: *mut c_void,
     revision: c_long,
@@ -404,8 +427,8 @@ unsafe extern "C" fn delete_entry(
 unsafe extern "C" fn add_directory(
     raw_path: *const c_char,
     parent_baton: *mut c_void,
-    copy_path: *const c_char,
-    copy_revision: c_long,
+    _copy_path: *const c_char,
+    _copy_revision: c_long,
     _pool: *mut AprPoolT,
     child_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
@@ -420,8 +443,7 @@ unsafe extern "C" fn add_directory(
         return unsafe { callback_error(baton) };
     };
     let path = baton.map_path(&path);
-    let copy = unsafe { copy_from(copy_path, copy_revision) }
-        .or_else(|| baton.copy_sources.get(&path).cloned());
+    let copy = baton.copy_sources.get(&path).cloned();
     baton
         .invoke(|editor| editor.add_directory(&path, copy.as_ref().map(|(p, r)| (p.as_str(), *r))));
     baton.directories.push(path);
@@ -463,8 +485,8 @@ unsafe extern "C" fn close_directory(
 unsafe extern "C" fn add_file(
     raw_path: *const c_char,
     parent_baton: *mut c_void,
-    copy_path: *const c_char,
-    copy_revision: c_long,
+    _copy_path: *const c_char,
+    _copy_revision: c_long,
     pool: *mut AprPoolT,
     file_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
@@ -479,14 +501,23 @@ unsafe extern "C" fn add_file(
         return unsafe { callback_error(baton) };
     };
     let path = baton.map_path(&path);
-    let copy = unsafe { copy_from(copy_path, copy_revision) }
-        .or_else(|| baton.copy_sources.get(&path).cloned());
+    let copy = baton.copy_sources.get(&path).cloned();
     let source_bytes = copy
         .as_ref()
         .and_then(|_| baton.copy_contents.get(&path))
         .cloned()
         .unwrap_or_default();
-    baton.invoke(|editor| editor.add_file(&path, copy.as_ref().map(|(p, r)| (p.as_str(), *r))));
+    if let Some((source_path, source_revision)) = copy.as_ref() {
+        baton.invoke(|editor| {
+            editor.add_file_with_copy_content(
+                &path,
+                (source_path.as_str(), *source_revision),
+                &source_bytes,
+            )
+        });
+    } else {
+        baton.invoke(|editor| editor.add_file(&path, None));
+    }
     let source = if copy.is_some() {
         unsafe {
             svn_stringbuf_ncreate(
@@ -613,8 +644,8 @@ unsafe extern "C" fn change_file_prop(
         baton.fail("libsvn file-property callback had no active file");
         return unsafe { callback_error(baton) };
     };
-    let value = (!value.is_null()).then(|| unsafe { svn_string_to_string(value) });
-    baton.invoke(|editor| editor.change_file_prop(&path, &name, value.as_deref()));
+    let value = (!value.is_null()).then(|| unsafe { svn_string_bytes(value) });
+    baton.invoke(|editor| editor.change_file_prop_bytes(&path, &name, value.as_deref()));
     unsafe { callback_error(baton) }
 }
 
@@ -635,9 +666,18 @@ unsafe extern "C" fn change_dir_prop(
         return ptr::null_mut();
     }
     let path = baton.directories.last().cloned().unwrap_or_default();
-    let value = (!value.is_null()).then(|| unsafe { svn_string_to_string(value) });
-    baton.invoke(|editor| editor.change_directory_prop(&path, &name, value.as_deref()));
+    let value = (!value.is_null()).then(|| unsafe { svn_string_bytes(value) });
+    baton.invoke(|editor| editor.change_directory_prop_bytes(&path, &name, value.as_deref()));
     unsafe { callback_error(baton) }
+}
+
+unsafe fn svn_string_bytes(value: *const svn_string_t) -> Vec<u8> {
+    let value = unsafe { &*value };
+    if value.data.is_null() || value.len == 0 {
+        Vec::new()
+    } else {
+        unsafe { slice::from_raw_parts(value.data.cast::<u8>(), value.len) }.to_vec()
+    }
 }
 
 unsafe extern "C" fn close_file(

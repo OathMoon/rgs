@@ -4,7 +4,7 @@ use crate::commands::reset_transaction;
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
-use crate::mapping::{MappingKind, RefMapping};
+use crate::mapping::{MappingKind, RefMapping, desanitize_refname, sanitize_refname};
 use crate::metadata::svn_metadata_dir;
 use crate::path_url::add_path_to_url;
 use crate::rev_map::{RevMap, RevMapRecord};
@@ -76,8 +76,7 @@ fn resolve_tracked_svn_impl(
     let mut best_identity: Option<(usize, TrackedSvn)> = None;
 
     for mapping in &mappings {
-        let metadata_dir =
-            svn_metadata_dir(&git_metadata_dir, &short_ref_for_metadata(&mapping.git_ref));
+        let metadata_dir = svn_metadata_dir(&git_metadata_dir, &mapping.git_ref)?;
         let tracked = match tracked_from_mapping(&git, &config, mapping, &metadata_dir) {
             Ok(tracked) => tracked,
             Err(_) if mapping != first_mapping => continue,
@@ -123,10 +122,7 @@ fn resolve_tracked_svn_impl(
         return Ok(tracked);
     }
 
-    let metadata_dir = svn_metadata_dir(
-        &git_metadata_dir,
-        &short_ref_for_metadata(&first_mapping.git_ref),
-    );
+    let metadata_dir = svn_metadata_dir(&git_metadata_dir, &first_mapping.git_ref)?;
     tracked_from_mapping(&git, &config, first_mapping, &metadata_dir)
 }
 
@@ -265,6 +261,7 @@ fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
     let (svn_path, git_ref) = value
         .split_once(':')
         .ok_or_else(|| format!("invalid fetch mapping: {value}"))?;
+    sanitize_refname(git_ref)?;
     Ok(RefMapping {
         kind,
         svn_path: svn_path.trim_start_matches('+').to_string(),
@@ -276,7 +273,15 @@ fn tracked_candidate_mappings(
     git: &GitCli,
     config: &SvnRemoteConfig,
 ) -> Result<Vec<RefMapping>, String> {
-    let mut mappings = config.fetch.clone();
+    let mut mappings = config
+        .fetch
+        .iter()
+        .cloned()
+        .map(|mut mapping| {
+            mapping.git_ref = sanitize_refname(&mapping.git_ref)?;
+            Ok(mapping)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
     let refs = git.refs_under("refs/remotes")?;
     for mapping in config.branches.iter().chain(config.tags.iter()) {
         mappings.extend(expand_ref_mapping(mapping, &refs));
@@ -295,7 +300,10 @@ fn expand_ref_mapping(mapping: &RefMapping, refs: &[String]) -> Vec<RefMapping> 
     refs.iter()
         .filter(|refname| !refname.ends_with("/HEAD"))
         .filter_map(|refname| {
-            let wildcard = refname.strip_prefix(git_prefix)?.strip_suffix(git_suffix)?;
+            let raw_refname = desanitize_refname(refname);
+            let wildcard = raw_refname
+                .strip_prefix(git_prefix)?
+                .strip_suffix(git_suffix)?;
             Some(RefMapping {
                 kind: mapping.kind.clone(),
                 svn_path: format!("{svn_prefix}{wildcard}{svn_suffix}"),
@@ -334,11 +342,4 @@ fn find_rev_map(metadata_dir: &Path) -> Result<(String, PathBuf), String> {
                 .join(", ")
         )),
     }
-}
-
-fn short_ref_for_metadata(refname: &str) -> String {
-    refname
-        .strip_prefix("refs/remotes/")
-        .unwrap_or(refname)
-        .replace('/', ".")
 }

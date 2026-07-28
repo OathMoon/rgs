@@ -32,8 +32,8 @@ pub struct FetchEditResult {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UnhandledMetadata {
-    directory_properties: BTreeMap<String, BTreeMap<String, Option<String>>>,
-    file_properties: BTreeMap<String, BTreeMap<String, Option<String>>>,
+    directory_properties: BTreeMap<String, BTreeMap<String, Option<Vec<u8>>>>,
+    file_properties: BTreeMap<String, BTreeMap<String, Option<Vec<u8>>>>,
     absent_directories: Vec<String>,
     absent_files: Vec<String>,
     empty_directories: BTreeMap<String, bool>,
@@ -380,6 +380,26 @@ impl FetchEditor for SvnFetchEditor {
         }
     }
 
+    fn add_file_with_copy_content(
+        &mut self,
+        path: &str,
+        _copy_from: (&str, u32),
+        content: &[u8],
+    ) -> Result<(), String> {
+        let touched_path = self.git_path(path);
+        self.touched_files.insert(touched_path.clone());
+        insert_parent_directories(&mut self.directories, &touched_path);
+        self.changes.insert(
+            touched_path,
+            PlannedChange::Modify(PlannedFile {
+                content: content.to_vec(),
+                executable: false,
+                special: false,
+            }),
+        );
+        Ok(())
+    }
+
     fn delete_entry(&mut self, path: &str, _revision: u32) -> Result<(), String> {
         let path = self.git_path(path);
         if path.is_empty() {
@@ -418,6 +438,15 @@ impl FetchEditor for SvnFetchEditor {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), String> {
+        self.change_file_prop_bytes(path, name, value.map(str::as_bytes))
+    }
+
+    fn change_file_prop_bytes(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&[u8]>,
+    ) -> Result<(), String> {
         let git_path = self.git_path(path);
         self.touched_files.insert(git_path.clone());
         insert_parent_directories(&mut self.directories, &git_path);
@@ -430,7 +459,7 @@ impl FetchEditor for SvnFetchEditor {
                     .file_properties
                     .entry(normalize_path(path))
                     .or_default()
-                    .insert(name.to_string(), value.map(str::to_string));
+                    .insert(name.to_string(), value.map(<[u8]>::to_vec));
             }
         }
         Ok(())
@@ -442,13 +471,22 @@ impl FetchEditor for SvnFetchEditor {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), String> {
+        self.change_directory_prop_bytes(path, name, value.map(str::as_bytes))
+    }
+
+    fn change_directory_prop_bytes(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&[u8]>,
+    ) -> Result<(), String> {
         let git_path = self.git_path(path);
         insert_directory_and_parents(&mut self.directories, &git_path);
         self.unhandled
             .directory_properties
             .entry(normalize_path(path))
             .or_default()
-            .insert(name.to_string(), value.map(str::to_string));
+            .insert(name.to_string(), value.map(<[u8]>::to_vec));
         Ok(())
     }
 
@@ -594,7 +632,7 @@ fn join_path(base: &str, child: &str) -> String {
 fn append_property_lines(
     lines: &mut Vec<String>,
     kind: &str,
-    properties: &BTreeMap<String, BTreeMap<String, Option<String>>>,
+    properties: &BTreeMap<String, BTreeMap<String, Option<Vec<u8>>>>,
 ) {
     for (path, values) in properties {
         let path = if path.is_empty() { "." } else { path };
@@ -604,7 +642,7 @@ fn append_property_lines(
             }
             let prefix = format!("{kind}: {} {}", uri_encode(path), uri_encode(name));
             match value {
-                Some(value) => lines.push(format!("  +{prefix} {}", uri_encode(value))),
+                Some(value) => lines.push(format!("  +{prefix} {}", uri_encode_bytes(value))),
                 None => lines.push(format!("  -{prefix}")),
             }
         }
@@ -625,8 +663,12 @@ fn skip_property(name: &str) -> bool {
 }
 
 fn uri_encode(value: &str) -> String {
+    uri_encode_bytes(value.as_bytes())
+}
+
+fn uri_encode_bytes(value: &[u8]) -> String {
     let mut encoded = String::new();
-    for byte in value.as_bytes() {
+    for byte in value {
         if byte.is_ascii_alphanumeric()
             || matches!(byte, b'*' | b'!' | b':' | b'_' | b'.' | b'/' | b'-')
         {

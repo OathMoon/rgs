@@ -10,7 +10,7 @@ use git_svn_rs_core::import::{
 use git_svn_rs_core::import_transaction::{
     begin_or_resume_batch, ensure_no_pending, mark_batch_mapping_completed,
 };
-use git_svn_rs_core::mapping::{build_single_path, build_standard_layout};
+use git_svn_rs_core::mapping::{MappingKind, RefMapping, build_single_path, build_standard_layout};
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
 use git_svn_rs_core::svn::editor::FetchEditor;
 use git_svn_rs_core::svn::mock::{MockRaSession, MockSvnBackend};
@@ -51,7 +51,8 @@ fn imports_mock_revisions_into_git_and_rev_map() {
     );
 
     let rev_map = RevMap::open(
-        dir.path().join(".git/svn/git-svn/.rev_map.mock-uuid"),
+        dir.path()
+            .join(".git/svn/refs/remotes/git-svn/.rev_map.mock-uuid"),
         ObjectFormat::Sha1,
     )
     .unwrap();
@@ -59,6 +60,175 @@ fn imports_mock_revisions_into_git_and_rev_map() {
     assert!(rev_map.get(2).unwrap().is_some());
     assert!(git.refs_under("refs/git-svn-rs/import").unwrap().is_empty());
     assert!(!dir.path().join(".git/svn/import-journal").exists());
+}
+
+#[test]
+fn mapping_collision_fails_before_publication_state_is_created() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", branch_copy_revisions());
+    let mut config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+    config.fetch = vec![
+        RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: "trunk".to_string(),
+            git_ref: "refs/remotes/origin/shared".to_string(),
+        },
+        RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: "branches/main".to_string(),
+            git_ref: "refs/remotes/origin/shared".to_string(),
+        },
+    ];
+    config.branches.clear();
+    config.tags.clear();
+
+    let error = import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("maps both SVN paths"));
+    assert!(git.refs_under("refs/remotes").unwrap().is_empty());
+    assert!(!dir.path().join(".git/svn/import-batch").exists());
+    assert!(!dir.path().join(".git/svn/origin.shared").exists());
+}
+
+#[test]
+fn candidate_ref_namespace_collision_with_existing_ref_fails_before_publication() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", revisions());
+    let initial = SvnRemoteConfig::new("svn", "mock://repo/trunk", build_single_path(""));
+    import_mock_revisions(
+        &backend,
+        &git,
+        &initial,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+    let tip = git.rev_parse("refs/remotes/git-svn").unwrap();
+    git.update_ref("refs/remotes/origin/topic/nested", tip.trim())
+        .unwrap();
+
+    let mut colliding = initial;
+    colliding.fetch[0].git_ref = "refs/remotes/origin/topic".to_string();
+    let error = import_mock_revisions(
+        &backend,
+        &git,
+        &colliding,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap_err();
+
+    assert!(error.contains("cannot coexist"));
+    assert!(!dir.path().join(".git/svn/import-batch").exists());
+    assert!(!dir.path().join(".git/svn/origin.topic").exists());
+}
+
+#[test]
+fn repeated_fixed_svn_path_uses_the_last_configured_destination() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", revisions());
+    let mut config = SvnRemoteConfig::new("svn", "mock://repo/trunk", build_single_path(""));
+    config.fetch = vec![
+        RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: String::new(),
+            git_ref: "refs/remotes/old".to_string(),
+        },
+        RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: String::new(),
+            git_ref: "refs/remotes/new".to_string(),
+        },
+    ];
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    assert!(git.rev_parse("refs/remotes/new").is_ok());
+    assert!(git.rev_parse("refs/remotes/old").is_err());
+    assert!(
+        dir.path()
+            .join(".git/svn/refs/remotes/new/.rev_map.mock-uuid")
+            .is_file()
+    );
+}
+
+#[test]
+fn wildcard_refnames_are_sanitized_reversibly() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new(
+        "mock-uuid",
+        vec![RevisionEvent {
+            revision: 1,
+            author: "alice".to_string(),
+            message: "space branch".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/branches/topic name/file.txt".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"topic\n".to_vec()),
+            }],
+        }],
+    );
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(1),
+        },
+    )
+    .unwrap();
+
+    let refname = "refs/remotes/origin/topic%20name";
+    assert_eq!(
+        git.run_for_test(["show", &format!("{refname}:file.txt")])
+            .unwrap(),
+        "topic\n"
+    );
+    assert!(
+        dir.path()
+            .join(".git/svn/refs/remotes/origin/topic%20name/.rev_map.mock-uuid")
+            .is_file()
+    );
 }
 
 #[test]
@@ -82,7 +252,8 @@ fn imports_mock_revisions_into_sha256_git_repo() {
     .unwrap();
 
     let rev_map = RevMap::open(
-        dir.path().join(".git/svn/git-svn/.rev_map.mock-uuid"),
+        dir.path()
+            .join(".git/svn/refs/remotes/git-svn/.rev_map.mock-uuid"),
         ObjectFormat::Sha256,
     )
     .unwrap();
@@ -105,7 +276,9 @@ fn fixed_mapping_records_and_replaces_a_sparse_scan_marker() {
 
     import_mock_revisions(&backend, &git, &config, options).unwrap();
 
-    let path = dir.path().join(".git/svn/origin.trunk/.rev_map.mock-uuid");
+    let path = dir
+        .path()
+        .join(".git/svn/refs/remotes/origin/trunk/.rev_map.mock-uuid");
     let map = RevMap::open_existing(&path, ObjectFormat::Sha1).unwrap();
     let records = map.records().unwrap();
     assert_eq!(records.len(), 2);
@@ -162,7 +335,8 @@ fn empty_log_window_still_records_the_fixed_mapping_scan_marker() {
     assert!(summary.imported_revisions.is_empty());
     assert!(git.rev_parse("refs/remotes/origin/trunk").is_err());
     let map = RevMap::open_existing(
-        dir.path().join(".git/svn/origin.trunk/.rev_map.mock-uuid"),
+        dir.path()
+            .join(".git/svn/refs/remotes/origin/trunk/.rev_map.mock-uuid"),
         ObjectFormat::Sha1,
     )
     .unwrap();
@@ -373,7 +547,9 @@ fn unfinished_ra_batch_preserves_completed_mapping_unhandled_log_exactly_once() 
     let branch_ref = "refs/remotes/origin/main";
 
     import_ra_revisions_for_ref(&session, &git, &config, options, Some(trunk_ref)).unwrap();
-    let log_path = dir.path().join(".git/svn/origin.trunk/unhandled.log");
+    let log_path = dir
+        .path()
+        .join(".git/svn/refs/remotes/origin/trunk/unhandled.log");
     let completed_log = std::fs::read(&log_path).unwrap();
     let completed_trunk = git.rev_parse(trunk_ref).unwrap();
     let batch_refs = vec![trunk_ref.to_string(), branch_ref.to_string()];
@@ -446,13 +622,18 @@ fn imports_ra_session_update_into_git_and_rev_map() {
     );
 
     let rev_map = RevMap::open(
-        dir.path().join(".git/svn/origin.trunk/.rev_map.mock-uuid"),
+        dir.path()
+            .join(".git/svn/refs/remotes/origin/trunk/.rev_map.mock-uuid"),
         ObjectFormat::Sha1,
     )
     .unwrap();
     assert!(rev_map.get(2).unwrap().is_some());
     assert_eq!(
-        std::fs::read_to_string(dir.path().join(".git/svn/origin.trunk/unhandled.log")).unwrap(),
+        std::fs::read_to_string(
+            dir.path()
+                .join(".git/svn/refs/remotes/origin/trunk/unhandled.log")
+        )
+        .unwrap(),
         "r2\n  +file_prop: trunk/src/lib.rs svn:eol-style LF\n"
     );
 
@@ -468,7 +649,11 @@ fn imports_ra_session_update_into_git_and_rev_map() {
     .unwrap();
     assert!(repeated.imported_revisions.is_empty());
     assert_eq!(
-        std::fs::read_to_string(dir.path().join(".git/svn/origin.trunk/unhandled.log")).unwrap(),
+        std::fs::read_to_string(
+            dir.path()
+                .join(".git/svn/refs/remotes/origin/trunk/unhandled.log")
+        )
+        .unwrap(),
         "r2\n  +file_prop: trunk/src/lib.rs svn:eol-style LF\n"
     );
 }
@@ -526,7 +711,11 @@ fn ra_import_filters_revisions_per_mapping_before_replay() {
             .trim()
     );
     assert_eq!(
-        std::fs::read_to_string(dir.path().join(".git/svn/origin.trunk/unhandled.log")).unwrap(),
+        std::fs::read_to_string(
+            dir.path()
+                .join(".git/svn/refs/remotes/origin/trunk/unhandled.log")
+        )
+        .unwrap(),
         concat!(
             "r2\n",
             "  +dir_prop: trunk custom:dir-prop dir%20value\n",

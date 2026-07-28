@@ -45,7 +45,7 @@ fn clone_stdlayout_file_url_imports_trunk_history() {
     assert!(commit.contains("git-svn-id: "));
     assert!(commit.contains(&format!("{}/trunk@2", fixture.url().trim_end_matches('/'))));
 
-    let rev_map_dir = work.join(".git").join("svn").join("origin.trunk");
+    let rev_map_dir = work.join(".git/svn/refs/remotes/origin/trunk");
     let rev_map = std::fs::read_dir(&rev_map_dir)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1172,7 +1172,8 @@ fn incremental_fetch_reconciles_empty_directory_placeholders_from_the_final_tree
         String::new()
     );
     let unhandled =
-        std::fs::read_to_string(work.join(".git/svn/origin.trunk/unhandled.log")).unwrap();
+        std::fs::read_to_string(work.join(".git/svn/refs/remotes/origin/trunk/unhandled.log"))
+            .unwrap();
     assert_eq!(
         unhandled
             .lines()
@@ -1283,7 +1284,8 @@ fn incremental_fetch_preserves_an_unowned_real_placeholder_named_file() {
         "value\n"
     );
     let unhandled =
-        std::fs::read_to_string(work.join(".git/svn/origin.trunk/unhandled.log")).unwrap();
+        std::fs::read_to_string(work.join(".git/svn/refs/remotes/origin/trunk/unhandled.log"))
+            .unwrap();
     assert!(!unhandled.contains("empty_dir: trunk/real-placeholder"));
 }
 
@@ -1322,7 +1324,10 @@ fn incremental_fetch_restores_placeholder_ownership_from_gc_archive() {
         .arg("gc")
         .assert()
         .success();
-    assert!(work.join(".git/svn/origin.trunk/unhandled.log.gz").exists());
+    assert!(
+        work.join(".git/svn/refs/remotes/origin/trunk/unhandled.log.gz")
+            .exists()
+    );
 
     run_svn(temp.path(), &["checkout", &fixture.url(), "upstream"]);
     std::fs::write(upstream.join("trunk/empty-dir/value.txt"), "value\n").unwrap();
@@ -1352,7 +1357,8 @@ fn incremental_fetch_restores_placeholder_ownership_from_gc_archive() {
             .is_err()
     );
     let unhandled =
-        std::fs::read_to_string(work.join(".git/svn/origin.trunk/unhandled.log")).unwrap();
+        std::fs::read_to_string(work.join(".git/svn/refs/remotes/origin/trunk/unhandled.log"))
+            .unwrap();
     assert!(unhandled.contains("  -empty_dir: trunk/empty-dir"));
 }
 
@@ -1989,7 +1995,7 @@ fn trunk_revision_commit(work: &std::path::Path, revision: u32) -> String {
 }
 
 fn trunk_rev_map_path(work: &std::path::Path) -> std::path::PathBuf {
-    std::fs::read_dir(work.join(".git/svn/origin.trunk"))
+    std::fs::read_dir(work.join(".git/svn/refs/remotes/origin/trunk"))
         .unwrap()
         .filter_map(Result::ok)
         .map(|entry| entry.path())

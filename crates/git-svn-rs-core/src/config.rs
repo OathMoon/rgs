@@ -121,6 +121,18 @@ impl SvnRemoteConfig {
         self
     }
 
+    pub fn validate_mapping_destinations(&self) -> Result<(), String> {
+        for mapping in self
+            .fetch
+            .iter()
+            .chain(self.branches.iter())
+            .chain(self.tags.iter())
+        {
+            crate::mapping::sanitize_refname(&mapping.git_ref)?;
+        }
+        Ok(())
+    }
+
     pub fn to_git_config_entries(&self) -> Vec<(String, String)> {
         let prefix = format!("svn-remote.{}", self.name);
         let mut entries = vec![(format!("{prefix}.url"), self.url.clone())];

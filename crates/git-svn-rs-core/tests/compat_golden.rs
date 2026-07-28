@@ -158,6 +158,9 @@ fn standard_fixture_manifest_records_svn_properties() {
 #[test]
 fn artifact_capture_writes_normalized_text_files() {
     let tmp = tempfile::tempdir().unwrap();
+    let capture_root = std::env::var_os("GIT_SVN_RS_COMPAT_ARTIFACT_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| tmp.path().to_path_buf());
     let capture = GoldenArtifactCapture::new(tmp.path(), "case-one").unwrap();
 
     let artifact = capture
@@ -165,7 +168,7 @@ fn artifact_capture_writes_normalized_text_files() {
         .unwrap();
 
     assert_eq!(
-        artifact.strip_prefix(tmp.path()).unwrap(),
+        artifact.strip_prefix(&capture_root).unwrap(),
         std::path::Path::new("case-one/perl/git-log.txt")
     );
     assert_eq!(
@@ -173,7 +176,7 @@ fn artifact_capture_writes_normalized_text_files() {
         "line one\nline two\n"
     );
     let summary =
-        std::fs::read_to_string(tmp.path().join("case-one/scenario-summary.json")).unwrap();
+        std::fs::read_to_string(capture_root.join("case-one/scenario-summary.json")).unwrap();
     assert!(summary.contains("\"scenario\": \"case-one\""));
     assert!(summary.contains("\"status\": \"started\""));
     assert!(summary.contains("\"frozen_git_commit\": \"0b13e48"));

@@ -77,6 +77,7 @@ fn fetch_config(
     shared: &SharedFetchArgs,
     selected_ref: Option<&str>,
 ) -> Result<(), String> {
+    config.validate_mapping_destinations()?;
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
         let base_revision = imported_base_revision(git, &config, "mock-uuid", selected_ref)?;
@@ -525,6 +526,7 @@ fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
     let (svn_path, git_ref) = value
         .split_once(':')
         .ok_or_else(|| format!("invalid fetch mapping: {value}"))?;
+    crate::mapping::sanitize_refname(git_ref)?;
     Ok(RefMapping {
         kind,
         svn_path: svn_path.trim_start_matches('+').to_string(),
@@ -569,11 +571,14 @@ fn imported_ref_revision(
     uuid: &str,
 ) -> Result<u32, String> {
     let object_format = git.object_format()?;
-    let short_ref = refname
-        .strip_prefix("refs/remotes/")
-        .unwrap_or(refname)
-        .replace('/', ".");
-    let path = svn_dir.join(short_ref).join(format!(".rev_map.{uuid}"));
+    let git_dir = svn_dir.parent().ok_or_else(|| {
+        format!(
+            "SVN metadata path has no Git directory: {}",
+            svn_dir.display()
+        )
+    })?;
+    let path =
+        crate::metadata::svn_metadata_dir(git_dir, refname)?.join(format!(".rev_map.{uuid}"));
     if !path.exists() {
         return Ok(0);
     }
@@ -771,6 +776,12 @@ mod tests {
                 "{invalid} should be rejected"
             );
         }
+    }
+
+    #[test]
+    fn mapping_destination_must_stay_under_refs() {
+        let error = parse_mapping("trunk:../../escape", MappingKind::Fetch).unwrap_err();
+        assert!(error.contains("must begin with refs/"));
     }
 
     #[test]

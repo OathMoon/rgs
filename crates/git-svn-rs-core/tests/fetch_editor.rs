@@ -332,6 +332,23 @@ fn unhandled_metadata_matches_git_svn_log_format() {
 }
 
 #[test]
+fn binary_unknown_property_uses_bytewise_git_svn_uri_encoding() {
+    let mut editor = SvnFetchEditor::new(plan());
+
+    editor.open_root(3).unwrap();
+    editor.add_file("trunk/data", None).unwrap();
+    editor
+        .change_file_prop_bytes("trunk/data", "custom:binary", Some(&[0, 0x7f, 0x80, 0xff]))
+        .unwrap();
+    editor.close_edit().unwrap();
+
+    assert_eq!(
+        editor.into_result().unwrap().unhandled.lines(),
+        vec!["  +file_prop: trunk/data custom:binary %00%7F%80%FF"]
+    );
+}
+
+#[test]
 fn copied_directory_materializes_existing_subtree_at_destination() {
     let mut editor = SvnFetchEditor::with_base_tree(
         plan(),

@@ -56,6 +56,12 @@ jobs:
       - name: Linked libsvn integration
         run: cargo test -p git-svn-rs-core --features svn-libsvn
 
+      - name: Linked libsvn serial diagnostic
+        run: cargo test -p git-svn-rs-core --features svn-libsvn -- --test-threads=1
+
+      - name: Linked libsvn CLI workflows
+        run: cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn
+
       - name: Static gates
         run: |
           cargo fmt --all -- --check

@@ -1180,6 +1180,7 @@ fn linked_backend_reads_log_metadata_and_changed_paths() {
         path.path == "/trunk/link-to-lib"
             && path.action == ChangeAction::Add
             && path.kind == NodeKind::File
+            && path.copy_from_path.is_none()
             && path.content.as_deref() == Some(b"link src/lib.rs".as_slice())
             && path.properties.get("svn:special").map(String::as_str) == Some("*")
     }));

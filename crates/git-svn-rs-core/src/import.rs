@@ -16,7 +16,8 @@ use crate::import_transaction::{
     complete as complete_import_publication, finish_batch_if_complete,
     mark_batch_mapping_completed,
 };
-use crate::mapping::{MappingKind, RefMapping};
+use crate::mapping::{MappingKind, RefMapping, sanitize_refname};
+use crate::metadata::svn_metadata_dir;
 use crate::rev_map::{RevMap, RevMapRecord};
 use crate::svn::editor::FetchEditor;
 use crate::svn::ra::{RaSession, UpdateRequest};
@@ -55,6 +56,7 @@ pub fn import_mock_revisions_for_ref(
     options: ImportOptions,
     selected_ref: Option<&str>,
 ) -> Result<ImportSummary, String> {
+    config.validate_mapping_destinations()?;
     if let Some(window_size) = config.log_window_size {
         return import_mock_revisions_in_windows(
             backend,
@@ -91,7 +93,7 @@ pub fn import_mock_revisions_for_ref(
             break;
         }
     }
-    let marker_refnames = scan_marker_refnames(config, selected_ref);
+    let marker_refnames = scan_marker_refnames(config, selected_ref)?;
     if mappings.is_empty() && marker_refnames.is_empty() {
         return Ok(ImportSummary {
             imported_revisions: Vec::new(),
@@ -104,6 +106,7 @@ pub fn import_mock_revisions_for_ref(
             imported_revisions: Vec::new(),
         });
     }
+    validate_mapping_ref_collisions(&selected_mappings)?;
     let mut batch_refs = selected_mappings
         .iter()
         .map(|mapping| mapping.git_ref.clone())
@@ -111,6 +114,7 @@ pub fn import_mock_revisions_for_ref(
     batch_refs.extend(marker_refnames.iter().cloned());
     batch_refs.sort();
     batch_refs.dedup();
+    validate_ref_storage_collisions(git, &batch_refs)?;
     begin_or_resume_batch(git, &uuid, &batch_refs)?;
 
     let mut completed_refs = BTreeSet::new();
@@ -165,6 +169,7 @@ pub fn import_ra_revisions_for_ref(
     options: ImportOptions,
     selected_ref: Option<&str>,
 ) -> Result<ImportSummary, String> {
+    config.validate_mapping_destinations()?;
     if let Some(window_size) = config.log_window_size {
         return import_ra_revisions_in_windows(
             session,
@@ -203,7 +208,7 @@ pub fn import_ra_revisions_for_ref(
             break;
         }
     }
-    let marker_refnames = scan_marker_refnames(config, selected_ref);
+    let marker_refnames = scan_marker_refnames(config, selected_ref)?;
     let mut all_imported_revisions = Vec::new();
     let selected_mappings = select_and_order_mappings(&mappings, selected_ref, &revisions);
     if selected_mappings.is_empty() && marker_refnames.is_empty() {
@@ -211,6 +216,7 @@ pub fn import_ra_revisions_for_ref(
             imported_revisions: Vec::new(),
         });
     }
+    validate_mapping_ref_collisions(&selected_mappings)?;
     let mut batch_refs = selected_mappings
         .iter()
         .map(|mapping| mapping.git_ref.clone())
@@ -218,6 +224,7 @@ pub fn import_ra_revisions_for_ref(
     batch_refs.extend(marker_refnames.iter().cloned());
     batch_refs.sort();
     batch_refs.dedup();
+    validate_ref_storage_collisions(git, &batch_refs)?;
     begin_or_resume_batch(git, &uuid, &batch_refs)?;
     let mut completed_refs = BTreeSet::new();
     for mapping in selected_mappings {
@@ -593,6 +600,19 @@ impl FetchEditor for FilteredFetchEditor<'_> {
             .add_file(path, self.included_copy_from(copy_from)?)
     }
 
+    fn add_file_with_copy_content(
+        &mut self,
+        path: &str,
+        copy_from: (&str, u32),
+        content: &[u8],
+    ) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner
+            .add_file_with_copy_content(path, copy_from, content)
+    }
+
     fn delete_entry(&mut self, path: &str, revision: u32) -> Result<(), String> {
         if !self.path_is_included(path)? {
             return Ok(());
@@ -870,15 +890,24 @@ fn concrete_mappings(
     revisions: &[RevisionEvent],
 ) -> Result<Vec<RefMapping>, String> {
     let ignore_refs = compile_ref_filter(config.ignore_refs.as_deref())?;
-    let mut mappings = Vec::new();
+    let mut mappings = Vec::<RefMapping>::new();
     for mapping in &config.fetch {
-        mappings.push(mapping.clone());
+        let mut mapping = mapping.clone();
+        mapping.git_ref = sanitize_refname(&mapping.git_ref)?;
+        if let Some(existing) = mappings
+            .iter_mut()
+            .find(|candidate| candidate.svn_path == mapping.svn_path)
+        {
+            *existing = mapping;
+        } else {
+            mappings.push(mapping);
+        }
     }
     for mapping in config.branches.iter().chain(config.tags.iter()) {
         let spec = GlobSpec::new(&mapping.svn_path, true)?;
         for wildcard in wildcard_matches(&spec, revisions) {
             let svn_path = spec.full_path(&wildcard);
-            let git_ref = mapping.git_ref.replace('*', &wildcard);
+            let git_ref = sanitize_refname(&mapping.git_ref.replace('*', &wildcard))?;
             if !ref_is_included(&git_ref, &ignore_refs)? {
                 continue;
             }
@@ -1735,10 +1764,12 @@ fn svn_git_timestamp(value: &str, localtime: bool) -> Result<GitTimestamp, Strin
 mod timestamp_tests {
     use super::{
         apply_placeholder_log, author_ident, commit_message, imports_initial_mapping_root,
-        max_imported_revision, rev_map_path, svn_git_timestamp,
+        max_imported_revision, rev_map_path, svn_git_timestamp, validate_mapping_ref_collisions,
+        validate_refname_namespace,
     };
     use crate::config::SvnRemoteConfig;
     use crate::git::GitCli;
+    use crate::mapping::{MappingKind, RefMapping};
     use crate::svn::{ChangeAction, ChangedPath, NodeKind, RevisionEvent};
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -1881,6 +1912,38 @@ r4
             true
         ));
     }
+
+    #[test]
+    fn rejects_git_ref_file_directory_collisions() {
+        let refs = vec![
+            "refs/remotes/origin/topic".to_string(),
+            "refs/remotes/origin/topic/nested".to_string(),
+        ];
+
+        let error = validate_refname_namespace(&refs).unwrap_err();
+        assert!(error.contains("cannot coexist"));
+        assert!(error.contains("refs/remotes/origin/topic"));
+        assert!(error.contains("refs/remotes/origin/topic/nested"));
+    }
+
+    #[test]
+    fn rejects_distinct_svn_paths_mapped_to_the_same_ref() {
+        let first = RefMapping {
+            kind: MappingKind::Branches,
+            svn_path: "branches/one".to_string(),
+            git_ref: "refs/remotes/origin/topic".to_string(),
+        };
+        let second = RefMapping {
+            kind: MappingKind::Tags,
+            svn_path: "tags/one".to_string(),
+            git_ref: first.git_ref.clone(),
+        };
+
+        let error = validate_mapping_ref_collisions(&[&first, &second]).unwrap_err();
+        assert!(error.contains("maps both"));
+        assert!(error.contains("branches/one"));
+        assert!(error.contains("tags/one"));
+    }
 }
 
 fn next_import_staging_ref() -> String {
@@ -1888,14 +1951,62 @@ fn next_import_staging_ref() -> String {
     format!("refs/git-svn-rs/import/{}-{sequence}", std::process::id())
 }
 
-fn scan_marker_refnames(config: &SvnRemoteConfig, selected_ref: Option<&str>) -> BTreeSet<String> {
+fn validate_mapping_ref_collisions(mappings: &[&RefMapping]) -> Result<(), String> {
+    let mut owners = BTreeMap::<&str, &str>::new();
+    for mapping in mappings {
+        if let Some(previous_path) =
+            owners.insert(mapping.git_ref.as_str(), mapping.svn_path.as_str())
+            && previous_path != mapping.svn_path
+        {
+            return Err(format!(
+                "remote ref {} maps both SVN paths {} and {}; configure distinct destinations before fetching",
+                mapping.git_ref, previous_path, mapping.svn_path
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_ref_storage_collisions(git: &GitCli, refnames: &[String]) -> Result<(), String> {
+    let mut all_refnames = git.refs_under("refs")?;
+    all_refnames.extend(refnames.iter().cloned());
+    validate_refname_namespace(&all_refnames)
+}
+
+fn validate_refname_namespace(refnames: &[String]) -> Result<(), String> {
+    let mut sorted = refnames.to_vec();
+    sorted.sort();
+    sorted.dedup();
+
+    for (index, left) in sorted.iter().enumerate() {
+        for right in &sorted[index + 1..] {
+            if right.starts_with(&format!("{left}/")) {
+                return Err(format!(
+                    "remote refs {left} and {right} cannot coexist because one ref path contains the other"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn scan_marker_refnames(
+    config: &SvnRemoteConfig,
+    selected_ref: Option<&str>,
+) -> Result<BTreeSet<String>, String> {
     match selected_ref {
-        Some(refname) => BTreeSet::from([refname.to_string()]),
-        None => config
-            .fetch
-            .iter()
-            .map(|mapping| mapping.git_ref.clone())
-            .collect(),
+        Some(refname) => Ok(BTreeSet::from([refname.to_string()])),
+        None => {
+            let mut by_svn_path = BTreeMap::new();
+            for mapping in &config.fetch {
+                by_svn_path.insert(
+                    mapping.svn_path.as_str(),
+                    sanitize_refname(&mapping.git_ref)?,
+                );
+            }
+            Ok(by_svn_path.into_values().collect())
+        }
     }
 }
 
@@ -1990,16 +2101,8 @@ fn publish_imported_revisions(
 
 fn rev_map_path(git: &GitCli, refname: &str, uuid: &str) -> Result<PathBuf, String> {
     let git_dir = git.git_dir()?;
-    let short_ref = refname
-        .strip_prefix("refs/remotes/")
-        .unwrap_or(refname)
-        .replace('/', ".");
-    Ok(git
-        .work_tree()
-        .join(git_dir)
-        .join("svn")
-        .join(short_ref)
-        .join(format!(".rev_map.{uuid}")))
+    let git_dir = git.work_tree().join(git_dir);
+    Ok(svn_metadata_dir(&git_dir, refname)?.join(format!(".rev_map.{uuid}")))
 }
 
 fn placeholder_ownership(

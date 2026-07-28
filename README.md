@@ -1,8 +1,14 @@
 # git-svn-rs
 
-Rust implementation plan and staged replacement for the core `git svn` workflow.
+Staged Rust implementation and compatibility path for core `git svn` workflows.
 
-The default command is `git-svn-rs`. A `git-svn` compatibility shim is planned as an explicit opt-in package step.
+The primary command is `git-svn-rs`. The workspace also contains a `git-svn`
+compatibility shim, but installing or packaging that command name is an explicit
+opt-in so it does not replace Perl `git svn` by default.
+
+The current implementation is a substantial preview, not yet a general replacement
+for `git svn`. Its strongest validated profiles are local `file://` and authenticated
+local `svn://` repositories through the SVN CLI backend.
 
 ## Verification
 
@@ -12,17 +18,50 @@ On Windows, run the local verification script from the repository root:
 ./scripts/verify.ps1
 ```
 
-The script runs `cargo fmt --all -- --check`, `cargo test --workspace`, and `cargo clippy --workspace --all-targets -- -D warnings`.
+The default verification runs formatting, the workspace test suite, and all-target,
+all-feature clippy with warnings denied.
 
-Some fixture and golden compatibility tests use external Subversion tools or Perl `git-svn`. By default they skip when those tools are unavailable. Set `GIT_SVN_RS_STRICT_COMPAT=1` or pass `-StrictCompat` to `scripts/verify.ps1` to make missing compatibility tools fail the run.
+Some fixture and golden tests require external Subversion tools or Perl `git svn`.
+They may skip in the developer gate when those tools are unavailable. Set
+`GIT_SVN_RS_STRICT_COMPAT=1`, or run:
 
-The Windows GitHub Actions workflow also exposes a manual `strict_compat` input that runs `scripts/verify.ps1 -StrictCompat` in CI.
+```powershell
+./scripts/verify.ps1 -StrictCompat
+```
 
-The golden compatibility harness compares the deterministic trunk fixture subset against Perl `git svn` when the external tools are installed. It normalizes and compares supported config entries, remote refs, `git-svn-id` footers, and committed `.rev_map` records. Branch/tag copy imports, Perl-only config metadata, author identity formatting, timestamps, working tree checkout details, and no-op `.rev_map` placeholders are excluded until the Rust implementation supports those fields.
+Strict mode makes missing compatibility dependencies or skipped scenarios fail. In
+addition to the default gates, the script runs the linked `git-svn-rs-core` suite
+with both the default parallel harness and `--test-threads=1`, then runs the linked
+CLI `clone_fetch_real_svn` workflows.
+
+## Current compatibility evidence
+
+The strict golden suite passes 40/40 covered scenarios against the frozen Perl
+`git svn` 2.54.0 baseline. The exact comparisons currently cover:
+
+- trunk, standard-layout, and direct `/trunk` URL clone/import behavior;
+- branch, tag, directory-copy, and follow-parent history;
+- default and `--no-checkout` HEAD, index, and working-tree state;
+- author identities, commit timestamps, messages, refs, commit graphs, and
+  `git-svn-id` metadata;
+- `.rev_map` object IDs and transactional trailing-zero scan markers;
+- covered `find-rev`, `info`, `log`, `gc`, `reset`, and rebase behavior;
+- deterministic local `file://` and authenticated local `svn://` dcommit;
+- submitted-write recovery without a duplicate revision; and
+- dirty-index rejection with no SVN write or Rust recovery journal.
+
+This is a `behavior-pass` for those scenarios, not a blanket compatibility claim.
+General HTTP(S) support has not reached a validated profile, `svn+ssh://` remains
+unvalidated/deferred, and remote write-back beyond the covered local `file://` and
+local `svn://` fixtures is not claimed.
 
 ## `svn-libsvn` feature status
 
-The `svn-libsvn` Cargo feature enables the native Subversion backend and probes for the platform's libsvn development libraries at build time. Default builds do not require libsvn.
+The `svn-libsvn` Cargo feature enables the native Subversion backend and probes for
+the platform's libsvn development libraries at build time. Default builds do not
+require libsvn. Linked libsvn read/update behavior has local `file://` and `svn://`
+fixture coverage; this does not imply general remote-protocol or native write-back
+support.
 
 On Ubuntu or Debian, install the system development packages with:
 

@@ -1422,7 +1422,7 @@ unsafe fn get_log(
     let end: c_long = end
         .try_into()
         .map_err(|_| format!("SVN revision {end} does not fit in svn_revnum_t"))?;
-    let mut revisions = Vec::new();
+    let mut revisions = Vec::<RevisionEvent>::new();
     unsafe {
         svn_call(
             svn_ra_get_log2(
@@ -1441,7 +1441,26 @@ unsafe fn get_log(
             ),
             "svn_ra_get_log2",
         )?;
+        if !session_path.trim_matches('/').is_empty() {
+            for revision in &mut revisions {
+                revision
+                    .changed_paths
+                    .retain(|path| repository_path_is_within(session_path, &path.path));
+            }
+        }
         fill_file_details(session, pool, session_path, &mut revisions)?;
+    }
+    if !session_path.trim_matches('/').is_empty() {
+        for revision in &mut revisions {
+            for path in &mut revision.changed_paths {
+                path.path = session_editor_path(session_path, &path.path);
+                if let Some(copy_from_path) = path.copy_from_path.as_mut()
+                    && repository_path_is_within(session_path, copy_from_path)
+                {
+                    *copy_from_path = session_editor_path(session_path, copy_from_path);
+                }
+            }
+        }
     }
     Ok(revisions)
 }
@@ -2150,6 +2169,23 @@ fn session_relative_path(session_path: &str, repository_path: &str) -> String {
         path.to_string()
     } else {
         repository_path.to_string()
+    }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn repository_path_is_within(session_path: &str, repository_path: &str) -> bool {
+    let session_path = session_path.trim_matches('/');
+    let repository_path = repository_path.trim_matches('/');
+    repository_path == session_path || repository_path.starts_with(&format!("{session_path}/"))
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn session_editor_path(session_path: &str, repository_path: &str) -> String {
+    let relative = session_relative_path(session_path, repository_path);
+    if relative.is_empty() {
+        "/".to_string()
+    } else {
+        format!("/{}", relative.trim_start_matches('/'))
     }
 }
 

@@ -2584,7 +2584,7 @@ fn make_commit(work: &std::path::Path, path: &str, content: &str, message: &str)
 }
 
 fn mock_rev_map_snapshot(work: &std::path::Path) -> (std::path::PathBuf, Vec<u8>) {
-    let metadata = work.join(".git/svn/git-svn");
+    let metadata = work.join(".git/svn/refs/remotes/git-svn");
     let rev_map_path = std::fs::read_dir(&metadata)
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -2627,7 +2627,7 @@ fn write_mock_dcommit_journal(
     batch_state: BatchState,
     entry_state: EntryState,
 ) {
-    let metadata = work.join(".git/svn/git-svn");
+    let metadata = work.join(".git/svn/refs/remotes/git-svn");
     let store = JournalStore::new(metadata.join("dcommit-journal"));
     let lock = store.acquire_lock().unwrap();
     store

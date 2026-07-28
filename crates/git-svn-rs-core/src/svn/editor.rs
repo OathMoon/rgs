@@ -2,6 +2,15 @@ pub trait FetchEditor {
     fn open_root(&mut self, revision: u32) -> Result<(), String>;
     fn add_directory(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String>;
     fn add_file(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String>;
+    fn add_file_with_copy_content(
+        &mut self,
+        path: &str,
+        copy_from: (&str, u32),
+        content: &[u8],
+    ) -> Result<(), String> {
+        self.add_file(path, Some(copy_from))?;
+        self.apply_textdelta(path, content)
+    }
     fn delete_entry(&mut self, path: &str, revision: u32) -> Result<(), String>;
     fn change_file_prop(
         &mut self,
@@ -9,6 +18,18 @@ pub trait FetchEditor {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), String>;
+    fn change_file_prop_bytes(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&[u8]>,
+    ) -> Result<(), String> {
+        let value = value
+            .map(std::str::from_utf8)
+            .transpose()
+            .map_err(|_| format!("SVN property {name} on {path} is not valid UTF-8"))?;
+        self.change_file_prop(path, name, value)
+    }
     fn change_directory_prop(
         &mut self,
         path: &str,
@@ -17,6 +38,18 @@ pub trait FetchEditor {
     ) -> Result<(), String> {
         let _ = (path, name, value);
         Ok(())
+    }
+    fn change_directory_prop_bytes(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&[u8]>,
+    ) -> Result<(), String> {
+        let value = value
+            .map(std::str::from_utf8)
+            .transpose()
+            .map_err(|_| format!("SVN property {name} on {path} is not valid UTF-8"))?;
+        self.change_directory_prop(path, name, value)
     }
     fn absent_directory(&mut self, path: &str) -> Result<(), String> {
         let _ = path;

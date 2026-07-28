@@ -164,7 +164,31 @@ impl SvnCliBackend {
             &revision.to_string(),
             &url,
         ])?;
-        parse_proplist_xml(&xml)
+        Ok(parse_proplist_xml_bytes(&xml)?
+            .into_iter()
+            .filter_map(|(name, value)| String::from_utf8(value).ok().map(|value| (name, value)))
+            .collect())
+    }
+
+    fn node_property_bytes(
+        &self,
+        repos_root: &str,
+        path: &str,
+        revision: u32,
+    ) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        let url = versioned_url(repos_root, path, revision);
+        let xml = self.run_text(&[
+            "proplist",
+            "--xml",
+            "--verbose",
+            "--depth",
+            "empty",
+            "--non-interactive",
+            "-r",
+            &revision.to_string(),
+            &url,
+        ])?;
+        parse_proplist_xml_bytes(&xml)
     }
 
     fn list_files(
@@ -381,16 +405,21 @@ impl RaSession for SvnCliBackend {
             .iter()
             .filter(|changed_path| path_contains(path, &changed_path.path))
         {
+            let properties = if changed_path.action == ChangeAction::Delete {
+                BTreeMap::new()
+            } else {
+                self.node_property_bytes(&self.url, &changed_path.path, request.target_revision)?
+            };
             let removed_properties = if changed_path.action == ChangeAction::Modify {
                 request
                     .base_revision
                     .map(|base_revision| {
-                        self.node_properties(&self.url, &changed_path.path, base_revision)
+                        self.node_property_bytes(&self.url, &changed_path.path, base_revision)
                     })
                     .transpose()?
                     .unwrap_or_default()
                     .into_keys()
-                    .filter(|name| !changed_path.properties.contains_key(name))
+                    .filter(|name| !properties.contains_key(name))
                     .collect::<Vec<_>>()
             } else {
                 Vec::new()
@@ -399,6 +428,7 @@ impl RaSession for SvnCliBackend {
                 editor,
                 changed_path,
                 request.base_revision,
+                &properties,
                 &removed_properties,
             )?;
         }
@@ -426,6 +456,7 @@ fn drive_changed_path(
     editor: &mut dyn FetchEditor,
     changed_path: &ChangedPath,
     base_revision: Option<u32>,
+    properties: &BTreeMap<String, Vec<u8>>,
     removed_properties: &[String],
 ) -> Result<(), String> {
     let path = changed_path.path.trim_matches('/');
@@ -450,8 +481,8 @@ fn drive_changed_path(
                 // snapshot delta. Copy ancestry still comes from the log event.
                 editor.add_directory(path, None)?;
             }
-            for (name, value) in &changed_path.properties {
-                editor.change_directory_prop(path, name, Some(value))?;
+            for (name, value) in properties {
+                editor.change_directory_prop_bytes(path, name, Some(value))?;
             }
             for name in removed_properties {
                 editor.change_directory_prop(path, name, None)?;
@@ -464,8 +495,8 @@ fn drive_changed_path(
             ) {
                 editor.add_file(path, None)?;
             }
-            for (name, value) in &changed_path.properties {
-                editor.change_file_prop(path, name, Some(value))?;
+            for (name, value) in properties {
+                editor.change_file_prop_bytes(path, name, Some(value))?;
             }
             for name in removed_properties {
                 editor.change_file_prop(path, name, None)?;
@@ -478,7 +509,7 @@ fn drive_changed_path(
     Ok(())
 }
 
-fn parse_proplist_xml(xml: &str) -> Result<BTreeMap<String, String>, String> {
+fn parse_proplist_xml_bytes(xml: &str) -> Result<BTreeMap<String, Vec<u8>>, String> {
     let mut properties = BTreeMap::new();
     let mut rest = xml;
     while let Some(start) = rest.find("<property") {
@@ -489,11 +520,8 @@ fn parse_proplist_xml(xml: &str) -> Result<BTreeMap<String, String>, String> {
         let header = &rest[..=header_end];
         let name = attr(header, "name")
             .ok_or_else(|| "invalid svn proplist XML: property without name".to_string())?;
-        if attr(header, "encoding").is_some() {
-            return Err(format!("unsupported encoded SVN property: {name}"));
-        }
         if header.ends_with("/>") {
-            properties.insert(name, String::new());
+            properties.insert(name, Vec::new());
             rest = &rest[header_end + 1..];
             continue;
         }
@@ -502,10 +530,72 @@ fn parse_proplist_xml(xml: &str) -> Result<BTreeMap<String, String>, String> {
             .find("</property>")
             .ok_or_else(|| "invalid svn proplist XML: unclosed property".to_string())?
             + value_start;
-        properties.insert(name, xml_unescape(&rest[value_start..value_end]));
+        let raw_value = &rest[value_start..value_end];
+        let value = match attr(header, "encoding").as_deref() {
+            None => xml_unescape(raw_value).into_bytes(),
+            Some("base64") => decode_base64(raw_value)
+                .map_err(|error| format!("invalid base64 SVN property {name}: {error}"))?,
+            Some(encoding) => {
+                return Err(format!(
+                    "unsupported SVN property encoding {encoding} for {name}"
+                ));
+            }
+        };
+        properties.insert(name, value);
         rest = &rest[value_end + "</property>".len()..];
     }
     Ok(properties)
+}
+
+fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
+    let input = value
+        .bytes()
+        .filter(|byte| !byte.is_ascii_whitespace())
+        .collect::<Vec<_>>();
+    if input.len() % 4 != 0 {
+        return Err("length is not a multiple of four".to_string());
+    }
+    let mut decoded = Vec::with_capacity(input.len() / 4 * 3);
+    for (index, chunk) in input.chunks_exact(4).enumerate() {
+        let last = index + 1 == input.len() / 4;
+        let a = base64_digit(chunk[0])?;
+        let b = base64_digit(chunk[1])?;
+        let c = if chunk[2] == b'=' {
+            if chunk[3] != b'=' || !last {
+                return Err("invalid padding".to_string());
+            }
+            0
+        } else {
+            base64_digit(chunk[2])?
+        };
+        let d = if chunk[3] == b'=' {
+            if !last {
+                return Err("invalid padding".to_string());
+            }
+            0
+        } else {
+            base64_digit(chunk[3])?
+        };
+        decoded.push((a << 2) | (b >> 4));
+        if chunk[2] != b'=' {
+            decoded.push((b << 4) | (c >> 2));
+        }
+        if chunk[3] != b'=' {
+            decoded.push((c << 6) | d);
+        }
+    }
+    Ok(decoded)
+}
+
+fn base64_digit(byte: u8) -> Result<u8, String> {
+    match byte {
+        b'A'..=b'Z' => Ok(byte - b'A'),
+        b'a'..=b'z' => Ok(byte - b'a' + 26),
+        b'0'..=b'9' => Ok(byte - b'0' + 52),
+        b'+' => Ok(62),
+        b'/' => Ok(63),
+        _ => Err(format!("invalid character 0x{byte:02X}")),
+    }
 }
 
 fn normalize_changed_paths(revisions: &mut [RevisionEvent], session_path: &str) {
@@ -735,7 +825,7 @@ mod tests {
 
     #[test]
     fn parses_verbose_proplist_xml_for_unknown_and_empty_properties() {
-        let properties = parse_proplist_xml(
+        let properties = parse_proplist_xml_bytes(
             r#"<?xml version="1.0" encoding="UTF-8"?>
 <properties>
 <target path="file:///repo/trunk">
@@ -746,17 +836,20 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(properties.get("custom:message").unwrap(), "hello & goodbye");
-        assert_eq!(properties.get("custom:empty").unwrap(), "");
+        assert_eq!(
+            properties.get("custom:message").unwrap(),
+            b"hello & goodbye"
+        );
+        assert_eq!(properties.get("custom:empty").unwrap(), b"");
     }
 
     #[test]
-    fn rejects_encoded_binary_properties_explicitly() {
-        let error = parse_proplist_xml(
-            r#"<properties><target path="x"><property name="custom:binary" encoding="base64">AA==</property></target></properties>"#,
+    fn decodes_encoded_binary_properties_as_bytes() {
+        let properties = parse_proplist_xml_bytes(
+            r#"<properties><target path="x"><property name="custom:binary" encoding="base64">AP+A</property></target></properties>"#,
         )
-        .unwrap_err();
+        .unwrap();
 
-        assert_eq!(error, "unsupported encoded SVN property: custom:binary");
+        assert_eq!(properties.get("custom:binary").unwrap(), &[0, 0xff, 0x80]);
     }
 }
