@@ -2,13 +2,9 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `a820e13 Reject mock commit URL overrides`
+Committed HEAD at audit: `3bded4a Match frozen rebase dry-run identity`
 Latest implementation commits:
 
-- `f11ecd1 Complete ref safety and linked replay parity`
-- `fa5f81f Fail closed on unvalidated SVN protocols`
-- `9f4b223 Harden readonly log and rebase compatibility`
-- `b7d6855 Verify binary SVN properties end to end`
 - `97735da Align Log.pm timezone and revision selection`
 - `2a68582 Support log authors file overrides`
 - `57eb773 Match frozen verbose log paths`
@@ -21,6 +17,9 @@ Latest implementation commits:
 - `dbf6dc8 Fix sparse reset parent selection`
 - `29d2545 Reject ambiguous fetch scope early`
 - `a820e13 Reject mock commit URL overrides`
+- `cdc463e Preserve merge topology during rebase`
+- `caeb41d Support frozen log color mode`
+- `3bded4a Match frozen rebase dry-run identity`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -42,8 +41,9 @@ produce `release-pass`.
 The repository now provides an initially complete local core workflow for the
 covered `file://`, local authenticated `svn://`, and mock profiles. It remains a
 preview rather than a general `git svn` replacement: HTTP(S) and `svn+ssh` are
-fail-closed, some Log.pm/rebase modes remain incomplete, and the required hosted
-compatibility workflow has not yet had its first successful run.
+fail-closed, some interactive Log.pm/rebase orchestration modes remain incomplete,
+and the required hosted compatibility workflow has not yet had its first
+successful run.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
@@ -52,7 +52,7 @@ compatibility workflow has not yet had its first successful run.
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
 | 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, audited fail-closed FFI callbacks, CLI/linked delta replay, invalid UTF-8 properties E2E | remote transport validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
-| 6 readonly | `in-progress` | scoped find-rev/info/log/reset/gc/rebase; local-only rebase and sparse parent reset | remaining Log.pm/rebase topology modes |
+| 6 readonly | `in-progress` | scoped queries; color Log.pm; sparse reset; local/merge-topology rebase | pager and remaining rebase orchestration modes |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, local file/svn exact write comparisons | remote write-back and broader recovery faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 40/40 locally; Linux workflow defined | first hosted execution |
 
@@ -131,10 +131,16 @@ compatibility workflow has not yet had its first successful run.
   with frozen line-count framing.
 - Log supports frozen `--non-recursive`; default invocation carries Git's `-r`
   recursive-diff flag and the option removes it explicitly.
+- Log supports typed `--color` and frozen `color.diff` automatic selection,
+  preserving ANSI diff/stat/raw output without corrupting SVN record parsing.
 - Rebase accepts both frozen `-m`/`-M` merge forms and passes merge/strategy
   arguments to Git in the frozen order.
 - Rebase supports frozen `-l`/`--local`, skipping remote fetch while retaining
   resolver, clean-worktree, and tracking-branch checks.
+- Rebase supports frozen `-p`/`--rebase-merges`; a real local merge graph verifies
+  that rebasing onto the selected tracking ref retains one merge commit.
+- Rebase dry-run reports the selected remote branch and full SVN URL exactly like
+  frozen Perl; strict golden comparison now retains both identity lines.
 - Reset `--parent` selects the nearest earlier nonzero rev_map record, including
   sparse histories, while exact reset remains exact.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
@@ -181,7 +187,7 @@ Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
-- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (60/60)
+- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (62/62)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (46/46)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (35/35)
@@ -203,7 +209,8 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
 
 ### P1
 
-- Complete the remaining frozen Log.pm modes and rebase topology semantics.
+- Complete interactive Log.pm pager behavior and remaining rebase command
+  verbosity/fetch-all orchestration semantics.
 - Validate HTTP(S) DAV/SSL and `svn+ssh` with dedicated fixtures before enabling
   either read profile.
 - Extend dcommit recovery fault injection and commit-URL/auth intent coverage.
@@ -238,12 +245,16 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
 - `ea77681`, `dbf6dc8`: local-only rebase and sparse rev_map parent reset.
 - `1f87814`, `29d2545`, `a820e13`: early rejection of inert global output
   options, ambiguous fetch scope, and unsupported mock commit-URL overrides.
+- `cdc463e`, `caeb41d`: frozen merge-topology rebase and Log.pm color behavior.
+- `3bded4a`: exact frozen rebase dry-run tracking identity and stronger golden
+  evidence.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 6: close the highest-value missing Log.pm/rebase compatibility slice.
+1. Phase 6: close rebase verbosity/fetch-all and decide the interactive pager
+   boundary.
 2. Phase 4: validate deferred remote transports with dedicated fixtures.
 3. Phase 7: broaden recovery fault injection and commit-URL intent validation.
 4. Phase 8: run hosted CI when credentials/external execution are available.
