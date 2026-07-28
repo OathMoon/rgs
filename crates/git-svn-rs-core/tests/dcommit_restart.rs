@@ -188,6 +188,10 @@ fn prepared(journal: DcommitJournal) -> PreparedDcommit {
 }
 
 fn plan(base_revision: u32) -> DcommitPlan {
+    plan_for(base_revision, 'b', "restart test")
+}
+
+fn plan_for(base_revision: u32, git_oid: char, message: &str) -> DcommitPlan {
     let target = target_identity();
     DcommitPlan {
         target: DcommitTarget {
@@ -197,11 +201,70 @@ fn plan(base_revision: u32) -> DcommitPlan {
             git_ref: target.mapping_ref,
         },
         base_revision,
-        git_commit: oid('b'),
-        message: "restart test".to_owned(),
+        git_commit: oid(git_oid),
+        message: message.to_owned(),
         author: None,
         root_properties: Vec::new(),
         changes: Vec::new(),
+    }
+}
+
+fn two_entry_journal() -> DcommitJournal {
+    let first = plan_for(40, 'b', "first restart commit");
+    let second = plan_for(40, 'd', "second restart commit");
+    DcommitJournal {
+        target: target_identity(),
+        original_base_revision: 40,
+        original_base_oid: oid('a'),
+        original_head: oid('d'),
+        no_rebase: true,
+        config_fingerprint: "1010".to_owned(),
+        entries: vec![
+            JournalEntry {
+                git_oid: oid('b'),
+                base_oid: oid('a'),
+                plan_fingerprint: plan_fingerprint(&first),
+                message_fingerprint: message_fingerprint(&first.message),
+                state: EntryState::Queued,
+            },
+            JournalEntry {
+                git_oid: oid('d'),
+                base_oid: oid('b'),
+                plan_fingerprint: plan_fingerprint(&second),
+                message_fingerprint: message_fingerprint(&second.message),
+                state: EntryState::Queued,
+            },
+        ],
+        batch_state: BatchState::Submitting,
+    }
+}
+
+fn two_entry_prepared(journal: DcommitJournal) -> PreparedDcommit {
+    let second_base = match journal.entries[1].state {
+        EntryState::Ready {
+            expected_base_revision,
+            ..
+        }
+        | EntryState::SubmissionInFlight {
+            expected_base_revision,
+            ..
+        } => u32::try_from(expected_base_revision).unwrap(),
+        EntryState::Submitted { .. } | EntryState::FetchedVerified { .. } => {
+            match journal.entries[0].state {
+                EntryState::FetchedVerified { svn_revision, .. } => {
+                    u32::try_from(svn_revision).unwrap()
+                }
+                _ => 40,
+            }
+        }
+        EntryState::Queued => 40,
+    };
+    PreparedDcommit {
+        plans: vec![
+            plan_for(40, 'b', "first restart commit"),
+            plan_for(second_base, 'd', "second restart commit"),
+        ],
+        journal,
     }
 }
 
@@ -376,6 +439,162 @@ fn restart_after_fetch_before_verified_save_repeats_only_fetch() {
         completed.entries[0].state,
         EntryState::FetchedVerified {
             svn_revision: 41,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn two_entry_restart_after_first_verified_save_failure_submits_each_entry_once() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("dcommit-journal");
+    let sink_state = Rc::new(RefCell::new(SinkState::default()));
+    let post_state = Rc::new(RefCell::new(PostState::default()));
+    let mut first_process = two_entry_prepared(two_entry_journal());
+    let mut first_coordinator = Coordinator::new(
+        sink(
+            &sink_state,
+            [RemoteHead {
+                revision: 40,
+                tracking_oid: oid('a'),
+            }],
+            [41],
+        ),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), Some(5)),
+    );
+
+    assert!(matches!(
+        first_coordinator.run(&mut first_process),
+        Err(CoordinatorError::Persistence(message)) if message == "injected save failure 5"
+    ));
+    drop(first_coordinator);
+    drop(first_process);
+    let persisted = load(&JournalStore::new(&directory));
+    assert!(matches!(
+        persisted.entries[0].state,
+        EntryState::Submitted { svn_revision: 41 }
+    ));
+    assert!(matches!(persisted.entries[1].state, EntryState::Queued));
+
+    let mut second_process = two_entry_prepared(persisted);
+    let mut second_coordinator = Coordinator::new(
+        sink(
+            &sink_state,
+            [RemoteHead {
+                revision: 41,
+                tracking_oid: imported_oid(),
+            }],
+            [42],
+        ),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), None),
+    );
+    second_coordinator.run(&mut second_process).unwrap();
+    drop(second_coordinator);
+
+    assert_eq!(sink_state.borrow().remote_checks, 2);
+    assert_eq!(sink_state.borrow().submissions, 2);
+    assert_eq!(post_state.borrow().fetches, vec![41, 41, 42]);
+    let completed = load(&JournalStore::new(&directory));
+    assert_eq!(completed.batch_state, BatchState::Complete);
+    assert!(matches!(
+        completed.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision: 41,
+            ..
+        }
+    ));
+    assert!(matches!(
+        completed.entries[1].state,
+        EntryState::FetchedVerified {
+            svn_revision: 42,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn two_entry_second_submitted_save_failure_requires_adoption_without_resubmit() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("dcommit-journal");
+    let sink_state = Rc::new(RefCell::new(SinkState::default()));
+    let post_state = Rc::new(RefCell::new(PostState::default()));
+    let mut first_process = two_entry_prepared(two_entry_journal());
+    let mut first_coordinator = Coordinator::new(
+        sink(
+            &sink_state,
+            [
+                RemoteHead {
+                    revision: 40,
+                    tracking_oid: oid('a'),
+                },
+                RemoteHead {
+                    revision: 41,
+                    tracking_oid: imported_oid(),
+                },
+            ],
+            [41, 42],
+        ),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), Some(8)),
+    );
+
+    assert!(matches!(
+        first_coordinator.run(&mut first_process),
+        Err(CoordinatorError::AmbiguousSubmission {
+            svn_revision: Some(42),
+            ..
+        })
+    ));
+    drop(first_coordinator);
+    drop(first_process);
+    let persisted = load(&JournalStore::new(&directory));
+    assert!(matches!(
+        persisted.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision: 41,
+            ..
+        }
+    ));
+    assert!(matches!(
+        persisted.entries[1].state,
+        EntryState::SubmissionInFlight {
+            expected_base_revision: 41,
+            ..
+        }
+    ));
+
+    let mut restarted = two_entry_prepared(persisted);
+    let mut second_coordinator = Coordinator::new(
+        sink(&sink_state, [], []),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), None),
+    );
+    assert!(matches!(
+        second_coordinator.run(&mut restarted),
+        Err(CoordinatorError::AmbiguousSubmission {
+            svn_revision: None,
+            ..
+        })
+    ));
+    assert_eq!(sink_state.borrow().submissions, 2);
+
+    second_coordinator
+        .adopt_in_flight(&mut restarted, 42)
+        .unwrap();
+    second_coordinator.run(&mut restarted).unwrap();
+    drop(second_coordinator);
+
+    assert_eq!(sink_state.borrow().remote_checks, 2);
+    assert_eq!(sink_state.borrow().submissions, 2);
+    assert_eq!(post_state.borrow().fetches, vec![41, 42]);
+    let completed = load(&JournalStore::new(&directory));
+    assert_eq!(completed.batch_state, BatchState::Complete);
+    assert!(matches!(
+        completed.entries[1].state,
+        EntryState::FetchedVerified {
+            svn_revision: 42,
             ..
         }
     ));
