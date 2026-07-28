@@ -9,12 +9,15 @@ use super::diff_planner::{
 use super::journal::DcommitTargetIdentity;
 
 const FORMAT_VERSION: u32 = 1;
-const RECOVERY_CONFIG_FORMAT_VERSION: u32 = 2;
+const RECOVERY_CONFIG_FORMAT_VERSION: u32 = 3;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RecoveryFingerprintInput<'a> {
     pub target: &'a DcommitTargetIdentity,
     pub commit_url_override: bool,
+    pub username: Option<&'a str>,
+    pub config_dir: Option<&'a Path>,
+    pub no_auth_cache: bool,
     pub no_rebase: bool,
     pub mergeinfo: Option<&'a str>,
 }
@@ -40,10 +43,19 @@ pub fn message_fingerprint(message: &str) -> String {
 }
 
 pub fn canonical_recovery_config_bytes(input: RecoveryFingerprintInput<'_>) -> Vec<u8> {
-    let mut encoder = Encoder::new_with_version(
-        "git-svn-rs/dcommit-recovery-config",
-        RECOVERY_CONFIG_FORMAT_VERSION,
-    );
+    encode_recovery_config(input, RECOVERY_CONFIG_FORMAT_VERSION, true)
+}
+
+pub(crate) fn legacy_recovery_config_fingerprint_v2(input: RecoveryFingerprintInput<'_>) -> String {
+    fingerprint(&encode_recovery_config(input, 2, false))
+}
+
+fn encode_recovery_config(
+    input: RecoveryFingerprintInput<'_>,
+    version: u32,
+    include_client_intent: bool,
+) -> Vec<u8> {
+    let mut encoder = Encoder::new_with_version("git-svn-rs/dcommit-recovery-config", version);
     encoder.structure("target", |encoder| {
         encoder.field_str("remote_id", &input.target.remote_id);
         encoder.field_str("repository_root_url", &input.target.repository_root_url);
@@ -53,6 +65,15 @@ pub fn canonical_recovery_config_bytes(input: RecoveryFingerprintInput<'_>) -> V
         encoder.field_str("commit_url", &input.target.commit_url);
     });
     encoder.field_bool("commit_url_override", input.commit_url_override);
+    if include_client_intent {
+        encoder.option("username", input.username, |encoder, value| {
+            encoder.value_str(value);
+        });
+        encoder.option("config_dir", input.config_dir, |encoder, value| {
+            encoder.value_path(value);
+        });
+        encoder.field_bool("no_auth_cache", input.no_auth_cache);
+    }
     encoder.field_bool("no_rebase", input.no_rebase);
     encoder.option("mergeinfo", input.mergeinfo, |encoder, value| {
         encoder.value_str(value);
@@ -385,6 +406,9 @@ mod tests {
         let input = RecoveryFingerprintInput {
             target: &target,
             commit_url_override: false,
+            username: None,
+            config_dir: None,
+            no_auth_cache: false,
             no_rebase: false,
             mergeinfo: None,
         };
@@ -418,6 +442,27 @@ mod tests {
         );
         assert_ne!(
             recovery_config_fingerprint(RecoveryFingerprintInput {
+                username: Some("alice"),
+                ..input
+            }),
+            expected
+        );
+        assert_ne!(
+            recovery_config_fingerprint(RecoveryFingerprintInput {
+                config_dir: Some(Path::new("svn-config")),
+                ..input
+            }),
+            expected
+        );
+        assert_ne!(
+            recovery_config_fingerprint(RecoveryFingerprintInput {
+                no_auth_cache: true,
+                ..input
+            }),
+            expected
+        );
+        assert_ne!(
+            recovery_config_fingerprint(RecoveryFingerprintInput {
                 no_rebase: true,
                 ..input
             }),
@@ -444,20 +489,57 @@ mod tests {
             [
                 0, 0, 0, 0, 0, 0, 0, 34, b'g', b'i', b't', b'-', b's', b'v', b'n', b'-', b'r',
                 b's', b'/', b'd', b'c', b'o', b'm', b'm', b'i', b't', b'-', b'r', b'e', b'c', b'o',
-                b'v', b'e', b'r', b'y', b'-', b'c', b'o', b'n', b'f', b'i', b'g', 0, 0, 0, 2,
+                b'v', b'e', b'r', b'y', b'-', b'c', b'o', b'n', b'f', b'i', b'g', 0, 0, 0, 3,
             ]
         );
     }
 
     #[test]
-    fn recovery_config_fingerprint_matches_the_v2_fixed_vector() {
+    fn recovery_config_fingerprint_matches_the_v3_fixed_vector() {
         let target = target();
         let actual = recovery_config_fingerprint(RecoveryFingerprintInput {
             target: &target,
             commit_url_override: false,
+            username: None,
+            config_dir: None,
+            no_auth_cache: false,
             no_rebase: false,
             mergeinfo: None,
         });
+        #[cfg(unix)]
+        assert_eq!(
+            actual,
+            "3b2da412efde053317185618b56165b49d290bc64d41a9fcea6643fef7d62b06"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            actual,
+            "8d60c510441ee7e2fcabb9aababd93ddae2e655b9f590c8dff1bac0c9143a927"
+        );
+    }
+
+    #[test]
+    fn legacy_v2_recovery_fingerprint_ignores_v3_client_intent() {
+        let target = target();
+        let input = RecoveryFingerprintInput {
+            target: &target,
+            commit_url_override: false,
+            username: Some("alice"),
+            config_dir: Some(Path::new("svn-config")),
+            no_auth_cache: true,
+            no_rebase: false,
+            mergeinfo: None,
+        };
+        let actual = legacy_recovery_config_fingerprint_v2(input);
+        assert_eq!(
+            actual,
+            legacy_recovery_config_fingerprint_v2(RecoveryFingerprintInput {
+                username: None,
+                config_dir: None,
+                no_auth_cache: false,
+                ..input
+            })
+        );
         #[cfg(unix)]
         assert_eq!(
             actual,

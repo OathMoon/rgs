@@ -331,12 +331,20 @@ fn dcommit_file_svn(
         rev_map_path: ctx.rev_map_path.to_string_lossy().into_owned(),
         commit_url: target_url.clone(),
     };
-    let config_fingerprint = recovery_config_fingerprint(RecoveryFingerprintInput {
+    let recovery_fingerprint_input = RecoveryFingerprintInput {
         target: &target,
         commit_url_override: ctx.commit_url_override,
+        username: ctx.svn_options.username.as_deref(),
+        config_dir: ctx.svn_options.config_dir.as_deref().map(Path::new),
+        no_auth_cache: ctx.svn_options.no_auth_cache,
         no_rebase: ctx.no_rebase,
         mergeinfo: ctx.mergeinfo,
-    });
+    };
+    let config_fingerprint = recovery_config_fingerprint(recovery_fingerprint_input);
+    let legacy_config_fingerprint =
+        crate::dcommit::fingerprint::legacy_recovery_config_fingerprint_v2(
+            recovery_fingerprint_input,
+        );
     let plan_chain = if let Some(located) = &active {
         located
             .journal
@@ -391,13 +399,13 @@ fn dcommit_file_svn(
                 "unfinished dcommit journal target does not match the resolved target".to_string(),
             );
         }
-        if located.journal.config_fingerprint != config_fingerprint {
-            return Err(
-                "unfinished dcommit journal configuration does not match this invocation"
-                    .to_string(),
-            );
-        }
-        prepared.journal = located.journal;
+        let mut journal = located.journal;
+        reconcile_recovery_config_fingerprint(
+            &mut journal.config_fingerprint,
+            &config_fingerprint,
+            &legacy_config_fingerprint,
+        )?;
+        prepared.journal = journal;
         located.directory
     } else {
         ctx.rev_map_path
@@ -469,6 +477,21 @@ fn dcommit_file_svn(
         out.push_str("Rebased onto tracked SVN ref.\n");
     }
     Ok(out)
+}
+
+fn reconcile_recovery_config_fingerprint(
+    stored: &mut String,
+    current: &str,
+    legacy_v2: &str,
+) -> Result<(), String> {
+    if stored == current {
+        return Ok(());
+    }
+    if stored == legacy_v2 {
+        current.clone_into(stored);
+        return Ok(());
+    }
+    Err("unfinished dcommit journal configuration does not match this invocation".to_string())
 }
 
 fn build_file_svn_plans(
@@ -1087,6 +1110,25 @@ mod tests {
                 "url",
             ]
         );
+    }
+
+    #[test]
+    fn recovery_config_fingerprint_accepts_current_or_migrates_v2_only() {
+        let mut current = "v3".to_string();
+        reconcile_recovery_config_fingerprint(&mut current, "v3", "v2").unwrap();
+        assert_eq!(current, "v3");
+
+        let mut legacy = "v2".to_string();
+        reconcile_recovery_config_fingerprint(&mut legacy, "v3", "v2").unwrap();
+        assert_eq!(legacy, "v3");
+
+        let mut mismatch = "other".to_string();
+        assert!(
+            reconcile_recovery_config_fingerprint(&mut mismatch, "v3", "v2")
+                .unwrap_err()
+                .contains("does not match")
+        );
+        assert_eq!(mismatch, "other");
     }
 
     #[test]

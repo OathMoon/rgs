@@ -765,6 +765,170 @@ fn dcommit_fetches_after_authenticated_svnserve_write_when_reads_require_auth() 
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn dcommit_resumes_submitted_svnserve_after_password_rotation() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture
+        .require_read_write_auth("alice", "old-secret")
+        .unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let work = parent.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+            "--password",
+            "old-secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+
+    let password_file = fixture.root().join("repo/conf/passwd");
+    let hook = fixture.root().join("repo/hooks/post-commit");
+    assert!(!password_file.to_string_lossy().contains('"'));
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nprintf '[users]\\nalice = new-secret\\nbob = new-secret\\n' > \"{}\"\n",
+            password_file.display()
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&hook).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&hook, permissions).unwrap();
+
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 52 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "rotate recovery password",
+        ],
+    );
+    let before = fixture.latest_revision();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--password",
+            "old-secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("post-submit"))
+        .stderr(predicate::str::contains("old-secret").not());
+    let submitted = fixture.latest_revision();
+    assert_eq!(submitted, before + 1);
+
+    let journal_directory = find_dcommit_journal(&work);
+    let store = JournalStore::new(&journal_directory);
+    let journal = store.load().unwrap().expect("submitted dcommit journal");
+    assert!(matches!(
+        journal.entries[0].state,
+        EntryState::Submitted { .. }
+    ));
+    for entry in std::fs::read_dir(journal_directory).unwrap() {
+        let path = entry.unwrap().path();
+        if path.is_file() {
+            let bytes = std::fs::read(path).unwrap();
+            assert!(
+                !bytes
+                    .windows(b"old-secret".len())
+                    .any(|v| v == b"old-secret")
+            );
+            assert!(
+                !bytes
+                    .windows(b"new-secret".len())
+                    .any(|v| v == b"new-secret")
+            );
+        }
+    }
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "bob",
+            "--password",
+            "new-secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "journal configuration does not match",
+        ))
+        .stderr(predicate::str::contains("new-secret").not());
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "changing the durable username intent must not resubmit"
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--password",
+            "new-secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "password rotation recovery must not resubmit"
+    );
+    assert_eq!(
+        store.load().unwrap().unwrap().batch_state,
+        BatchState::Complete
+    );
+}
+
 #[test]
 fn dcommit_auth_failure_stops_before_journal_or_svn_write() {
     match require_svn_tools().and_then(|()| require_svnserve()) {
