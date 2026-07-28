@@ -2,15 +2,12 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `046bf41 Bind dcommit post-fetch recovery intent`
+Committed HEAD at audit: `23bf393 Prove dcommit unknown-outcome recovery`
 Latest implementation commits:
 
-- `d270051 Validate svn+ssh clone and fetch transport`
-- `0f5ac1e Harden svn+ssh tunnel fixture boundaries`
-- `5dd0ede Add strict HTTP DAV read profile`
-- `b7d1a9e Verify explicit dcommit target mappings`
 - `53707fe Harden dcommit recovery client intent`
 - `046bf41 Bind dcommit post-fetch recovery intent`
+- `23bf393 Prove dcommit unknown-outcome recovery`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -177,6 +174,9 @@ workflow has not yet had its first successful run.
 - A post-submit password rotation resumes with the same username and new secret
   without credential leakage or a duplicate SVN revision; changing username is
   rejected, as is changing bound authors-file content.
+- Real lost-submit-response and Submitted-save failures remain durably in-flight
+  until explicit verified adoption. A two-commit queue resumes after first-fetch
+  failure without duplicating or skipping either SVN revision.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
   options consistently.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
@@ -203,7 +203,7 @@ Verified on 2026-07-28:
 - `cargo fmt --all -- --check`
 - `cargo test --workspace` (core unit suite 116/116)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (63/63)
-- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (47/47)
+- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (37/37; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (37/37; HTTP DAV skipped without Apache)
@@ -225,8 +225,8 @@ Verified on 2026-07-28:
   streaming for release-level output fidelity.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
-- Extend dcommit recovery fault injection beyond auth/fetch and non-advancing
-  submission failures.
+- Extend multi-entry persistence-boundary and post-rebase tombstone fault
+  injection.
 - Decide whether an explicit `--placeholder-filename` without
   `--preserve-empty-dirs` should fail rather than remain a low-risk no-op.
 
@@ -274,6 +274,7 @@ Verified on 2026-07-28:
   password-rotation recovery without duplicate submission.
 - `046bf41`: v4 effective post-fetch intent, authors-content binding, and v2/v3
   compatible recovery migration.
+- `23bf393`: real unknown-outcome, Submitted-save, and two-entry recovery evidence.
 
 ## Next Steps
 
