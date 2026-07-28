@@ -14,8 +14,8 @@ use crate::dcommit::journal_registry::{
 use crate::dcommit::tree_projection::{apply_plan_to_tree, canonicalize_tree_keywords, tree_map};
 use crate::dcommit::{
     DcommitPlan, DcommitPlanBuilder, DcommitPlanRequest, DcommitTarget, PreparedDcommitRequest,
-    PropertyMapper, RecoveryFingerprintInput, SvnCommitEditor, build_prepared_dcommit,
-    merge_attribute_properties, recovery_config_fingerprint,
+    PropertyMapper, RecoveryFetchIntent, RecoveryFingerprintInput, SvnCommitEditor,
+    build_prepared_dcommit, merge_attribute_properties, recovery_config_fingerprint,
 };
 use crate::git::{GitCli, GitCommitSummary};
 use crate::git_svn_id::GitSvnId;
@@ -200,6 +200,8 @@ pub fn run_in_work_tree(
                 svn_options.username = None;
                 svn_options.password = None;
             }
+            let post_commit_fetch_config =
+                fetch::effective_fetch_config(tracked.config.clone(), &args.shared, revision)?;
             return dcommit_file_svn(
                 FileSvnDcommit {
                     git: &tracked.git,
@@ -213,6 +215,7 @@ pub fn run_in_work_tree(
                     mergeinfo: args.mergeinfo.as_deref(),
                     svn_options,
                     post_commit_fetch_shared: args.shared.clone(),
+                    post_commit_fetch_config,
                     remote_id: &tracked.config.name,
                     rev_map_path: mapping_rev_map_path,
                     expected_footer_url: svn_checkout_url(
@@ -304,6 +307,7 @@ struct FileSvnDcommit<'a> {
     mergeinfo: Option<&'a str>,
     svn_options: DcommitSvnOptions,
     post_commit_fetch_shared: crate::cli::SharedFetchArgs,
+    post_commit_fetch_config: crate::config::SvnRemoteConfig,
     remote_id: &'a str,
     rev_map_path: &'a Path,
     expected_footer_url: String,
@@ -331,6 +335,36 @@ fn dcommit_file_svn(
         rev_map_path: ctx.rev_map_path.to_string_lossy().into_owned(),
         commit_url: target_url.clone(),
     };
+    let authors_file_bytes = ctx
+        .post_commit_fetch_config
+        .authors_file
+        .as_deref()
+        .map(|path| {
+            std::fs::read(path)
+                .map_err(|error| format!("failed to read authors file {path}: {error}"))
+        })
+        .transpose()?;
+    let fetch_intent = RecoveryFetchIntent {
+        authors_file: ctx
+            .post_commit_fetch_config
+            .authors_file
+            .as_deref()
+            .map(Path::new),
+        authors_file_bytes: authors_file_bytes.as_deref(),
+        authors_prog: ctx.post_commit_fetch_config.authors_prog.as_deref(),
+        ignore_paths: ctx.post_commit_fetch_config.ignore_paths.as_deref(),
+        include_paths: ctx.post_commit_fetch_config.include_paths.as_deref(),
+        ignore_refs: ctx.post_commit_fetch_config.ignore_refs.as_deref(),
+        localtime: ctx.post_commit_fetch_config.localtime,
+        no_metadata: ctx.post_commit_fetch_config.no_metadata,
+        rewrite_root: ctx.post_commit_fetch_config.rewrite_root.as_deref(),
+        rewrite_uuid: ctx.post_commit_fetch_config.rewrite_uuid.as_deref(),
+        preserve_empty_dirs: ctx.post_commit_fetch_config.preserve_empty_dirs,
+        placeholder_filename: ctx
+            .post_commit_fetch_config
+            .preserve_empty_dirs
+            .then_some(ctx.post_commit_fetch_config.placeholder_filename.as_str()),
+    };
     let recovery_fingerprint_input = RecoveryFingerprintInput {
         target: &target,
         commit_url_override: ctx.commit_url_override,
@@ -339,10 +373,15 @@ fn dcommit_file_svn(
         no_auth_cache: ctx.svn_options.no_auth_cache,
         no_rebase: ctx.no_rebase,
         mergeinfo: ctx.mergeinfo,
+        fetch: fetch_intent,
     };
     let config_fingerprint = recovery_config_fingerprint(recovery_fingerprint_input);
-    let legacy_config_fingerprint =
+    let legacy_config_fingerprint_v2 =
         crate::dcommit::fingerprint::legacy_recovery_config_fingerprint_v2(
+            recovery_fingerprint_input,
+        );
+    let legacy_config_fingerprint_v3 =
+        crate::dcommit::fingerprint::legacy_recovery_config_fingerprint_v3(
             recovery_fingerprint_input,
         );
     let plan_chain = if let Some(located) = &active {
@@ -403,7 +442,7 @@ fn dcommit_file_svn(
         reconcile_recovery_config_fingerprint(
             &mut journal.config_fingerprint,
             &config_fingerprint,
-            &legacy_config_fingerprint,
+            &[&legacy_config_fingerprint_v3, &legacy_config_fingerprint_v2],
         )?;
         prepared.journal = journal;
         located.directory
@@ -482,12 +521,12 @@ fn dcommit_file_svn(
 fn reconcile_recovery_config_fingerprint(
     stored: &mut String,
     current: &str,
-    legacy_v2: &str,
+    legacy: &[&str],
 ) -> Result<(), String> {
     if stored == current {
         return Ok(());
     }
-    if stored == legacy_v2 {
+    if legacy.contains(&stored.as_str()) {
         current.clone_into(stored);
         return Ok(());
     }
@@ -1113,18 +1152,22 @@ mod tests {
     }
 
     #[test]
-    fn recovery_config_fingerprint_accepts_current_or_migrates_v2_only() {
-        let mut current = "v3".to_string();
-        reconcile_recovery_config_fingerprint(&mut current, "v3", "v2").unwrap();
-        assert_eq!(current, "v3");
+    fn recovery_config_fingerprint_accepts_current_or_migrates_v2_and_v3() {
+        let mut current = "v4".to_string();
+        reconcile_recovery_config_fingerprint(&mut current, "v4", &["v3", "v2"]).unwrap();
+        assert_eq!(current, "v4");
 
         let mut legacy = "v2".to_string();
-        reconcile_recovery_config_fingerprint(&mut legacy, "v3", "v2").unwrap();
-        assert_eq!(legacy, "v3");
+        reconcile_recovery_config_fingerprint(&mut legacy, "v4", &["v3", "v2"]).unwrap();
+        assert_eq!(legacy, "v4");
+
+        let mut legacy = "v3".to_string();
+        reconcile_recovery_config_fingerprint(&mut legacy, "v4", &["v3", "v2"]).unwrap();
+        assert_eq!(legacy, "v4");
 
         let mut mismatch = "other".to_string();
         assert!(
-            reconcile_recovery_config_fingerprint(&mut mismatch, "v3", "v2")
+            reconcile_recovery_config_fingerprint(&mut mismatch, "v4", &["v3", "v2"])
                 .unwrap_err()
                 .contains("does not match")
         );

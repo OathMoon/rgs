@@ -767,7 +767,7 @@ fn dcommit_fetches_after_authenticated_svnserve_write_when_reads_require_auth() 
 
 #[cfg(unix)]
 #[test]
-fn dcommit_resumes_submitted_svnserve_after_password_rotation() {
+fn dcommit_recovery_binds_authors_content_but_allows_password_rotation() {
     match require_svn_tools().and_then(|()| require_svnserve()) {
         Ok(()) => {}
         Err(SvnToolPolicy::Skip(message)) => {
@@ -804,6 +804,13 @@ fn dcommit_resumes_submitted_svnserve_after_password_rotation() {
         .success();
 
     let password_file = fixture.root().join("repo/conf/passwd");
+    let authors_file = parent.path().join("authors.txt");
+    std::fs::write(
+        &authors_file,
+        "alice = Alice Original <alice@example.com>\n",
+    )
+    .unwrap();
+    let authors_file_arg = authors_file.to_string_lossy().into_owned();
     let hook = fixture.root().join("repo/hooks/post-commit");
     assert!(!password_file.to_string_lossy().contains('"'));
     std::fs::write(
@@ -848,6 +855,8 @@ fn dcommit_resumes_submitted_svnserve_after_password_rotation() {
             "--password",
             "old-secret",
             "--no-auth-cache",
+            "--authors-file",
+            &authors_file_arg,
         ])
         .assert()
         .failure()
@@ -880,6 +889,38 @@ fn dcommit_resumes_submitted_svnserve_after_password_rotation() {
         }
     }
 
+    std::fs::write(&authors_file, "alice = Alice Changed <alice@example.com>\n").unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--password",
+            "new-secret",
+            "--no-auth-cache",
+            "--authors-file",
+            &authors_file_arg,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "journal configuration does not match",
+        ))
+        .stderr(predicate::str::contains("new-secret").not());
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "changing authors-file content must not resubmit"
+    );
+    std::fs::write(
+        &authors_file,
+        "alice = Alice Original <alice@example.com>\n",
+    )
+    .unwrap();
+
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
@@ -891,6 +932,8 @@ fn dcommit_resumes_submitted_svnserve_after_password_rotation() {
             "--password",
             "new-secret",
             "--no-auth-cache",
+            "--authors-file",
+            &authors_file_arg,
         ])
         .assert()
         .failure()
@@ -915,6 +958,8 @@ fn dcommit_resumes_submitted_svnserve_after_password_rotation() {
             "--password",
             "new-secret",
             "--no-auth-cache",
+            "--authors-file",
+            &authors_file_arg,
         ])
         .assert()
         .success();

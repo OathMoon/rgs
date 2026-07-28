@@ -18,7 +18,7 @@ pub use diff_planner::{
     PlannedChange, PlannedChangeKind, PlannedCommit, PropertyChange,
 };
 pub use fingerprint::{
-    RecoveryFingerprintInput, canonical_message_bytes, canonical_plan_bytes,
+    RecoveryFetchIntent, RecoveryFingerprintInput, canonical_message_bytes, canonical_plan_bytes,
     canonical_recovery_config_bytes, message_fingerprint, plan_fingerprint,
     recovery_config_fingerprint,
 };

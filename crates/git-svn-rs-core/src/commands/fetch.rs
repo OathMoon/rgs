@@ -158,7 +158,7 @@ fn validate_requested_urls_before_recovery(git: &GitCli, args: &FetchArgs) -> Re
     Ok(())
 }
 
-fn effective_fetch_config(
+pub(crate) fn effective_fetch_config(
     mut config: SvnRemoteConfig,
     shared: &SharedFetchArgs,
     base_revision: u32,

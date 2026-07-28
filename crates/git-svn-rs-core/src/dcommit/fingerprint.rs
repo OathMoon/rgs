@@ -9,7 +9,23 @@ use super::diff_planner::{
 use super::journal::DcommitTargetIdentity;
 
 const FORMAT_VERSION: u32 = 1;
-const RECOVERY_CONFIG_FORMAT_VERSION: u32 = 3;
+const RECOVERY_CONFIG_FORMAT_VERSION: u32 = 4;
+
+#[derive(Clone, Copy, Debug)]
+pub struct RecoveryFetchIntent<'a> {
+    pub authors_file: Option<&'a Path>,
+    pub authors_file_bytes: Option<&'a [u8]>,
+    pub authors_prog: Option<&'a str>,
+    pub ignore_paths: Option<&'a str>,
+    pub include_paths: Option<&'a str>,
+    pub ignore_refs: Option<&'a str>,
+    pub localtime: bool,
+    pub no_metadata: bool,
+    pub rewrite_root: Option<&'a str>,
+    pub rewrite_uuid: Option<&'a str>,
+    pub preserve_empty_dirs: bool,
+    pub placeholder_filename: Option<&'a str>,
+}
 
 #[derive(Clone, Copy, Debug)]
 pub struct RecoveryFingerprintInput<'a> {
@@ -20,6 +36,7 @@ pub struct RecoveryFingerprintInput<'a> {
     pub no_auth_cache: bool,
     pub no_rebase: bool,
     pub mergeinfo: Option<&'a str>,
+    pub fetch: RecoveryFetchIntent<'a>,
 }
 
 pub fn canonical_plan_bytes(plan: &DcommitPlan) -> Vec<u8> {
@@ -43,17 +60,22 @@ pub fn message_fingerprint(message: &str) -> String {
 }
 
 pub fn canonical_recovery_config_bytes(input: RecoveryFingerprintInput<'_>) -> Vec<u8> {
-    encode_recovery_config(input, RECOVERY_CONFIG_FORMAT_VERSION, true)
+    encode_recovery_config(input, RECOVERY_CONFIG_FORMAT_VERSION, true, true)
 }
 
 pub(crate) fn legacy_recovery_config_fingerprint_v2(input: RecoveryFingerprintInput<'_>) -> String {
-    fingerprint(&encode_recovery_config(input, 2, false))
+    fingerprint(&encode_recovery_config(input, 2, false, false))
+}
+
+pub(crate) fn legacy_recovery_config_fingerprint_v3(input: RecoveryFingerprintInput<'_>) -> String {
+    fingerprint(&encode_recovery_config(input, 3, true, false))
 }
 
 fn encode_recovery_config(
     input: RecoveryFingerprintInput<'_>,
     version: u32,
     include_client_intent: bool,
+    include_fetch_intent: bool,
 ) -> Vec<u8> {
     let mut encoder = Encoder::new_with_version("git-svn-rs/dcommit-recovery-config", version);
     encoder.structure("target", |encoder| {
@@ -78,6 +100,72 @@ fn encode_recovery_config(
     encoder.option("mergeinfo", input.mergeinfo, |encoder, value| {
         encoder.value_str(value);
     });
+    if include_fetch_intent {
+        encoder.structure("post_fetch", |encoder| {
+            encoder.option(
+                "authors_file",
+                input.fetch.authors_file,
+                |encoder, value| {
+                    encoder.value_path(value);
+                },
+            );
+            encoder.option(
+                "authors_file_bytes",
+                input.fetch.authors_file_bytes,
+                |encoder, value| {
+                    encoder.value_bytes(value);
+                },
+            );
+            encoder.option(
+                "authors_prog",
+                input.fetch.authors_prog,
+                |encoder, value| {
+                    encoder.value_str(value);
+                },
+            );
+            encoder.option(
+                "ignore_paths",
+                input.fetch.ignore_paths,
+                |encoder, value| {
+                    encoder.value_str(value);
+                },
+            );
+            encoder.option(
+                "include_paths",
+                input.fetch.include_paths,
+                |encoder, value| {
+                    encoder.value_str(value);
+                },
+            );
+            encoder.option("ignore_refs", input.fetch.ignore_refs, |encoder, value| {
+                encoder.value_str(value);
+            });
+            encoder.field_bool("localtime", input.fetch.localtime);
+            encoder.field_bool("no_metadata", input.fetch.no_metadata);
+            encoder.option(
+                "rewrite_root",
+                input.fetch.rewrite_root,
+                |encoder, value| {
+                    encoder.value_str(value);
+                },
+            );
+            encoder.option(
+                "rewrite_uuid",
+                input.fetch.rewrite_uuid,
+                |encoder, value| {
+                    encoder.value_str(value);
+                },
+            );
+            encoder.field_bool("preserve_empty_dirs", input.fetch.preserve_empty_dirs);
+            encoder.option(
+                "placeholder_filename",
+                input.fetch.placeholder_filename,
+                |encoder, value| {
+                    encoder.value_str(value);
+                },
+            );
+        });
+    }
     encoder.finish()
 }
 
@@ -329,6 +417,23 @@ mod tests {
         }
     }
 
+    fn empty_fetch_intent() -> RecoveryFetchIntent<'static> {
+        RecoveryFetchIntent {
+            authors_file: None,
+            authors_file_bytes: None,
+            authors_prog: None,
+            ignore_paths: None,
+            include_paths: None,
+            ignore_refs: None,
+            localtime: false,
+            no_metadata: false,
+            rewrite_root: None,
+            rewrite_uuid: None,
+            preserve_empty_dirs: false,
+            placeholder_filename: None,
+        }
+    }
+
     #[test]
     fn fingerprints_are_stable_sha256_hex() {
         let plan = plan();
@@ -411,6 +516,7 @@ mod tests {
             no_auth_cache: false,
             no_rebase: false,
             mergeinfo: None,
+            fetch: empty_fetch_intent(),
         };
         let expected = recovery_config_fingerprint(input);
         assert_eq!(expected, recovery_config_fingerprint(input));
@@ -475,6 +581,56 @@ mod tests {
             }),
             expected
         );
+        let fetch_variants = [
+            RecoveryFetchIntent {
+                authors_file: Some(Path::new("authors.txt")),
+                authors_file_bytes: Some(b"alice = Alice <alice@example.com>\n"),
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                authors_prog: Some("resolve-author"),
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                ignore_paths: Some("^vendor/"),
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                include_paths: Some("^src/"),
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                ignore_refs: Some("^refs/remotes/origin/tags/"),
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                localtime: true,
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                no_metadata: true,
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                rewrite_root: Some("https://example.invalid/legacy"),
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                rewrite_uuid: Some("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+                ..empty_fetch_intent()
+            },
+            RecoveryFetchIntent {
+                preserve_empty_dirs: true,
+                placeholder_filename: Some(".keep"),
+                ..empty_fetch_intent()
+            },
+        ];
+        for fetch in fetch_variants {
+            assert_ne!(
+                recovery_config_fingerprint(RecoveryFingerprintInput { fetch, ..input }),
+                expected
+            );
+        }
     }
 
     #[test]
@@ -489,13 +645,13 @@ mod tests {
             [
                 0, 0, 0, 0, 0, 0, 0, 34, b'g', b'i', b't', b'-', b's', b'v', b'n', b'-', b'r',
                 b's', b'/', b'd', b'c', b'o', b'm', b'm', b'i', b't', b'-', b'r', b'e', b'c', b'o',
-                b'v', b'e', b'r', b'y', b'-', b'c', b'o', b'n', b'f', b'i', b'g', 0, 0, 0, 3,
+                b'v', b'e', b'r', b'y', b'-', b'c', b'o', b'n', b'f', b'i', b'g', 0, 0, 0, 4,
             ]
         );
     }
 
     #[test]
-    fn recovery_config_fingerprint_matches_the_v3_fixed_vector() {
+    fn recovery_config_fingerprint_matches_the_v4_fixed_vector() {
         let target = target();
         let actual = recovery_config_fingerprint(RecoveryFingerprintInput {
             target: &target,
@@ -505,7 +661,44 @@ mod tests {
             no_auth_cache: false,
             no_rebase: false,
             mergeinfo: None,
+            fetch: empty_fetch_intent(),
         });
+        #[cfg(unix)]
+        assert_eq!(
+            actual,
+            "efbabf4e97011b189cb5f1bdc5fb4bdca4ac2475abcb157003eedd4f1d01c592"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            actual,
+            "abb8c63119248f138e289fc1dbd6ea6d674460ba7d21ffab3d15cd8d55af8124"
+        );
+    }
+
+    #[test]
+    fn legacy_v3_recovery_fingerprint_ignores_v4_fetch_intent() {
+        let target = target();
+        let input = RecoveryFingerprintInput {
+            target: &target,
+            commit_url_override: false,
+            username: None,
+            config_dir: None,
+            no_auth_cache: false,
+            no_rebase: false,
+            mergeinfo: None,
+            fetch: RecoveryFetchIntent {
+                authors_prog: Some("resolve-author"),
+                ..empty_fetch_intent()
+            },
+        };
+        let actual = legacy_recovery_config_fingerprint_v3(input);
+        assert_eq!(
+            actual,
+            legacy_recovery_config_fingerprint_v3(RecoveryFingerprintInput {
+                fetch: empty_fetch_intent(),
+                ..input
+            })
+        );
         #[cfg(unix)]
         assert_eq!(
             actual,
@@ -529,6 +722,7 @@ mod tests {
             no_auth_cache: true,
             no_rebase: false,
             mergeinfo: None,
+            fetch: empty_fetch_intent(),
         };
         let actual = legacy_recovery_config_fingerprint_v2(input);
         assert_eq!(
