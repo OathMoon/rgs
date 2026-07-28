@@ -48,42 +48,54 @@ pub fn build_from_layout_args(
     let has_layout_args = stdlayout || trunk.is_some() || !branches.is_empty() || !tags.is_empty();
     let prefix = prefix.unwrap_or(if has_layout_args { "origin/" } else { "" });
 
-    if stdlayout && trunk.is_none() && branches.is_empty() && tags.is_empty() {
-        return Ok(build_standard_layout_with_prefix(prefix));
-    }
-
     if trunk.is_some() || !branches.is_empty() || !tags.is_empty() {
-        let mut mappings = LayoutMappings {
-            fetch: Vec::new(),
-            branches: Vec::new(),
-            tags: Vec::new(),
+        let mut mappings = if stdlayout {
+            build_standard_layout_with_prefix(prefix)
+        } else {
+            LayoutMappings {
+                fetch: Vec::new(),
+                branches: Vec::new(),
+                tags: Vec::new(),
+            }
         };
 
-        mappings.fetch.push(RefMapping {
-            kind: MappingKind::Fetch,
-            svn_path: trim_path(trunk.unwrap_or("trunk")),
-            git_ref: format!("refs/remotes/{prefix}trunk"),
-        });
-
-        for branch in branches {
-            let svn_path = validate_glob(branch)?;
-            mappings.branches.push(RefMapping {
-                kind: MappingKind::Branches,
-                svn_path,
-                git_ref: format!("refs/remotes/{prefix}*"),
-            });
+        if let Some(trunk) = trunk {
+            mappings.fetch = vec![RefMapping {
+                kind: MappingKind::Fetch,
+                svn_path: trim_path(trunk),
+                git_ref: format!("refs/remotes/{prefix}trunk"),
+            }];
         }
 
-        for tag in tags {
-            let svn_path = validate_glob(tag)?;
-            mappings.tags.push(RefMapping {
-                kind: MappingKind::Tags,
-                svn_path,
-                git_ref: format!("refs/remotes/{prefix}tags/*"),
-            });
+        if !branches.is_empty() {
+            mappings.branches.clear();
+            for branch in branches {
+                let svn_path = validate_glob(branch)?;
+                mappings.branches.push(RefMapping {
+                    kind: MappingKind::Branches,
+                    svn_path,
+                    git_ref: format!("refs/remotes/{prefix}*"),
+                });
+            }
+        }
+
+        if !tags.is_empty() {
+            mappings.tags.clear();
+            for tag in tags {
+                let svn_path = validate_glob(tag)?;
+                mappings.tags.push(RefMapping {
+                    kind: MappingKind::Tags,
+                    svn_path,
+                    git_ref: format!("refs/remotes/{prefix}tags/*"),
+                });
+            }
         }
 
         return Ok(mappings);
+    }
+
+    if stdlayout {
+        return Ok(build_standard_layout_with_prefix(prefix));
     }
 
     Ok(build_single_path(prefix))

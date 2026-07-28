@@ -63,6 +63,83 @@ fn clone_stdlayout_file_url_imports_trunk_history() {
 }
 
 #[test]
+fn partial_layout_arguments_match_frozen_mapping_selection() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &fixture.url(),
+            "branches-only",
+            "--branches",
+            "branches/*",
+        ])
+        .assert()
+        .success();
+    let branches_only = temp.path().join("branches-only");
+    let git = git_svn_rs_core::git::GitCli::new(&branches_only);
+    assert!(
+        git.config_get_all("svn-remote.svn.fetch")
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        git.config_get_all("svn-remote.svn.branches").unwrap(),
+        vec!["branches/*:refs/remotes/origin/*"]
+    );
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&branches_only)
+        .arg("fetch")
+        .assert()
+        .success();
+    assert!(
+        git.run_for_test(["rev-parse", "--verify", "refs/remotes/origin/main"])
+            .is_ok()
+    );
+    assert!(
+        git.run_for_test(["rev-parse", "--verify", "refs/remotes/origin/trunk"])
+            .is_err()
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &fixture.url(),
+            "partial-stdlayout",
+            "--stdlayout",
+            "--branches",
+            "other/*",
+        ])
+        .assert()
+        .success();
+    let partial_stdlayout = temp.path().join("partial-stdlayout");
+    let git = git_svn_rs_core::git::GitCli::new(&partial_stdlayout);
+    assert_eq!(
+        git.config_get_all("svn-remote.svn.fetch").unwrap(),
+        vec!["trunk:refs/remotes/origin/trunk"]
+    );
+    assert_eq!(
+        git.config_get_all("svn-remote.svn.tags").unwrap(),
+        vec!["tags/*:refs/remotes/origin/tags/*"]
+    );
+}
+
+#[test]
 fn clone_stdlayout_replays_bounded_log_windows_without_losing_mappings() {
     match require_svn_tools() {
         Ok(()) => {}

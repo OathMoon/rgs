@@ -51,6 +51,36 @@ fn custom_layout_args_override_stdlayout() {
 }
 
 #[test]
+fn partial_custom_layout_does_not_create_an_implicit_trunk() {
+    let branches = vec!["project/branches/*".to_string()];
+    let branch_mappings = build_from_layout_args(false, None, &branches, &[], None).unwrap();
+    assert!(branch_mappings.fetch.is_empty());
+    assert_eq!(branch_mappings.branches[0].svn_path, "project/branches/*");
+    assert!(branch_mappings.tags.is_empty());
+
+    let tags = vec!["project/tags/*".to_string()];
+    let tag_mappings = build_from_layout_args(false, None, &[], &tags, None).unwrap();
+    assert!(tag_mappings.fetch.is_empty());
+    assert!(tag_mappings.branches.is_empty());
+    assert_eq!(tag_mappings.tags[0].svn_path, "project/tags/*");
+}
+
+#[test]
+fn partial_stdlayout_overrides_preserve_unspecified_defaults() {
+    let branches = vec!["project/branches/*".to_string()];
+    let mappings = build_from_layout_args(true, None, &branches, &[], None).unwrap();
+    assert_eq!(mappings.fetch[0].svn_path, "trunk");
+    assert_eq!(mappings.branches[0].svn_path, "project/branches/*");
+    assert_eq!(mappings.tags[0].svn_path, "tags/*");
+
+    let tags = vec!["project/tags/*".to_string()];
+    let mappings = build_from_layout_args(true, Some("main"), &[], &tags, None).unwrap();
+    assert_eq!(mappings.fetch[0].svn_path, "main");
+    assert_eq!(mappings.branches[0].svn_path, "branches/*");
+    assert_eq!(mappings.tags[0].svn_path, "project/tags/*");
+}
+
+#[test]
 fn invalid_multi_wildcard_layouts_are_rejected() {
     let branches = vec!["branches/*/teams/*".to_string()];
     let err = build_from_layout_args(false, None, &branches, &[], None).unwrap_err();
