@@ -58,7 +58,7 @@ pub fn run_in_work_tree(
         args.incremental,
     );
     let verbose_path_prefix = verbose_path_prefix(&tracked.svn_path, &tracked.config.url);
-    let authors = load_authors(&tracked)?;
+    let authors = load_authors(&tracked, args.authors_file.as_deref())?;
     let mut entries = Vec::new();
     let mut last_revision = None;
     for record in raw.split('\x1e') {
@@ -157,8 +157,9 @@ fn digits(revision: u32) -> usize {
 
 fn load_authors(
     tracked: &crate::commands::resolver::TrackedSvn,
+    authors_file: Option<&str>,
 ) -> Result<Option<AuthorResolver>, String> {
-    let Some(path) = tracked.config.authors_file.as_deref() else {
+    let Some(path) = authors_file.or(tracked.config.authors_file.as_deref()) else {
         return Ok(None);
     };
     let path = std::path::Path::new(path);

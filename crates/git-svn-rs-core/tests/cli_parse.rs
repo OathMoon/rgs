@@ -127,6 +127,18 @@ fn parses_log_git_log_passthrough_args() {
 }
 
 #[test]
+fn parses_log_authors_file() {
+    let cli = Cli::parse_from(["git-svn-rs", "log", "-A", "authors.txt"]);
+
+    match cli.command {
+        Command::Log(args) => {
+            assert_eq!(args.authors_file.as_deref(), Some("authors.txt"));
+        }
+        other => panic!("expected log, got {other:?}"),
+    }
+}
+
+#[test]
 fn find_rev_before_and_after_conflict() {
     let err =
         Cli::try_parse_from(["git-svn-rs", "find-rev", "--before", "--after", "r3"]).unwrap_err();

@@ -2284,6 +2284,7 @@ fn supported_log_oneline(work_tree: &Path, tool: GoldenTool) -> Result<String, S
             work_tree,
             LogArgs {
                 revision: None,
+                authors_file: None,
                 limit: None,
                 verbose: false,
                 incremental: false,
@@ -2307,6 +2308,7 @@ fn supported_log_oneline_show_commit(work_tree: &Path, tool: GoldenTool) -> Resu
             work_tree,
             LogArgs {
                 revision: None,
+                authors_file: None,
                 limit: None,
                 verbose: false,
                 incremental: false,
@@ -2330,6 +2332,7 @@ fn supported_log_limit_oneline(work_tree: &Path, tool: GoldenTool) -> Result<Str
             work_tree,
             LogArgs {
                 revision: None,
+                authors_file: None,
                 limit: Some(1),
                 verbose: false,
                 incremental: false,
@@ -2353,6 +2356,7 @@ fn supported_log_path_oneline(work_tree: &Path, tool: GoldenTool) -> Result<Stri
             work_tree,
             LogArgs {
                 revision: None,
+                authors_file: None,
                 limit: None,
                 verbose: false,
                 incremental: false,
@@ -2372,6 +2376,7 @@ fn supported_log_verbose(work_tree: &Path, tool: GoldenTool) -> Result<String, S
             work_tree,
             LogArgs {
                 revision: None,
+                authors_file: None,
                 limit: None,
                 verbose: true,
                 incremental: false,
@@ -2391,6 +2396,7 @@ fn supported_log_incremental(work_tree: &Path, tool: GoldenTool) -> Result<Strin
             work_tree,
             LogArgs {
                 revision: None,
+                authors_file: None,
                 limit: None,
                 verbose: false,
                 incremental: true,
@@ -2424,6 +2430,7 @@ fn supported_log_revision_oneline(
             work_tree,
             LogArgs {
                 revision: Some(format!("r{revision}")),
+                authors_file: None,
                 limit: None,
                 verbose: false,
                 incremental: false,
@@ -2458,6 +2465,7 @@ fn supported_log_revision_range_oneline(
             work_tree,
             LogArgs {
                 revision: Some(format!("r{start_revision}:r{end_revision}")),
+                authors_file: None,
                 limit: None,
                 verbose: false,
                 incremental: false,

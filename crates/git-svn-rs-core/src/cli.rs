@@ -170,6 +170,8 @@ pub struct DcommitArgs {
 pub struct LogArgs {
     #[arg(short = 'r', long = "revision")]
     pub revision: Option<String>,
+    #[arg(short = 'A', long = "authors-file")]
+    pub authors_file: Option<String>,
     #[arg(short = 'n', long)]
     pub limit: Option<u32>,
     #[arg(short = 'v', long)]
