@@ -143,6 +143,159 @@ fn special_property_changes_file_to_symlink() {
 }
 
 #[test]
+fn replacing_a_symlink_with_a_regular_file_resets_base_mode() {
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan(),
+        vec![TreeEntry::file("trunk/link", "120000", b"old-target")],
+    );
+
+    editor.open_root(3).unwrap();
+    editor.delete_entry("trunk/link", 2).unwrap();
+    editor.add_file("trunk/link", None).unwrap();
+    editor.apply_textdelta("trunk/link", b"regular\n").unwrap();
+    editor.close_edit().unwrap();
+
+    assert_eq!(
+        editor.into_commit().unwrap().changes,
+        vec![FileChange::Modify {
+            path: "trunk/link".to_string(),
+            mode: "100644".to_string(),
+            content: b"regular\n".to_vec(),
+        }]
+    );
+}
+
+#[test]
+fn real_child_removes_an_owned_empty_directory_placeholder() {
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan(),
+        vec![TreeEntry::file("empty/.gitkeep", "100644", b"")],
+    )
+    .with_owned_placeholders(["empty".to_string()]);
+
+    editor.open_root(3).unwrap();
+    editor.add_file("empty/value.txt", None).unwrap();
+    editor
+        .apply_textdelta("empty/value.txt", b"value\n")
+        .unwrap();
+    editor.reconcile_empty_directories(".gitkeep").unwrap();
+    editor.close_edit().unwrap();
+
+    let result = editor.into_result().unwrap();
+    assert_eq!(
+        result.commit.changes,
+        vec![
+            FileChange::Delete {
+                path: "empty/.gitkeep".to_string(),
+            },
+            FileChange::Modify {
+                path: "empty/value.txt".to_string(),
+                mode: "100644".to_string(),
+                content: b"value\n".to_vec(),
+            },
+        ]
+    );
+    assert_eq!(
+        result.unhandled.lines(),
+        vec!["  -empty_dir: empty".to_string()]
+    );
+    assert!(result.owned_placeholders.is_empty());
+}
+
+#[test]
+fn real_same_named_placeholder_is_preserved_when_a_sibling_is_added() {
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan(),
+        vec![TreeEntry::file(
+            "directory/.gitkeep",
+            "100644",
+            b"repository content\n",
+        )],
+    );
+
+    editor.open_root(3).unwrap();
+    editor.add_file("directory/value.txt", None).unwrap();
+    editor
+        .apply_textdelta("directory/value.txt", b"value\n")
+        .unwrap();
+    editor.reconcile_empty_directories(".gitkeep").unwrap();
+    editor.close_edit().unwrap();
+
+    let result = editor.into_result().unwrap();
+    assert_eq!(
+        result.commit.changes,
+        vec![FileChange::Modify {
+            path: "directory/value.txt".to_string(),
+            mode: "100644".to_string(),
+            content: b"value\n".to_vec(),
+        }]
+    );
+    assert!(result.unhandled.is_empty());
+    assert!(result.owned_placeholders.is_empty());
+}
+
+#[test]
+fn deleting_the_last_real_child_creates_a_persistent_placeholder() {
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan(),
+        vec![TreeEntry::file("directory/value.txt", "100644", b"value\n")],
+    );
+
+    editor.open_root(3).unwrap();
+    editor.delete_entry("directory/value.txt", 2).unwrap();
+    editor.reconcile_empty_directories(".gitkeep").unwrap();
+    editor.close_edit().unwrap();
+
+    let result = editor.into_result().unwrap();
+    assert_eq!(
+        result.commit.changes,
+        vec![
+            FileChange::Modify {
+                path: "directory/.gitkeep".to_string(),
+                mode: "100644".to_string(),
+                content: Vec::new(),
+            },
+            FileChange::Delete {
+                path: "directory/value.txt".to_string(),
+            },
+        ]
+    );
+    assert_eq!(
+        result.unhandled.lines(),
+        vec!["  +empty_dir: directory".to_string()]
+    );
+    assert_eq!(
+        result.owned_placeholders,
+        ["directory".to_string()].into_iter().collect()
+    );
+}
+
+#[test]
+fn nested_empty_directories_need_only_the_deepest_placeholder() {
+    let mut editor = SvnFetchEditor::new(plan());
+
+    editor.open_root(3).unwrap();
+    editor.add_directory("outer", None).unwrap();
+    editor.add_directory("outer/inner", None).unwrap();
+    editor.reconcile_empty_directories(".gitkeep").unwrap();
+    editor.close_edit().unwrap();
+
+    let result = editor.into_result().unwrap();
+    assert_eq!(
+        result.commit.changes,
+        vec![FileChange::Modify {
+            path: "outer/inner/.gitkeep".to_string(),
+            mode: "100644".to_string(),
+            content: Vec::new(),
+        }]
+    );
+    assert_eq!(
+        result.unhandled.lines(),
+        vec!["  +empty_dir: outer/inner".to_string()]
+    );
+}
+
+#[test]
 fn unhandled_metadata_matches_git_svn_log_format() {
     let mut editor = SvnFetchEditor::new(plan());
 
@@ -210,6 +363,34 @@ fn copied_directory_materializes_existing_subtree_at_destination() {
                 content: b"#!/bin/sh\n".to_vec(),
             },
         ]
+    );
+}
+
+#[test]
+fn copied_directory_transfers_placeholder_ownership_to_the_destination() {
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan(),
+        vec![TreeEntry::file("trunk/empty/.gitkeep", "100644", b"")],
+    )
+    .with_owned_placeholders(["trunk/empty".to_string()]);
+
+    editor.open_root(3).unwrap();
+    editor
+        .add_directory("branches/topic", Some(("trunk", 2)))
+        .unwrap();
+    editor.reconcile_empty_directories(".gitkeep").unwrap();
+    editor.close_edit().unwrap();
+
+    let result = editor.into_result().unwrap();
+    assert!(result.commit.changes.contains(&FileChange::Modify {
+        path: "branches/topic/empty/.gitkeep".to_string(),
+        mode: "100644".to_string(),
+        content: Vec::new(),
+    }));
+    assert!(result.owned_placeholders.contains("branches/topic/empty"));
+    assert_eq!(
+        result.unhandled.lines(),
+        vec!["  +empty_dir: branches/topic/empty".to_string()]
     );
 }
 
@@ -294,6 +475,26 @@ fn delete_entry_emits_delete_and_drops_pending_child_changes() {
         commit.changes,
         vec![FileChange::Delete {
             path: "trunk".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn deleting_mapped_root_deletes_base_files_without_an_empty_git_path() {
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan(),
+        vec![TreeEntry::file("old.txt", "100644", b"old\n")],
+    )
+    .with_path_prefix("branches/topic");
+
+    editor.open_root(3).unwrap();
+    editor.delete_entry("branches/topic", 2).unwrap();
+    editor.close_edit().unwrap();
+
+    assert_eq!(
+        editor.into_commit().unwrap().changes,
+        vec![FileChange::Delete {
+            path: "old.txt".to_string(),
         }]
     );
 }

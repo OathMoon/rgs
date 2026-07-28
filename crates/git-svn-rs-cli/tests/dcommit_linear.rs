@@ -392,6 +392,98 @@ fn dcommit_resumes_post_fetch_failure_without_duplicate_file_svn_commit() {
 }
 
 #[test]
+fn dcommit_adopts_verified_in_flight_file_svn_revision_without_resubmitting() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 61 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "adopt verified revision",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success();
+    let submitted = svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
+        .trim()
+        .parse::<u64>()
+        .unwrap();
+
+    let journal_directory = find_dcommit_journal(&work);
+    let store = JournalStore::new(journal_directory);
+    let lock = store.acquire_lock().unwrap();
+    let mut journal = store.load().unwrap().expect("completed dcommit journal");
+    journal.batch_state = BatchState::Submitting;
+    journal.entries[0].state = EntryState::SubmissionInFlight {
+        expected_base_revision: journal.original_base_revision,
+        expected_tracking_oid: journal.original_base_oid.clone(),
+    };
+    store.save(&lock, &journal).unwrap();
+    drop(lock);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--adopt-revision",
+            &submitted.to_string(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 1 local Git commit(s)"));
+    assert_eq!(
+        svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
+            .trim()
+            .parse::<u64>()
+            .unwrap(),
+        submitted,
+        "manual adoption must not submit another SVN revision"
+    );
+    let recovered = store.load().unwrap().expect("reconciled dcommit journal");
+    assert_eq!(recovered.batch_state, BatchState::Complete);
+    assert!(matches!(
+        recovered.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision,
+            ..
+        } if svn_revision == submitted
+    ));
+}
+
+#[test]
 fn dcommit_revision_option_does_not_limit_post_commit_fetch_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
@@ -2193,6 +2285,7 @@ fn dcommit_writes_executable_property_to_file_svn_when_tools_exist() {
     );
 
     std::fs::write(work.join("tool.sh"), "#!/bin/sh\necho tool\n").unwrap();
+    set_executable(&work.join("tool.sh"), true);
     run_git(&work, &["add", "tool.sh"]);
     run_git(&work, &["update-index", "--chmod=+x", "tool.sh"]);
     run_git(
@@ -2254,6 +2347,7 @@ fn dcommit_removes_executable_property_from_file_svn_when_mode_is_cleared() {
     );
 
     run_git(&work, &["update-index", "--chmod=-x", "run.sh"]);
+    set_executable(&work.join("run.sh"), false);
     run_git(
         &work,
         &[
@@ -2505,6 +2599,27 @@ fn mock_rev_map_snapshot(work: &std::path::Path) -> (std::path::PathBuf, Vec<u8>
     (rev_map_path, bytes)
 }
 
+fn find_dcommit_journal(work: &std::path::Path) -> std::path::PathBuf {
+    let svn_metadata = work.join(".git/svn");
+    let mut directories = vec![svn_metadata];
+    while let Some(directory) = directories.pop() {
+        for entry in std::fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if !path.is_dir() {
+                continue;
+            }
+            if path
+                .file_name()
+                .is_some_and(|name| name == "dcommit-journal")
+            {
+                return path;
+            }
+            directories.push(path);
+        }
+    }
+    panic!("dcommit journal directory not found")
+}
+
 fn write_mock_dcommit_journal(
     work: &std::path::Path,
     tracked_oid: &str,
@@ -2632,6 +2747,24 @@ fn recovery_authors_prog(dir: &std::path::Path, fail: bool) -> std::path::PathBu
         std::fs::set_permissions(&path, permissions).unwrap();
         path
     }
+}
+
+fn set_executable(path: &std::path::Path, executable: bool) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        let mut permissions = std::fs::metadata(path).unwrap().permissions();
+        let mode = permissions.mode();
+        permissions.set_mode(if executable {
+            mode | 0o111
+        } else {
+            mode & !0o111
+        });
+        std::fs::set_permissions(path, permissions).unwrap();
+    }
+    #[cfg(not(unix))]
+    let _ = (path, executable);
 }
 
 fn svn_stdout(args: &[&str]) -> String {

@@ -76,6 +76,13 @@ impl SvnCliBackend {
         self
     }
 
+    pub fn repository_root(&self) -> Result<String, String> {
+        Ok(self
+            .run_text(&["info", "--show-item", "repos-root-url", &self.url])?
+            .trim()
+            .to_string())
+    }
+
     fn command_args(&self, args: &[&str]) -> Vec<String> {
         let mut command_args = vec!["--non-interactive".to_string()];
         if let Some(config_dir) = &self.config_dir {
@@ -217,10 +224,7 @@ impl SvnBackend for SvnCliBackend {
     fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
         let range = format!("{start}:{end}");
         let xml = self.run_text(&["log", "--xml", "-v", "-r", &range, &self.url])?;
-        let repos_root = self
-            .run_text(&["info", "--show-item", "repos-root-url", &self.url])?
-            .trim()
-            .to_string();
+        let repos_root = self.repository_root()?;
         let session_path = self
             .run_text(&["info", "--show-item", "relative-url", &self.url])?
             .trim()

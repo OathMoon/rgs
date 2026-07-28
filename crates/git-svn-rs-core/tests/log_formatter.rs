@@ -17,7 +17,7 @@ fn formats_svn_style_log_entry() {
         rendered
             .contains("------------------------------------------------------------------------\n")
     );
-    assert!(rendered.contains("r7 | abcdef1234567890 | alice | 2026-01-01T00:00:00Z | 3 lines\n"));
+    assert!(rendered.contains("r7 | abcdef1 | alice | 2026-01-01T00:00:00Z | 3 lines\n"));
     assert!(rendered.contains("Changed paths:\n   M\ttrunk/src/lib.rs\n"));
     assert!(!rendered.contains("\ncommit abcdef1234567890\n"));
     assert!(rendered.contains("add file\n\nbody\n"));
@@ -69,7 +69,7 @@ fn oneline_log_entry_can_show_commit() {
 
     let rendered = GitSvnLogFormatter::new(true, true, false).format_entry(&entry);
 
-    assert_eq!(rendered, "r14 | abc123def456 | show commit\n");
+    assert_eq!(rendered, "r14 | abc123d | show commit\n");
 }
 
 #[test]
@@ -90,7 +90,7 @@ fn oneline_revision_is_right_padded_to_the_first_entry_width() {
 }
 
 #[test]
-fn incremental_log_entry_omits_separator() {
+fn incremental_log_entry_keeps_leading_separator() {
     let entry = GitSvnLogEntry {
         revision: 13,
         author: "carol".to_string(),
@@ -103,15 +103,16 @@ fn incremental_log_entry_omits_separator() {
     let rendered = GitSvnLogFormatter::incremental(false, false).format_entry(&entry);
 
     assert!(
-        !rendered
-            .contains("------------------------------------------------------------------------")
+        rendered.starts_with(
+            "------------------------------------------------------------------------\n"
+        )
     );
     assert!(rendered.contains("r13 | carol | 2026-01-03T00:00:00Z | 1 line\n"));
     assert!(rendered.contains("incremental entry\n"));
 }
 
 #[test]
-fn incremental_log_entry_can_show_commit_in_header_without_separator() {
+fn incremental_log_entry_can_show_short_commit_without_trailing_separator() {
     let entry = GitSvnLogEntry {
         revision: 17,
         author: "grace".to_string(),
@@ -125,7 +126,7 @@ fn incremental_log_entry_can_show_commit_in_header_without_separator() {
 
     assert_eq!(
         rendered,
-        "r17 | abcdef1234567890 | grace | 2026-01-07T00:00:00Z | 1 line\n\nincremental commit\n"
+        "------------------------------------------------------------------------\nr17 | abcdef1 | grace | 2026-01-07T00:00:00Z | 1 line\n\nincremental commit\n"
     );
 }
 

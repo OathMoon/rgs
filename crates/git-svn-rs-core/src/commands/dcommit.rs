@@ -1,5 +1,5 @@
 use crate::cli::DcommitArgs;
-use crate::commands::resolver::resolve_tracked_svn;
+use crate::commands::resolver::{resolve_tracked_svn, resolve_tracked_svn_allow_import_batch};
 use crate::commands::{fetch, rebase};
 use crate::dcommit::coordinator::{CommitSink, Coordinator, PostSubmit, RemoteHead};
 use crate::dcommit::journal::{
@@ -35,6 +35,20 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: DcommitArgs,
 ) -> Result<String, String> {
+    let work_tree = work_tree.into();
+    let git = GitCli::new(&work_tree);
+    if crate::import_transaction::has_pending_batch(&git)? {
+        let pending = resolve_tracked_svn_allow_import_batch(&work_tree)?;
+        let refnames = crate::import_transaction::pending_batch_refnames(&git)?;
+        for refname in refnames {
+            fetch::run_for_tracking_identity(
+                &work_tree,
+                pending.config.clone(),
+                &refname,
+                &args.shared,
+            )?;
+        }
+    }
     let tracked = resolve_tracked_svn(work_tree)?;
     if tracked.config.no_metadata {
         return Err("dcommit is unavailable for --no-metadata one-shot imports".to_string());
@@ -65,6 +79,17 @@ pub fn run_in_work_tree(
             .map_err(|error| error.to_string())?;
         let discovery =
             discover_repository_journals(&svn_metadata_root).map_err(|error| error.to_string())?;
+        if args.adopt_revision.is_some()
+            && discovery
+                .as_ref()
+                .and_then(|value| value.active.as_ref())
+                .is_none()
+        {
+            return Err(
+                "--adopt-revision requires an unfinished dcommit journal with an in-flight submission"
+                    .to_string(),
+            );
+        }
         let may_submit = discovery
             .as_ref()
             .and_then(|value| value.active.as_ref())
@@ -93,6 +118,12 @@ pub fn run_in_work_tree(
             ));
         }
         if target_url.starts_with("mock://") && tracked.config.url.starts_with("mock://") {
+            if args.adopt_revision.is_some() {
+                return Err(
+                    "--adopt-revision is only implemented for real file:// and svn:// dcommit recovery"
+                        .to_string(),
+                );
+            }
             if let Some(active) = discovery.as_ref().and_then(|value| value.active.as_ref()) {
                 return Err(format!(
                     "unfinished dcommit journal found at {}; mock recovery is not implemented",
@@ -118,18 +149,28 @@ pub fn run_in_work_tree(
             );
         }
         if is_svn_cli_write_back_url(target_url) && is_svn_cli_write_back_url(&tracked.config.url) {
+            if args.adopt_revision.is_some() && args.commit_url.is_some() {
+                return Err(
+                    "--adopt-revision cannot be combined with --commit-url because exact imported-tree verification is unavailable"
+                        .to_string(),
+                );
+            }
             let commit_svn_path = if args.commit_url.is_some() {
                 ""
             } else {
                 &tracked.svn_path
             };
-            let svn_options = dcommit_svn_options(
+            let mut svn_options = dcommit_svn_options(
                 tracked.config.username.as_deref(),
                 tracked.config.config_dir.as_deref(),
                 tracked.config.no_auth_cache,
                 None,
                 &args.shared,
             );
+            if target_url.starts_with("file://") {
+                svn_options.username = None;
+                svn_options.password = None;
+            }
             return dcommit_file_svn(
                 FileSvnDcommit {
                     git: &tracked.git,
@@ -158,6 +199,7 @@ pub fn run_in_work_tree(
                         .clone()
                         .unwrap_or_else(|| tracked.uuid.clone()),
                     commit_url_override: args.commit_url.is_some(),
+                    adopt_revision: args.adopt_revision,
                 },
                 commits,
                 discovery.and_then(|value| value.active),
@@ -200,6 +242,10 @@ fn is_svn_cli_write_back_url(url: &str) -> bool {
     url.starts_with("file://") || url.starts_with("svn://")
 }
 
+fn dcommit_message(message: &str) -> String {
+    message.trim_end_matches(['\r', '\n']).to_string()
+}
+
 struct FileSvnDcommit<'a> {
     git: &'a GitCli,
     svn_root_url: &'a str,
@@ -216,6 +262,7 @@ struct FileSvnDcommit<'a> {
     expected_footer_url: String,
     expected_footer_uuid: String,
     commit_url_override: bool,
+    adopt_revision: Option<u64>,
 }
 
 fn dcommit_file_svn(
@@ -337,7 +384,13 @@ fn dcommit_file_svn(
     };
     let persistence = JournalStorePersistence::new(JournalStore::new(journal_directory))
         .map_err(|error| error.to_string())?;
-    Coordinator::new(sink, post_submit, persistence)
+    let mut coordinator = Coordinator::new(sink, post_submit, persistence);
+    if let Some(revision) = ctx.adopt_revision {
+        coordinator
+            .adopt_in_flight(&mut prepared, revision)
+            .map_err(|error| error.to_string())?;
+    }
+    coordinator
         .run(&mut prepared)
         .map_err(|error| error.to_string())?;
 
@@ -391,7 +444,7 @@ fn build_file_svn_plans(
                     },
                     base_revision,
                     git_commit: git_commit.clone(),
-                    message: ctx.git.commit_message(git_commit)?,
+                    message: dcommit_message(&ctx.git.commit_message(git_commit)?),
                     author: Some(ctx.git.commit_author(git_commit)?),
                     mergeinfo: ctx.mergeinfo.map(str::to_owned),
                     changes: ctx.git.diff_raw(base_oid, git_commit)?,
@@ -853,7 +906,7 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
                 },
                 base_revision,
                 git_commit: commit.id.clone(),
-                message: ctx.git.commit_message(&commit.id)?,
+                message: dcommit_message(&ctx.git.commit_message(&commit.id)?),
                 author: Some(ctx.git.commit_author(&commit.id)?),
                 mergeinfo: None,
                 changes: ctx.git.diff_raw(&diff_base, &commit.id)?,
@@ -967,6 +1020,18 @@ mod tests {
                 "checkout",
                 "url",
             ]
+        );
+    }
+
+    #[test]
+    fn dcommit_message_preserves_body_and_removes_git_format_terminators() {
+        assert_eq!(
+            dcommit_message("subject\n\nbody with trailing spaces  \n\n"),
+            "subject\n\nbody with trailing spaces  "
+        );
+        assert_eq!(
+            dcommit_message("subject\r\n\r\nbody\r\n"),
+            "subject\r\n\r\nbody"
         );
     }
 }

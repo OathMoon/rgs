@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::dcommit::diff_planner::normalize_commit_path;
@@ -19,6 +20,7 @@ pub(super) struct WorkingCopyPlanEditor<'a> {
     message: String,
     expected_base: u32,
     state: EditorState,
+    pending_adds: BTreeSet<String>,
 }
 
 impl<'a> WorkingCopyPlanEditor<'a> {
@@ -34,6 +36,7 @@ impl<'a> WorkingCopyPlanEditor<'a> {
             message: message.into(),
             expected_base,
             state: EditorState::Open,
+            pending_adds: BTreeSet::new(),
         }
     }
 
@@ -91,9 +94,105 @@ impl<'a> WorkingCopyPlanEditor<'a> {
     }
 
     fn write_file(&self, path: &Path, content: &[u8]) -> Result<(), String> {
+        if std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink()) {
+            #[cfg(unix)]
+            if let Some(target) = content.strip_prefix(b"link ") {
+                use std::os::unix::fs::symlink;
+
+                let target = std::str::from_utf8(target)
+                    .map_err(|_| format!("symlink target for {} is not UTF-8", path.display()))?;
+                std::fs::remove_file(path)
+                    .map_err(|error| format!("failed to replace {}: {error}", path.display()))?;
+                return symlink(target, path).map_err(|error| {
+                    format!("failed to create symlink {}: {error}", path.display())
+                });
+            }
+            std::fs::remove_file(path)
+                .map_err(|error| format!("failed to replace {}: {error}", path.display()))?;
+        }
+        make_writable(path)?;
         std::fs::write(path, content)
             .map_err(|error| format!("failed to write {}: {error}", path.display()))
     }
+
+    #[cfg(unix)]
+    fn replace_special_kind(
+        &self,
+        path: &str,
+        special: bool,
+        pending_add: bool,
+    ) -> Result<(), String> {
+        use std::os::unix::fs::symlink;
+
+        let (path, target) = self.path(path)?;
+        let content = std::fs::read(&target)
+            .map_err(|error| format!("failed to read {}: {error}", target.display()))?;
+        if !pending_add {
+            run_svn(
+                Some(&self.wc),
+                self.svn_options,
+                &[
+                    "delete".to_string(),
+                    "--keep-local".to_string(),
+                    path.clone(),
+                ],
+            )?;
+        }
+        if std::fs::symlink_metadata(&target).is_ok() {
+            std::fs::remove_file(&target)
+                .map_err(|error| format!("failed to replace {}: {error}", target.display()))?;
+        }
+        if special {
+            let link_target = content
+                .strip_prefix(b"link ")
+                .ok_or_else(|| format!("svn:special content for {path} lacks link prefix"))?;
+            let link_target = std::str::from_utf8(link_target)
+                .map_err(|_| format!("svn:special target for {path} is not UTF-8"))?;
+            symlink(link_target, &target).map_err(|error| {
+                format!("failed to create symlink {}: {error}", target.display())
+            })?;
+        } else {
+            std::fs::write(&target, content)
+                .map_err(|error| format!("failed to write {}: {error}", target.display()))?;
+        }
+        run_svn(
+            Some(&self.wc),
+            self.svn_options,
+            &["add".to_string(), path.clone()],
+        )?;
+        if !special {
+            run_svn(
+                Some(&self.wc),
+                self.svn_options,
+                &[
+                    "propdel".to_string(),
+                    "--non-interactive".to_string(),
+                    "svn:special".to_string(),
+                    path,
+                ],
+            )?;
+        }
+        Ok(())
+    }
+}
+
+fn make_writable(path: &Path) -> Result<(), String> {
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    let mut permissions = metadata.permissions();
+    if !permissions.readonly() {
+        return Ok(());
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        permissions.set_mode(permissions.mode() | 0o200);
+    }
+    #[cfg(not(unix))]
+    permissions.set_readonly(false);
+    std::fs::set_permissions(path, permissions)
+        .map_err(|error| format!("failed to make {} writable: {error}", path.display()))
 }
 
 impl CommitEditor for WorkingCopyPlanEditor<'_> {
@@ -114,11 +213,8 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
     fn add_file(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
         let (path, target) = self.path(path)?;
         self.write_file(&target, content)?;
-        run_svn(
-            Some(&self.wc),
-            self.svn_options,
-            &["add".to_string(), "--parents".to_string(), path],
-        )
+        self.pending_adds.insert(path);
+        Ok(())
     }
 
     fn open_file(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
@@ -171,6 +267,18 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), String> {
+        let pending_add = self.pending_adds.remove(path);
+        #[cfg(unix)]
+        if name == "svn:special" {
+            return self.replace_special_kind(path, value.is_some(), pending_add);
+        }
+        if pending_add {
+            run_svn(
+                Some(&self.wc),
+                self.svn_options,
+                &["add".to_string(), "--parents".to_string(), path.to_string()],
+            )?;
+        }
         self.change_prop(path, name, value)
     }
 
@@ -185,6 +293,13 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
 
     fn close_edit(&mut self) -> Result<u32, String> {
         self.require_open()?;
+        for path in std::mem::take(&mut self.pending_adds) {
+            run_svn(
+                Some(&self.wc),
+                self.svn_options,
+                &["add".to_string(), "--parents".to_string(), path],
+            )?;
+        }
         let revision = svn_commit(&self.wc, &self.message, self.svn_options)?;
         self.state = EditorState::Closed;
         Ok(revision)
@@ -248,5 +363,21 @@ mod tests {
             aborted.close_edit().unwrap_err(),
             "working-copy commit editor was aborted"
         );
+    }
+
+    #[test]
+    fn overwrites_read_only_working_copy_files() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("needs-lock.txt");
+        std::fs::write(&path, "old\n").unwrap();
+        let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&path, permissions).unwrap();
+        let options = DcommitSvnOptions::default();
+        let mut editor = WorkingCopyPlanEditor::new(temp.path(), &options, "message", 7);
+
+        editor.open_file("needs-lock.txt", b"new\n").unwrap();
+
+        assert_eq!(std::fs::read(&path).unwrap(), b"new\n");
     }
 }

@@ -18,6 +18,12 @@ pub struct GitCli {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GitCommandOutput {
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GitCommitSummary {
     pub id: String,
     pub short_id: String,
@@ -80,6 +86,21 @@ impl GitCli {
         <Self as GitBackend>::init(self)
     }
 
+    pub fn init_with_output(&self) -> Result<GitCommandOutput, String> {
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .arg("init")
+            .output()
+            .map_err(|error| error.to_string())?;
+        if !output.status.success() {
+            return Err(stderr_or_status(output));
+        }
+        Ok(GitCommandOutput {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+
     pub fn git_dir(&self) -> Result<String, String> {
         <Self as GitBackend>::git_dir(self)
     }
@@ -98,6 +119,93 @@ impl GitCli {
 
     pub fn config_get_all(&self, key: &str) -> Result<Vec<String>, String> {
         <Self as GitBackend>::config_get_all(self, key)
+    }
+
+    pub fn git_svn_metadata_get(&self, key: &str) -> Result<Option<String>, String> {
+        let path = self.git_svn_metadata_path()?;
+        let old_path = path
+            .parent()
+            .ok_or_else(|| "git-svn metadata path has no parent".to_string())?
+            .join("config");
+        if !path.exists() && old_path.exists() {
+            std::fs::rename(&old_path, &path).map_err(|error| {
+                format!(
+                    "failed to migrate {} to {}: {error}",
+                    old_path.display(),
+                    path.display()
+                )
+            })?;
+        }
+        if !path.exists() {
+            return Ok(None);
+        }
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(["config", "--file"])
+            .arg(&path)
+            .args(["--get", key])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            Ok(Some(
+                String::from_utf8_lossy(&output.stdout)
+                    .trim_end()
+                    .to_string(),
+            ))
+        } else if output.status.code() == Some(1) {
+            Ok(None)
+        } else {
+            Err(stderr_or_status(output))
+        }
+    }
+
+    pub fn git_svn_metadata_set(&self, key: &str, value: &str) -> Result<(), String> {
+        let path = self.git_svn_metadata_path()?;
+        let svn_dir = path
+            .parent()
+            .ok_or_else(|| "git-svn metadata path has no parent".to_string())?;
+        std::fs::create_dir_all(svn_dir).map_err(|error| error.to_string())?;
+        let old_path = svn_dir.join("config");
+        if !path.exists() && old_path.exists() {
+            std::fs::rename(&old_path, &path).map_err(|error| {
+                format!(
+                    "failed to migrate {} to {}: {error}",
+                    old_path.display(),
+                    path.display()
+                )
+            })?;
+        }
+        if !path.exists() {
+            std::fs::write(
+                &path,
+                "; This file is used internally by git-svn\n; You should not have to edit it\n",
+            )
+            .map_err(|error| error.to_string())?;
+        }
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(["config", "--file"])
+            .arg(&path)
+            .args([key, value])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(stderr_or_status(output))
+        }
+    }
+
+    fn git_svn_metadata_path(&self) -> Result<PathBuf, String> {
+        let work_tree =
+            std::fs::canonicalize(&self.work_tree).map_err(|error| error.to_string())?;
+        let git_dir = PathBuf::from(self.git_dir()?);
+        let git_dir = if git_dir.is_absolute() {
+            git_dir
+        } else {
+            work_tree.join(git_dir)
+        };
+        Ok(git_dir.join("svn/.metadata"))
     }
 
     pub fn config_names_matching(&self, pattern: &str) -> Result<Vec<String>, String> {
@@ -271,7 +379,7 @@ impl GitCli {
         }
 
         if no_checkout {
-            self.run(["update-ref", "HEAD", tracking_ref]).map(|_| ())
+            Ok(())
         } else {
             self.run(["reset", "--hard", tracking_ref]).map(|_| ())
         }

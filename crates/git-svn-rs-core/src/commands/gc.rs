@@ -4,6 +4,7 @@ use crate::cli::GcArgs;
 use crate::git::GitCli;
 use crate::rev_map::REV_MAP_LOCK_MARKER;
 use flate2::Compression;
+use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use fs2::FileExt;
 use std::io::Read;
@@ -50,12 +51,27 @@ fn clean_svn_metadata(path: &Path) -> Result<(), String> {
 }
 
 fn compress_unhandled_log(path: &Path) -> Result<(), String> {
-    let data = std::fs::read(path)
+    let current = std::fs::read(path)
         .map_err(|error| format!("failed to read {}: {error}", path.display()))?;
+    let compressed_path = path.with_file_name("unhandled.log.gz");
+    let mut data = Vec::new();
+    if compressed_path.exists() {
+        let file = std::fs::File::open(&compressed_path)
+            .map_err(|error| format!("failed to read {}: {error}", compressed_path.display()))?;
+        GzDecoder::new(file)
+            .read_to_end(&mut data)
+            .map_err(|error| {
+                format!(
+                    "failed to decompress {}: {error}",
+                    compressed_path.display()
+                )
+            })?;
+    }
+    data.extend_from_slice(&current);
     let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
     encoder.write_all(&data).map_err(|e| e.to_string())?;
     let compressed = encoder.finish().map_err(|e| e.to_string())?;
-    std::fs::write(path.with_file_name("unhandled.log.gz"), compressed)
+    std::fs::write(&compressed_path, compressed)
         .map_err(|error| format!("failed to write compressed {}: {error}", path.display()))?;
     remove_file(path)
 }
@@ -137,5 +153,24 @@ mod tests {
         remove_stale_rev_map_lock(&path).unwrap();
 
         assert!(path.exists());
+    }
+
+    #[test]
+    fn repeated_gc_preserves_prior_unhandled_log_history() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("unhandled.log");
+        std::fs::write(&path, "r1\n  +empty_dir: first\n").unwrap();
+        compress_unhandled_log(&path).unwrap();
+        std::fs::write(&path, "r2\n  +empty_dir: second\n").unwrap();
+        compress_unhandled_log(&path).unwrap();
+
+        let mut contents = String::new();
+        GzDecoder::new(std::fs::File::open(temp.path().join("unhandled.log.gz")).unwrap())
+            .read_to_string(&mut contents)
+            .unwrap();
+        assert_eq!(
+            contents,
+            "r1\n  +empty_dir: first\nr2\n  +empty_dir: second\n"
+        );
     }
 }

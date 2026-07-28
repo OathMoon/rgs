@@ -335,6 +335,7 @@ fn info_prints_tracked_url_and_revision() {
         .assert()
         .success()
         .stdout(predicate::str::contains("URL: mock://repo/trunk"))
+        .stdout(predicate::str::contains("Repository Root: mock://repo"))
         .stdout(predicate::str::contains("Revision: 2"));
 }
 
@@ -683,7 +684,7 @@ fn log_oneline_show_commit_prints_git_commit_prefix() {
         .args(["log", "--oneline", "--show-commit"])
         .assert()
         .success()
-        .stdout(predicate::str::is_match("^r2 \\| [0-9a-f]{40} \\| add trunk file\n$").unwrap());
+        .stdout(predicate::str::is_match("^r2 \\| [0-9a-f]{7} \\| add trunk file\n$").unwrap());
 }
 
 #[test]
@@ -698,16 +699,14 @@ fn log_normal_show_commit_prints_git_commit_in_svn_header() {
         .assert()
         .success()
         .stdout(
-            predicate::str::is_match(
-                "(?m)^r2 \\| (?:[0-9a-f]{40}|[0-9a-f]{64}) \\| bob \\| .+ \\| 1 line$",
-            )
-            .unwrap(),
+            predicate::str::is_match("(?m)^r2 \\| [0-9a-f]{7} \\| bob \\| .+ \\| 2 lines$")
+                .unwrap(),
         )
         .stdout(predicate::str::contains("\ncommit ").not());
 }
 
 #[test]
-fn log_incremental_omits_svn_log_separator() {
+fn log_incremental_keeps_record_separator_but_omits_trailing_separator() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
 
@@ -718,16 +717,19 @@ fn log_incremental_omits_svn_log_separator() {
         .assert()
         .success()
         .stdout(predicate::str::contains("r2 |"))
+        .stdout(predicate::str::starts_with(
+            "------------------------------------------------------------------------\n",
+        ))
         .stdout(
-            predicate::str::contains(
-                "------------------------------------------------------------------------",
+            predicate::str::ends_with(
+                "------------------------------------------------------------------------\n",
             )
             .not(),
         );
 }
 
 #[test]
-fn log_incremental_show_commit_prints_commit_in_header_without_separator() {
+fn log_incremental_show_commit_prints_short_commit_without_trailing_separator() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
 
@@ -738,17 +740,12 @@ fn log_incremental_show_commit_prints_commit_in_header_without_separator() {
         .assert()
         .success()
         .stdout(
-            predicate::str::is_match(
-                "(?m)^r2 \\| (?:[0-9a-f]{40}|[0-9a-f]{64}) \\| bob \\| .+ \\| 1 line$",
-            )
-            .unwrap(),
+            predicate::str::is_match("(?m)^r2 \\| [0-9a-f]{7} \\| bob \\| .+ \\| 2 lines$")
+                .unwrap(),
         )
-        .stdout(
-            predicate::str::contains(
-                "------------------------------------------------------------------------",
-            )
-            .not(),
-        )
+        .stdout(predicate::str::starts_with(
+            "------------------------------------------------------------------------\n",
+        ))
         .stdout(predicate::str::contains("\ncommit ").not());
 }
 
@@ -1339,7 +1336,7 @@ fn reset_missing_revision_fails_without_moving_tracked_ref() {
 }
 
 #[test]
-fn rebase_dry_run_prints_planned_actions() {
+fn rebase_dry_run_is_silent_like_frozen_git_svn() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
@@ -1357,14 +1354,11 @@ fn rebase_dry_run_prints_planned_actions() {
         .args(["rebase", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("would run fetch"))
-        .stdout(predicate::str::contains(
-            "would run git rebase refs/remotes/git-svn",
-        ));
+        .stdout("");
 }
 
 #[test]
-fn rebase_dry_run_uses_current_first_parent_tracking_identity() {
+fn rebase_dry_run_accepts_current_first_parent_tracking_identity() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
@@ -1402,9 +1396,7 @@ fn rebase_dry_run_uses_current_first_parent_tracking_identity() {
         .args(["rebase", "--dry-run"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "would run git rebase refs/remotes/origin/main",
-        ));
+        .stdout("");
 }
 
 #[test]

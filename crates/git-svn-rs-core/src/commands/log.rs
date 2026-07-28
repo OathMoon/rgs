@@ -196,7 +196,7 @@ fn split_git_svn_footer(message: &str) -> Option<(GitSvnId, String)> {
         .rfind('\n')
         .map_or(0, |index| index + 1);
     if message[preceding_line_start..message_end].trim().is_empty() {
-        message_end = line_ending_start_before(message, preceding_line_start).unwrap_or(0);
+        message_end = preceding_line_start;
     }
 
     Some((id, message[..message_end].to_string()))
@@ -280,7 +280,7 @@ mod tests {
         let (_, message) =
             split_git_svn_footer(&format!("subject\r\n\r\nbody\r\n\r\n{FOOTER}\r\n")).unwrap();
 
-        assert_eq!(message, "subject\r\n\r\nbody");
+        assert_eq!(message, "subject\r\n\r\nbody\r\n");
     }
 
     #[test]
@@ -295,14 +295,14 @@ mod tests {
     fn footer_split_ignores_all_whitespace_after_footer() {
         let (_, message) = split_git_svn_footer(&format!("subject\n\n{FOOTER}\n \n\t\n")).unwrap();
 
-        assert_eq!(message, "subject");
+        assert_eq!(message, "subject\n");
     }
 
     #[test]
     fn footer_split_removes_only_one_of_multiple_preceding_blank_lines() {
         let (_, message) = split_git_svn_footer(&format!("subject\n\n\n{FOOTER}")).unwrap();
 
-        assert_eq!(message, "subject\n");
+        assert_eq!(message, "subject\n\n");
     }
 
     #[test]

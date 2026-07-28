@@ -33,24 +33,35 @@ impl TrackedSvn {
 }
 
 pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, String> {
-    resolve_tracked_svn_impl(work_tree.into(), "HEAD", false)
+    resolve_tracked_svn_impl(work_tree.into(), "HEAD", false, false)
+}
+
+pub(crate) fn resolve_tracked_svn_allow_import_batch(
+    work_tree: impl Into<PathBuf>,
+) -> Result<TrackedSvn, String> {
+    resolve_tracked_svn_impl(work_tree.into(), "HEAD", false, true)
 }
 
 pub fn resolve_tracked_svn_at(
     work_tree: impl Into<PathBuf>,
     treeish: &str,
 ) -> Result<TrackedSvn, String> {
-    resolve_tracked_svn_impl(work_tree.into(), treeish, true)
+    resolve_tracked_svn_impl(work_tree.into(), treeish, true, false)
 }
 
 fn resolve_tracked_svn_impl(
     work_tree: PathBuf,
     treeish: &str,
     require_history_identity: bool,
+    allow_import_batch: bool,
 ) -> Result<TrackedSvn, String> {
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
-    crate::import_transaction::ensure_no_pending(&git)?;
+    if allow_import_batch {
+        crate::import_transaction::ensure_no_publication_pending(&git)?;
+    } else {
+        crate::import_transaction::ensure_no_pending(&git)?;
+    }
     reset_transaction::ensure_no_pending(&git)?;
     let config = read_remote_config(&git, "svn")?;
     let first_mapping = config

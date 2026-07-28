@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::fast_import::{FastImportCommit, FileChange};
 use crate::git::{GitCli, GitTreeFile};
@@ -27,6 +27,7 @@ pub struct TreeEntry {
 pub struct FetchEditResult {
     pub commit: FastImportCommit,
     pub unhandled: UnhandledMetadata,
+    pub owned_placeholders: BTreeSet<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -35,6 +36,7 @@ pub struct UnhandledMetadata {
     file_properties: BTreeMap<String, BTreeMap<String, Option<String>>>,
     absent_directories: Vec<String>,
     absent_files: Vec<String>,
+    empty_directories: BTreeMap<String, bool>,
 }
 
 impl UnhandledMetadata {
@@ -58,7 +60,15 @@ impl UnhandledMetadata {
         for path in absent_directories {
             lines.push(format!("  absent_directory: {}", uri_encode(&path)));
         }
+        for (path, present) in &self.empty_directories {
+            let action = if *present { '+' } else { '-' };
+            lines.push(format!("  {action}empty_dir: {}", uri_encode(path)));
+        }
         lines
+    }
+
+    fn set_empty_directory(&mut self, path: String, present: bool) {
+        self.empty_directories.insert(path, present);
     }
 }
 
@@ -81,6 +91,9 @@ pub struct SvnFetchEditor {
     path_prefix: String,
     base_tree: BTreeMap<String, PlannedFile>,
     changes: BTreeMap<String, PlannedChange>,
+    directories: BTreeSet<String>,
+    touched_files: BTreeSet<String>,
+    owned_placeholders: BTreeSet<String>,
     unhandled: UnhandledMetadata,
     closed: bool,
 }
@@ -91,14 +104,18 @@ impl SvnFetchEditor {
     }
 
     pub fn with_base_tree(plan: FetchCommitPlan, entries: Vec<TreeEntry>) -> Self {
+        let base_tree = entries
+            .into_iter()
+            .map(|entry| (entry.path, entry.file))
+            .collect::<BTreeMap<_, _>>();
         Self {
             plan,
             path_prefix: String::new(),
-            base_tree: entries
-                .into_iter()
-                .map(|entry| (entry.path, entry.file))
-                .collect(),
+            directories: directories_for_files(base_tree.keys()),
+            base_tree,
             changes: BTreeMap::new(),
+            touched_files: BTreeSet::new(),
+            owned_placeholders: BTreeSet::new(),
             unhandled: UnhandledMetadata::default(),
             closed: false,
         }
@@ -120,6 +137,67 @@ impl SvnFetchEditor {
     pub fn with_path_prefix(mut self, prefix: impl AsRef<str>) -> Self {
         self.path_prefix = normalize_path(prefix);
         self
+    }
+
+    pub fn with_owned_placeholders(
+        mut self,
+        owned_placeholders: impl IntoIterator<Item = String>,
+    ) -> Self {
+        self.owned_placeholders = owned_placeholders
+            .into_iter()
+            .map(normalize_path)
+            .filter(|path| !path.is_empty())
+            .collect();
+        self
+    }
+
+    /// Reconciles explicitly owned empty-directory placeholders from the
+    /// completed base tree plus edit delta. An unowned same-named file is SVN
+    /// repository content and is never removed or claimed as a placeholder.
+    pub fn reconcile_empty_directories(
+        &mut self,
+        placeholder_filename: &str,
+    ) -> Result<(), String> {
+        let placeholder_filename = normalize_path(placeholder_filename);
+        if placeholder_filename.is_empty() || placeholder_filename.contains('/') {
+            return Err("empty-directory placeholder must be a single filename".to_string());
+        }
+
+        let mut files = self.visible_files();
+        let mut directories = self.directories.iter().cloned().collect::<Vec<_>>();
+        directories.sort_by_key(|path| std::cmp::Reverse(path.matches('/').count()));
+        for directory in directories {
+            if directory.is_empty() {
+                continue;
+            }
+            let placeholder = join_path(&directory, &placeholder_filename);
+            let prefix = child_prefix(&directory);
+            let has_other_file = files
+                .keys()
+                .any(|path| path.starts_with(&prefix) && path != &placeholder);
+            let placeholder_is_repository_file = self.touched_files.contains(&placeholder);
+            let placeholder_is_owned = self.owned_placeholders.contains(&directory);
+
+            if has_other_file || placeholder_is_repository_file {
+                if placeholder_is_owned {
+                    self.set_placeholder_ownership(&directory, false);
+                }
+                if files.contains_key(&placeholder)
+                    && placeholder_is_owned
+                    && !placeholder_is_repository_file
+                {
+                    files.remove(&placeholder);
+                    self.changes.insert(placeholder, PlannedChange::Delete);
+                }
+            } else if !files.contains_key(&placeholder) {
+                let file = PlannedFile::regular();
+                files.insert(placeholder.clone(), file.clone());
+                self.changes
+                    .insert(placeholder, PlannedChange::Modify(file));
+                self.set_placeholder_ownership(&directory, true);
+            }
+        }
+        Ok(())
     }
 
     pub fn into_commit(self) -> Result<FastImportCommit, String> {
@@ -157,7 +235,20 @@ impl SvnFetchEditor {
         Ok(FetchEditResult {
             commit,
             unhandled: self.unhandled,
+            owned_placeholders: self.owned_placeholders,
         })
+    }
+
+    fn set_placeholder_ownership(&mut self, directory: &str, present: bool) {
+        let changed = if present {
+            self.owned_placeholders.insert(directory.to_string())
+        } else {
+            self.owned_placeholders.remove(directory)
+        };
+        if changed {
+            self.unhandled
+                .set_empty_directory(join_path(&self.path_prefix, directory), present);
+        }
     }
 
     fn modify_file(&mut self, path: &str) -> &mut PlannedFile {
@@ -208,6 +299,23 @@ impl SvnFetchEditor {
         for (path, change) in copies {
             self.changes.insert(path, change);
         }
+
+        let source_prefix = child_prefix(&source);
+        let owned_copies = self
+            .owned_placeholders
+            .iter()
+            .filter_map(|path| {
+                if path == &source {
+                    Some(destination.clone())
+                } else {
+                    path.strip_prefix(&source_prefix)
+                        .map(|relative| join_path(&destination, relative))
+                }
+            })
+            .collect::<Vec<_>>();
+        for directory in owned_copies {
+            self.set_placeholder_ownership(&directory, true);
+        }
     }
 
     fn file_at(&self, path: &str) -> Option<PlannedFile> {
@@ -251,24 +359,55 @@ impl FetchEditor for SvnFetchEditor {
     }
 
     fn add_directory(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        let path = self.git_path(path);
+        insert_directory_and_parents(&mut self.directories, &path);
         if let Some((source, _revision)) = copy_from {
-            self.copy_directory(path, source);
+            self.copy_directory(&path, source);
         }
         Ok(())
     }
 
     fn add_file(&mut self, path: &str, copy_from: Option<(&str, u32)>) -> Result<(), String> {
+        let touched_path = self.git_path(path);
+        self.touched_files.insert(touched_path.clone());
+        insert_parent_directories(&mut self.directories, &touched_path);
         if let Some((source, _revision)) = copy_from {
             self.copy_file(path, source)
         } else {
-            self.modify_file(path);
+            self.changes
+                .insert(touched_path, PlannedChange::Modify(PlannedFile::regular()));
             Ok(())
         }
     }
 
     fn delete_entry(&mut self, path: &str, _revision: u32) -> Result<(), String> {
         let path = self.git_path(path);
+        if path.is_empty() {
+            let files = self.visible_files().into_keys().collect::<Vec<_>>();
+            let owned = self.owned_placeholders.iter().cloned().collect::<Vec<_>>();
+            self.changes.clear();
+            self.directories.clear();
+            self.touched_files.clear();
+            for file in files {
+                self.changes.insert(file, PlannedChange::Delete);
+            }
+            for directory in owned {
+                self.set_placeholder_ownership(&directory, false);
+            }
+            return Ok(());
+        }
+        let removed_owned = self
+            .owned_placeholders
+            .iter()
+            .filter(|candidate| *candidate == &path || candidate.starts_with(&child_prefix(&path)))
+            .cloned()
+            .collect::<Vec<_>>();
+        for directory in removed_owned {
+            self.set_placeholder_ownership(&directory, false);
+        }
         remove_path_and_children(&mut self.changes, &path);
+        remove_set_path_and_children(&mut self.directories, &path);
+        remove_set_path_and_children(&mut self.touched_files, &path);
         self.changes.insert(path, PlannedChange::Delete);
         Ok(())
     }
@@ -279,6 +418,9 @@ impl FetchEditor for SvnFetchEditor {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), String> {
+        let git_path = self.git_path(path);
+        self.touched_files.insert(git_path.clone());
+        insert_parent_directories(&mut self.directories, &git_path);
         let file = self.modify_file(path);
         match name {
             "svn:executable" => file.executable = value.is_some(),
@@ -300,6 +442,8 @@ impl FetchEditor for SvnFetchEditor {
         name: &str,
         value: Option<&str>,
     ) -> Result<(), String> {
+        let git_path = self.git_path(path);
+        insert_directory_and_parents(&mut self.directories, &git_path);
         self.unhandled
             .directory_properties
             .entry(normalize_path(path))
@@ -319,7 +463,10 @@ impl FetchEditor for SvnFetchEditor {
     }
 
     fn apply_textdelta(&mut self, path: &str, content: &[u8]) -> Result<(), String> {
-        self.modify_file(path).content = content.to_vec();
+        let path = self.git_path(path);
+        self.touched_files.insert(path.clone());
+        insert_parent_directories(&mut self.directories, &path);
+        self.modify_file(&path).content = content.to_vec();
         Ok(())
     }
 
@@ -389,6 +536,37 @@ impl PlannedFile {
 fn remove_path_and_children<T>(map: &mut BTreeMap<String, T>, path: &str) {
     let prefix = child_prefix(path);
     map.retain(|candidate, _| candidate != path && !candidate.starts_with(&prefix));
+}
+
+fn directories_for_files<'a>(paths: impl Iterator<Item = &'a String>) -> BTreeSet<String> {
+    let mut directories = BTreeSet::new();
+    for path in paths {
+        insert_parent_directories(&mut directories, path);
+    }
+    directories
+}
+
+fn insert_parent_directories(directories: &mut BTreeSet<String>, path: &str) {
+    let mut parent = path.rsplit_once('/').map(|(parent, _)| parent);
+    while let Some(path) = parent {
+        if path.is_empty() {
+            break;
+        }
+        directories.insert(path.to_string());
+        parent = path.rsplit_once('/').map(|(parent, _)| parent);
+    }
+}
+
+fn insert_directory_and_parents(directories: &mut BTreeSet<String>, path: &str) {
+    if !path.is_empty() {
+        directories.insert(path.to_string());
+    }
+    insert_parent_directories(directories, path);
+}
+
+fn remove_set_path_and_children(set: &mut BTreeSet<String>, path: &str) {
+    let prefix = child_prefix(path);
+    set.retain(|candidate| candidate != path && !candidate.starts_with(&prefix));
 }
 
 fn normalize_path(path: impl AsRef<str>) -> String {

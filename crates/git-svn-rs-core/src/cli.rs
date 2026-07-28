@@ -147,6 +147,15 @@ pub struct RebaseArgs {
 pub struct DcommitArgs {
     #[arg(short = 'n', long = "dry-run")]
     pub dry_run: bool,
+    /// Adopt an SVN revision whose submission outcome is recorded as
+    /// `SubmissionInFlight`. The revision is fetched and verified against the
+    /// durable plan before the journal advances.
+    #[arg(
+        long = "adopt-revision",
+        value_name = "REV",
+        conflicts_with = "dry_run"
+    )]
+    pub adopt_revision: Option<u64>,
     #[arg(long = "commit-url")]
     pub commit_url: Option<String>,
     #[arg(long = "mergeinfo")]

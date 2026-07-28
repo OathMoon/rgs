@@ -8,7 +8,12 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Init(args) => commands::init::run(args).map_err(anyhow::Error::msg),
-        Command::Clone(args) => commands::clone::run(args).map_err(anyhow::Error::msg),
+        Command::Clone(args) => {
+            let output = commands::clone::run_with_output(args).map_err(anyhow::Error::msg)?;
+            print!("{}", output.stdout);
+            eprint!("{}", output.stderr);
+            Ok(())
+        }
         Command::Fetch(args) => commands::fetch::run(args).map_err(anyhow::Error::msg),
         Command::Rebase(args) => {
             print!(

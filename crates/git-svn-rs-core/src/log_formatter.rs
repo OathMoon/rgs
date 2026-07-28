@@ -71,7 +71,7 @@ impl GitSvnLogFormatter {
             if self.show_commit {
                 return format!(
                     "r{revision} | {} | {}\n",
-                    entry.commit,
+                    short_commit(&entry.commit),
                     first_line(&entry.message)
                 );
             }
@@ -79,15 +79,13 @@ impl GitSvnLogFormatter {
         }
 
         let mut out = String::new();
-        if !self.incremental {
-            out.push_str(SEPARATOR);
-            out.push('\n');
-        }
+        out.push_str(SEPARATOR);
+        out.push('\n');
         let line_count = line_count(&entry.message);
         let line_label = if line_count == 1 { "line" } else { "lines" };
         out.push_str(&format!("r{} | ", entry.revision));
         if self.show_commit {
-            out.push_str(&format!("{} | ", entry.commit));
+            out.push_str(&format!("{} | ", short_commit(&entry.commit)));
         }
         out.push_str(&format!(
             "{} | {} | {line_count} {line_label}\n",
@@ -127,6 +125,10 @@ fn first_line(message: &str) -> &str {
         .lines()
         .find(|line| !line.trim().is_empty())
         .unwrap_or_default()
+}
+
+fn short_commit(commit: &str) -> &str {
+    commit.get(..7).unwrap_or(commit)
 }
 
 fn line_count(message: &str) -> usize {

@@ -21,6 +21,8 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             "--config-dir",
             "svn-config",
             "--no-auth-cache",
+            "--log-window-size",
+            "42",
         ])
         .assert()
         .success();
@@ -74,6 +76,12 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             .as_deref(),
         Some("true")
     );
+    assert_eq!(
+        git.config_get("svn-remote.svn.log-window-size")
+            .unwrap()
+            .as_deref(),
+        Some("42")
+    );
 }
 
 #[test]
@@ -98,11 +106,10 @@ fn init_reports_invalid_layout_without_creating_repo() {
 }
 
 #[test]
-fn init_rejects_fetch_only_or_unimplemented_options_before_mutation() {
+fn init_rejects_fetch_only_or_secret_options_before_mutation() {
     for (option, value, message) in [
         ("--revision", "1", "init --revision is not supported"),
         ("--password", "secret", "passwords are never persisted"),
-        ("--log-window-size", "42", "not implemented"),
     ] {
         let temp = tempfile::tempdir().unwrap();
         let work = temp.path().join("work");

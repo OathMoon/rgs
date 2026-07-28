@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(not(windows), target_pointer_width = "64"),
+    allow(clippy::unnecessary_fallible_conversions)
+)]
+
 use super::auth::AuthPrompt;
 #[cfg(git_svn_rs_libsvn_linked)]
 use super::auth::AuthRequest;
@@ -31,7 +36,7 @@ mod native_delta;
 pub const LIBSVN_NOT_LINKED_MESSAGE: &str =
     "libsvn backend is enabled but not linked: no libsvn FFI bindings are compiled into this build";
 pub const LIBSVN_LINKED_PROBE_MESSAGE: &str =
-    "libsvn link probe succeeded via vcpkg; native backend API calls are available";
+    "libsvn platform link probe succeeded; native backend API calls are available";
 pub const LIBSVN_NOT_IMPLEMENTED_MESSAGE: &str =
     "libsvn backend is linked, but native libsvn API calls are not implemented yet";
 #[cfg(git_svn_rs_libsvn_linked)]

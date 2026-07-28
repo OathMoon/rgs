@@ -2,6 +2,7 @@ use crate::git::GitCli;
 use crate::rev_map::{ObjectFormat, RevMap, RevMapRecord};
 use fs2::FileExt;
 use sha2::{Digest, Sha256};
+use std::collections::BTreeSet;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,8 @@ use std::path::{Path, PathBuf};
 const MAGIC_V1: &str = "git-svn-rs-import-journal-v1";
 const MAGIC: &str = "git-svn-rs-import-journal-v2";
 const JOURNAL_FILE: &str = "import-journal";
+const BATCH_MAGIC: &str = "git-svn-rs-import-batch-v1";
+const BATCH_JOURNAL_FILE: &str = "import-batch-journal";
 const LOCK_FILE: &str = "import.lock";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -36,6 +39,13 @@ struct ImportJournal {
     append_original_sha256: String,
     append_payload_len: usize,
     append_payload_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ImportBatchJournal {
+    uuid: String,
+    refnames: Vec<String>,
+    completed: BTreeSet<String>,
 }
 
 /// Persist and complete one mapping's ref/rev_map publication.
@@ -100,22 +110,117 @@ fn recover_pending_locked(git: &GitCli) -> Result<bool, String> {
 }
 
 pub fn ensure_no_pending(git: &GitCli) -> Result<(), String> {
+    ensure_no_publication_pending(git)?;
+    let batch_path = batch_journal_path(git)?;
+    if batch_path.exists() {
+        return Err(format!(
+            "unfinished import batch journal found at {}; run fetch again to recover it",
+            batch_path.display()
+        ));
+    }
+    Ok(())
+}
+
+pub fn ensure_no_publication_pending(git: &GitCli) -> Result<(), String> {
     let path = journal_path(git)?;
     if path.exists() {
-        Err(format!(
+        return Err(format!(
             "unfinished import journal found at {}; run fetch again to recover it",
             path.display()
-        ))
-    } else {
-        Ok(())
+        ));
     }
+    Ok(())
+}
+
+pub fn has_pending_batch(git: &GitCli) -> Result<bool, String> {
+    Ok(batch_journal_path(git)?.exists())
+}
+
+pub fn pending_batch_refnames(git: &GitCli) -> Result<Vec<String>, String> {
+    Ok(load_batch(&batch_journal_path(git)?)?
+        .map(|batch| batch.refnames)
+        .unwrap_or_default())
+}
+
+pub fn begin_or_resume_batch(git: &GitCli, uuid: &str, refnames: &[String]) -> Result<(), String> {
+    with_exclusive_lock(git, || {
+        let path = batch_journal_path(git)?;
+        let expected = new_batch(uuid, refnames)?;
+        match load_batch(&path)? {
+            Some(existing)
+                if existing.uuid == expected.uuid
+                    && expected
+                        .refnames
+                        .iter()
+                        .all(|refname| existing.refnames.contains(refname)) =>
+            {
+                Ok(())
+            }
+            Some(_) => Err(format!(
+                "unfinished import batch at {} does not match this fetch",
+                path.display()
+            )),
+            None => save_batch(&path, &expected),
+        }
+    })
+}
+
+pub fn mark_batch_mapping_completed(git: &GitCli, refname: &str) -> Result<(), String> {
+    with_exclusive_lock(git, || {
+        let path = batch_journal_path(git)?;
+        let mut batch =
+            load_batch(&path)?.ok_or_else(|| "import batch journal is missing".to_string())?;
+        if !batch.refnames.iter().any(|candidate| candidate == refname) {
+            return Err(format!("import batch does not contain mapping {refname}"));
+        }
+        if batch.completed.insert(refname.to_string()) {
+            save_batch(&path, &batch)?;
+        }
+        Ok(())
+    })
+}
+
+pub fn finish_batch(git: &GitCli) -> Result<(), String> {
+    with_exclusive_lock(git, || {
+        let path = batch_journal_path(git)?;
+        let batch =
+            load_batch(&path)?.ok_or_else(|| "import batch journal is missing".to_string())?;
+        if batch
+            .refnames
+            .iter()
+            .any(|refname| !batch.completed.contains(refname))
+        {
+            return Err("cannot finish import batch with incomplete mappings".to_string());
+        }
+        remove(&path)
+    })
+}
+
+pub fn finish_batch_if_complete(git: &GitCli) -> Result<bool, String> {
+    with_exclusive_lock(git, || {
+        let path = batch_journal_path(git)?;
+        let Some(batch) = load_batch(&path)? else {
+            return Ok(false);
+        };
+        if batch
+            .refnames
+            .iter()
+            .any(|refname| !batch.completed.contains(refname))
+        {
+            return Ok(false);
+        }
+        remove(&path)?;
+        Ok(true)
+    })
 }
 
 fn finish(git: &GitCli, path: &Path, journal: &ImportJournal) -> Result<(), String> {
     let publication = &journal.publication;
     validate_append_prefix(journal)?;
     let current = current_ref_oid(git, &publication.refname)?;
-    if current == publication.expected_old_oid {
+    if current == publication.expected_old_oid
+        && publication.expected_old_oid != publication.target_oid
+    {
         git.update_ref_expected(
             &publication.refname,
             &publication.target_oid,
@@ -130,20 +235,21 @@ fn finish(git: &GitCli, path: &Path, journal: &ImportJournal) -> Result<(), Stri
 
     let format = git.object_format()?;
     let existing = existing_records(&publication.rev_map_path, format)?;
-    validate_recovery_prefix(journal, &existing)?;
+    let applied = validate_recovery_prefix(journal, &existing)?;
     let mut rev_map = if publication.rev_map_path.exists() {
         RevMap::open_existing(&publication.rev_map_path, format)?
     } else {
         RevMap::open(&publication.rev_map_path, format)?
     };
-    let appended = existing.len() - journal.original_record_count;
-    for record in publication.records.iter().skip(appended) {
+    for record in publication.records.iter().skip(applied) {
         rev_map.append(record.revision, &record.object_id_hex)?;
     }
 
     let final_records = rev_map.records()?;
-    validate_recovery_prefix(journal, &final_records)?;
-    if final_records.len() != journal.original_record_count + publication.records.len() {
+    let final_applied = validate_recovery_prefix(journal, &final_records)?;
+    if final_applied != publication.records.len()
+        || final_records.len() != final_record_count(journal)
+    {
         return Err("import rev_map verification did not reach the journal target".to_string());
     }
     let final_ref = current_ref_oid(git, &publication.refname)?;
@@ -171,13 +277,32 @@ fn validate_publication(git: &GitCli, publication: &ImportPublication) -> Result
     }
     if publication
         .records
-        .last()
-        .map(|record| &record.object_id_hex)
-        != Some(&publication.target_oid)
+        .iter()
+        .take(publication.records.len().saturating_sub(1))
+        .any(RevMapRecord::has_zero_object_id)
     {
         return Err(
-            "import publication target does not match the final rev_map record".to_string(),
+            "import publication may contain an all-zero record only at the end".to_string(),
         );
+    }
+    let last_commit = publication
+        .records
+        .iter()
+        .rev()
+        .find(|record| !record.has_zero_object_id());
+    match last_commit {
+        Some(record) if record.object_id_hex != publication.target_oid => {
+            return Err(
+                "import publication target does not match the final commit record".to_string(),
+            );
+        }
+        None if publication.expected_old_oid != publication.target_oid => {
+            return Err("zero-only import publication cannot change the tracking ref".to_string());
+        }
+        None if publication.append.is_some() => {
+            return Err("zero-only import publication cannot append metadata".to_string());
+        }
+        _ => {}
     }
     let root = svn_metadata_root(git)?;
     if !publication.rev_map_path.starts_with(&root) {
@@ -338,7 +463,18 @@ pub fn with_exclusive_lock<T>(
         .map_err(|error| error.to_string())?;
     file.try_lock_exclusive()
         .map_err(|error| format!("cannot lock import recovery at {}: {error}", path.display()))?;
-    operation()
+    let result = operation();
+    let unlock = FileExt::unlock(&file).map_err(|error| {
+        format!(
+            "cannot unlock import recovery at {}: {error}",
+            path.display()
+        )
+    });
+    match (result, unlock) {
+        (Err(error), _) => Err(error),
+        (Ok(_), Err(error)) => Err(error),
+        (Ok(value), Ok(())) => Ok(value),
+    }
 }
 
 fn validate_oid(oid: &str, format: ObjectFormat) -> Result<(), String> {
@@ -352,7 +488,15 @@ fn validate_oid(oid: &str, format: ObjectFormat) -> Result<(), String> {
 }
 
 fn validate_new_records(existing: &[RevMapRecord], records: &[RevMapRecord]) -> Result<(), String> {
-    let mut last = existing.last().map(|record| record.revision);
+    let mut last = match existing.last() {
+        Some(record) if record.has_zero_object_id() => existing
+            .len()
+            .checked_sub(2)
+            .and_then(|index| existing.get(index))
+            .map(|record| record.revision),
+        Some(record) => Some(record.revision),
+        None => None,
+    };
     for record in records {
         if last.is_some_and(|revision| record.revision <= revision) {
             return Err(format!(
@@ -368,12 +512,35 @@ fn validate_new_records(existing: &[RevMapRecord], records: &[RevMapRecord]) -> 
 fn validate_recovery_prefix(
     journal: &ImportJournal,
     existing: &[RevMapRecord],
-) -> Result<(), String> {
+) -> Result<usize, String> {
     if (journal.original_record_count == 0) != journal.original_tail.is_none() {
         return Err("import journal has inconsistent original rev_map state".to_string());
     }
     if existing.len() < journal.original_record_count {
         return Err("import rev_map was truncated after the journal was written".to_string());
+    }
+    let replaces_zero = journal
+        .original_tail
+        .as_ref()
+        .is_some_and(RevMapRecord::has_zero_object_id);
+    if replaces_zero {
+        let replacement_index = journal.original_record_count - 1;
+        if existing.get(replacement_index) == journal.original_tail.as_ref() {
+            if existing.len() != journal.original_record_count {
+                return Err("import rev_map suffix does not match the journal".to_string());
+            }
+            return Ok(0);
+        }
+        let applied = &existing[replacement_index..];
+        if applied.len() > journal.publication.records.len()
+            || applied
+                .iter()
+                .zip(&journal.publication.records)
+                .any(|(actual, expected)| actual != expected)
+        {
+            return Err("import rev_map replacement does not match the journal".to_string());
+        }
+        return Ok(applied.len());
     }
     if journal.original_record_count > 0
         && existing.get(journal.original_record_count - 1) != journal.original_tail.as_ref()
@@ -389,7 +556,15 @@ fn validate_recovery_prefix(
     {
         return Err("import rev_map suffix does not match the journal".to_string());
     }
-    Ok(())
+    Ok(appended.len())
+}
+
+fn final_record_count(journal: &ImportJournal) -> usize {
+    let replaces_zero = journal
+        .original_tail
+        .as_ref()
+        .is_some_and(RevMapRecord::has_zero_object_id);
+    journal.original_record_count + journal.publication.records.len() - usize::from(replaces_zero)
 }
 
 fn existing_records(path: &Path, format: ObjectFormat) -> Result<Vec<RevMapRecord>, String> {
@@ -416,7 +591,81 @@ fn journal_path(git: &GitCli) -> Result<PathBuf, String> {
     Ok(svn_metadata_root(git)?.join(JOURNAL_FILE))
 }
 
+fn batch_journal_path(git: &GitCli) -> Result<PathBuf, String> {
+    Ok(svn_metadata_root(git)?.join(BATCH_JOURNAL_FILE))
+}
+
+fn new_batch(uuid: &str, refnames: &[String]) -> Result<ImportBatchJournal, String> {
+    if uuid.trim().is_empty() || refnames.is_empty() {
+        return Err("import batch requires a UUID and at least one mapping".to_string());
+    }
+    let mut normalized = refnames.to_vec();
+    normalized.sort();
+    normalized.dedup();
+    if normalized.len() != refnames.len() || normalized.iter().any(String::is_empty) {
+        return Err("import batch mappings must be non-empty and unique".to_string());
+    }
+    Ok(ImportBatchJournal {
+        uuid: uuid.to_string(),
+        refnames: normalized,
+        completed: BTreeSet::new(),
+    })
+}
+
+fn save_batch(path: &Path, batch: &ImportBatchJournal) -> Result<(), String> {
+    let mut text = format!(
+        "{BATCH_MAGIC}\nuuid\t{}\nref_count\t{}\ncompleted_count\t{}\n",
+        escape(&batch.uuid),
+        batch.refnames.len(),
+        batch.completed.len()
+    );
+    for refname in &batch.refnames {
+        text.push_str(&format!("ref\t{}\n", escape(refname)));
+    }
+    for refname in &batch.completed {
+        text.push_str(&format!("completed\t{}\n", escape(refname)));
+    }
+    save_atomic_text(path, &text)
+}
+
+fn load_batch(path: &Path) -> Result<Option<ImportBatchJournal>, String> {
+    if !path.exists() {
+        return Ok(None);
+    }
+    let text = fs::read_to_string(path).map_err(|error| error.to_string())?;
+    let mut lines = text.lines();
+    if lines.next() != Some(BATCH_MAGIC) {
+        return Err("invalid import batch journal header".to_string());
+    }
+    let uuid = unescape(field(&mut lines, "uuid")?)?;
+    let ref_count = parse_usize(field(&mut lines, "ref_count")?)?;
+    let completed_count = parse_usize(field(&mut lines, "completed_count")?)?;
+    let mut refnames = Vec::with_capacity(ref_count);
+    for _ in 0..ref_count {
+        refnames.push(unescape(field(&mut lines, "ref")?)?);
+    }
+    let mut completed = BTreeSet::new();
+    for _ in 0..completed_count {
+        completed.insert(unescape(field(&mut lines, "completed")?)?);
+    }
+    if lines.next().is_some()
+        || refnames.windows(2).any(|pair| pair[0] >= pair[1])
+        || completed.iter().any(|name| !refnames.contains(name))
+    {
+        return Err("invalid import batch journal contents".to_string());
+    }
+    Ok(Some(ImportBatchJournal {
+        uuid,
+        refnames,
+        completed,
+    }))
+}
+
 fn save(path: &Path, journal: &ImportJournal) -> Result<(), String> {
+    save_atomic_text(path, &encode(journal))
+}
+
+fn save_atomic_text(path: &Path, text: &str) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "import journal has no parent".to_string())?;
@@ -428,7 +677,7 @@ fn save(path: &Path, journal: &ImportJournal) -> Result<(), String> {
             .create_new(true)
             .open(&temp)
             .map_err(|error| error.to_string())?;
-        file.write_all(encode(journal).as_bytes())
+        file.write_all(text.as_bytes())
             .map_err(|error| error.to_string())?;
         file.sync_all().map_err(|error| error.to_string())?;
         fs::rename(&temp, path).map_err(|error| error.to_string())?;
@@ -735,6 +984,20 @@ mod tests {
         }
     }
 
+    fn marker_publication(f: &Fixture, expected_oid: &str, revision: u32) -> ImportPublication {
+        ImportPublication {
+            refname: f.refname.clone(),
+            expected_old_oid: expected_oid.to_string(),
+            target_oid: expected_oid.to_string(),
+            rev_map_path: f.rev_map.clone(),
+            records: vec![RevMapRecord {
+                revision,
+                object_id_hex: "0".repeat(40),
+            }],
+            append: None,
+        }
+    }
+
     #[test]
     fn recovers_when_ref_is_still_old() {
         let f = fixture();
@@ -799,6 +1062,149 @@ mod tests {
     }
 
     #[test]
+    fn zero_only_publication_advances_the_map_without_moving_the_ref() {
+        let f = fixture();
+        let mut map = RevMap::open(&f.rev_map, ObjectFormat::Sha1).unwrap();
+        map.append(10, &f.old).unwrap();
+
+        complete(&f.git, marker_publication(&f, &f.old, 100)).unwrap();
+
+        assert_eq!(current_ref_oid(&f.git, &f.refname).unwrap(), f.old);
+        let map = RevMap::open_existing(&f.rev_map, ObjectFormat::Sha1).unwrap();
+        assert_eq!(map.max_revision(false).unwrap(), Some(100));
+        assert_eq!(map.max_revision(true).unwrap(), Some(10));
+        assert_eq!(map.get(100).unwrap(), None);
+    }
+
+    #[test]
+    fn zero_only_publication_can_create_a_map_without_creating_a_ref() {
+        let f = fixture();
+        f.git.delete_ref_expected(&f.refname, &f.old).unwrap();
+        let zero = "0".repeat(40);
+
+        complete(&f.git, marker_publication(&f, &zero, 100)).unwrap();
+
+        assert_eq!(current_ref_oid(&f.git, &f.refname).unwrap(), zero);
+        assert_eq!(
+            RevMap::open_existing(&f.rev_map, ObjectFormat::Sha1)
+                .unwrap()
+                .max_revision(false)
+                .unwrap(),
+            Some(100)
+        );
+    }
+
+    #[test]
+    fn recovery_accepts_a_real_record_that_replaced_the_original_marker() {
+        let f = fixture();
+        let zero = "0".repeat(40);
+        let mut map = RevMap::open(&f.rev_map, ObjectFormat::Sha1).unwrap();
+        map.append(10, &f.old).unwrap();
+        map.append(100, &zero).unwrap();
+        let publication = ImportPublication {
+            refname: f.refname.clone(),
+            expected_old_oid: f.old.clone(),
+            target_oid: f.target.clone(),
+            rev_map_path: f.rev_map.clone(),
+            records: vec![RevMapRecord {
+                revision: 50,
+                object_id_hex: f.target.clone(),
+            }],
+            append: None,
+        };
+        let journal = ImportJournal {
+            publication,
+            original_record_count: 2,
+            original_tail: Some(RevMapRecord {
+                revision: 100,
+                object_id_hex: zero,
+            }),
+            append_original_len: 0,
+            append_original_sha256: sha256(&[]),
+            append_payload_len: 0,
+            append_payload_sha256: sha256(&[]),
+        };
+        save(&journal_path(&f.git).unwrap(), &journal).unwrap();
+        f.git
+            .update_ref_expected(&f.refname, &f.target, &f.old)
+            .unwrap();
+        map.append(50, &f.target).unwrap();
+
+        assert!(recover_pending(&f.git).unwrap());
+        assert_eq!(current_ref_oid(&f.git, &f.refname).unwrap(), f.target);
+        let records = map.records().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1].revision, 50);
+        assert_eq!(records[1].object_id_hex, f.target);
+    }
+
+    #[test]
+    fn recovery_appends_remaining_records_after_replacing_the_original_marker() {
+        let f = fixture();
+        let zero = "0".repeat(40);
+        let mut map = RevMap::open(&f.rev_map, ObjectFormat::Sha1).unwrap();
+        map.append(10, &f.old).unwrap();
+        map.append(100, &zero).unwrap();
+        let publication = ImportPublication {
+            refname: f.refname.clone(),
+            expected_old_oid: f.old.clone(),
+            target_oid: f.other.clone(),
+            rev_map_path: f.rev_map.clone(),
+            records: vec![
+                RevMapRecord {
+                    revision: 50,
+                    object_id_hex: f.target.clone(),
+                },
+                RevMapRecord {
+                    revision: 60,
+                    object_id_hex: f.other.clone(),
+                },
+            ],
+            append: None,
+        };
+        let journal = ImportJournal {
+            publication,
+            original_record_count: 2,
+            original_tail: Some(RevMapRecord {
+                revision: 100,
+                object_id_hex: zero,
+            }),
+            append_original_len: 0,
+            append_original_sha256: sha256(&[]),
+            append_payload_len: 0,
+            append_payload_sha256: sha256(&[]),
+        };
+        save(&journal_path(&f.git).unwrap(), &journal).unwrap();
+        f.git
+            .update_ref_expected(&f.refname, &f.other, &f.old)
+            .unwrap();
+        map.append(50, &f.target).unwrap();
+
+        assert!(recover_pending(&f.git).unwrap());
+        let records = map.records().unwrap();
+        assert_eq!(records.len(), 3);
+        assert_eq!(records[1].revision, 50);
+        assert_eq!(records[2].revision, 60);
+        assert_eq!(records[2].object_id_hex, f.other);
+    }
+
+    #[test]
+    fn newer_marker_replaces_the_original_marker_during_recovery() {
+        let f = fixture();
+        let zero = "0".repeat(40);
+        let mut map = RevMap::open(&f.rev_map, ObjectFormat::Sha1).unwrap();
+        map.append(10, &f.old).unwrap();
+        map.append(100, &zero).unwrap();
+
+        complete(&f.git, marker_publication(&f, &f.old, 150)).unwrap();
+
+        let records = map.records().unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[1].revision, 150);
+        assert_eq!(records[1].object_id_hex, zero);
+    }
+
+    #[test]
     fn completes_ref_map_and_append_together() {
         let f = fixture();
         let log = f.rev_map.parent().unwrap().join("unhandled.log");
@@ -858,5 +1264,39 @@ mod tests {
         assert_eq!(current_ref_oid(&f.git, &f.refname).unwrap(), f.old);
         assert!(!f.rev_map.exists());
         assert!(journal_path(&f.git).unwrap().exists());
+    }
+
+    #[test]
+    fn import_batch_resumes_completed_mappings_and_finishes_atomically() {
+        let f = fixture();
+        let refs = vec!["refs/remotes/origin/branch".to_string(), f.refname.clone()];
+
+        begin_or_resume_batch(&f.git, "uuid", &refs).unwrap();
+        mark_batch_mapping_completed(&f.git, &f.refname).unwrap();
+        begin_or_resume_batch(&GitCli::new(f.git.work_tree()), "uuid", &refs).unwrap();
+
+        let batch = load_batch(&batch_journal_path(&f.git).unwrap())
+            .unwrap()
+            .unwrap();
+        assert_eq!(batch.completed, BTreeSet::from([f.refname.clone()]));
+        assert!(ensure_no_pending(&f.git).is_err());
+        assert!(finish_batch(&f.git).is_err());
+
+        mark_batch_mapping_completed(&f.git, "refs/remotes/origin/branch").unwrap();
+        finish_batch(&f.git).unwrap();
+        assert!(!batch_journal_path(&f.git).unwrap().exists());
+        ensure_no_pending(&f.git).unwrap();
+    }
+
+    #[test]
+    fn mismatched_fetch_cannot_replace_an_unfinished_import_batch() {
+        let f = fixture();
+        let refs = vec![f.refname.clone()];
+        begin_or_resume_batch(&f.git, "uuid", &refs).unwrap();
+
+        let error = begin_or_resume_batch(&f.git, "other-uuid", &refs).unwrap_err();
+
+        assert!(error.contains("does not match this fetch"));
+        assert!(batch_journal_path(&f.git).unwrap().exists());
     }
 }

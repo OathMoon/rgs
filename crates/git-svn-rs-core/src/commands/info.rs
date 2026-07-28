@@ -19,9 +19,13 @@ pub fn run_in_work_tree(
         .max_record()?
         .map(|record| record.revision.to_string())
         .unwrap_or_else(|| "0".to_string());
+    let repository_root = tracked
+        .git
+        .git_svn_metadata_get(&format!("svn-remote.{}.reposRoot", tracked.config.name))?
+        .unwrap_or_else(|| tracked.config.url.clone());
 
     Ok(format!(
         "URL: {}\nRepository Root: {}\nRepository UUID: {}\nRevision: {}\n",
-        url, tracked.config.url, tracked.uuid, revision
+        url, repository_root, tracked.uuid, revision
     ))
 }

@@ -87,6 +87,57 @@ fn config_get_all_preserves_multi_value_entries() {
 }
 
 #[test]
+fn git_svn_metadata_round_trips_without_polluting_repository_config() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.branches-maxRev")
+            .unwrap(),
+        None
+    );
+    assert!(!dir.path().join(".git/svn/.metadata").exists());
+
+    git.git_svn_metadata_set("svn-remote.svn.branches-maxRev", "17")
+        .unwrap();
+
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.branches-maxRev")
+            .unwrap(),
+        Some("17".to_string())
+    );
+    assert_eq!(
+        git.config_get("svn-remote.svn.branches-maxRev").unwrap(),
+        None
+    );
+    let contents = std::fs::read_to_string(dir.path().join(".git/svn/.metadata")).unwrap();
+    assert!(contents.starts_with("; This file is used internally by git-svn\n"));
+}
+
+#[test]
+fn git_svn_metadata_read_migrates_the_legacy_internal_config_name() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let svn_dir = dir.path().join(".git/svn");
+    std::fs::create_dir_all(&svn_dir).unwrap();
+    std::fs::write(
+        svn_dir.join("config"),
+        "[svn-remote \"svn\"]\n\tbranches-maxRev = 9\n",
+    )
+    .unwrap();
+
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.branches-maxRev")
+            .unwrap(),
+        Some("9".to_string())
+    );
+    assert!(svn_dir.join(".metadata").exists());
+    assert!(!svn_dir.join("config").exists());
+}
+
+#[test]
 fn commands_do_not_mutate_process_current_directory() {
     let cwd = std::env::current_dir().unwrap();
     let dir = tempdir().unwrap();

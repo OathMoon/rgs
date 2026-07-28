@@ -26,6 +26,14 @@ fn reports_feature_enabled_link_probe_state() {
 
     assert!(availability.feature_enabled);
     assert_eq!(availability.version, None);
+    if std::env::var_os("GIT_SVN_RS_STRICT_COMPAT").is_some() {
+        assert_eq!(
+            availability.link_status,
+            LibSvnLinkStatus::Linked,
+            "strict compatibility requires a linked libsvn backend: {}",
+            availability.detail,
+        );
+    }
 
     if cfg!(git_svn_rs_libsvn_linked) {
         assert_eq!(availability.link_status, LibSvnLinkStatus::Linked);

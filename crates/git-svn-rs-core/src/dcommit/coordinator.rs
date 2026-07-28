@@ -109,6 +109,57 @@ where
         }
     }
 
+    /// Reconciles an ambiguous submission using a revision selected by the
+    /// operator. The durable journal advances only after the normal
+    /// post-submit import and plan verification succeeds.
+    pub fn adopt_in_flight(
+        &mut self,
+        prepared: &mut PreparedDcommit,
+        svn_revision: u64,
+    ) -> Result<(), CoordinatorError> {
+        prepared.validate()?;
+        let index = prepared
+            .journal
+            .entries
+            .iter()
+            .position(|entry| matches!(entry.state, EntryState::SubmissionInFlight { .. }))
+            .ok_or_else(|| {
+                CoordinatorError::Invalid(
+                    "manual revision adoption requires a SubmissionInFlight journal entry"
+                        .to_owned(),
+                )
+            })?;
+        let expected_base_revision = match prepared.journal.entries[index].state {
+            EntryState::SubmissionInFlight {
+                expected_base_revision,
+                ..
+            } => expected_base_revision,
+            _ => unreachable!("selected an in-flight entry"),
+        };
+        if svn_revision <= expected_base_revision {
+            return Err(CoordinatorError::Invalid(format!(
+                "adopted SVN revision r{svn_revision} must be newer than the submission base r{expected_base_revision}"
+            )));
+        }
+
+        let imported_oid = self
+            .post_submit
+            .fetch_and_verify(
+                &prepared.journal.target,
+                &prepared.journal.entries[index],
+                svn_revision,
+            )
+            .map_err(|detail| CoordinatorError::ReconciliationFailed {
+                svn_revision,
+                detail,
+            })?;
+        prepared.journal.entries[index].state = EntryState::FetchedVerified {
+            svn_revision,
+            imported_oid,
+        };
+        self.persist(&prepared.journal)
+    }
+
     pub fn run(&mut self, prepared: &mut PreparedDcommit) -> Result<(), CoordinatorError> {
         prepared.validate()?;
 
@@ -309,6 +360,10 @@ pub enum CoordinatorError {
         svn_revision: Option<u64>,
         detail: String,
     },
+    ReconciliationFailed {
+        svn_revision: u64,
+        detail: String,
+    },
 }
 
 impl fmt::Display for CoordinatorError {
@@ -344,13 +399,20 @@ impl fmt::Display for CoordinatorError {
             } => match svn_revision {
                 Some(revision) => write!(
                     formatter,
-                    "SVN r{revision} may have been submitted but its durable outcome is ambiguous ({detail}); inspect the target SVN log and journal before manual recovery; refusing automatic retry"
+                    "SVN r{revision} may have been submitted but its durable outcome is ambiguous ({detail}); inspect the target SVN log and use --adopt-revision REV only after identifying the matching revision; refusing automatic retry"
                 ),
                 None => write!(
                     formatter,
-                    "SVN submission outcome is ambiguous ({detail}); inspect the target SVN log and journal before manual recovery; refusing automatic retry"
+                    "SVN submission outcome is ambiguous ({detail}); inspect the target SVN log and use --adopt-revision REV only after identifying the matching revision; refusing automatic retry"
                 ),
             },
+            Self::ReconciliationFailed {
+                svn_revision,
+                detail,
+            } => write!(
+                formatter,
+                "could not adopt SVN r{svn_revision}: post-submit import and plan verification failed ({detail}); the journal remains in-flight"
+            ),
         }
     }
 }

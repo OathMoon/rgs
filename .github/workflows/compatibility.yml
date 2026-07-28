@@ -1,0 +1,70 @@
+name: Frozen compatibility
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  frozen-git-svn:
+    runs-on: ubuntu-24.04
+    env:
+      GIT_SVN_RS_STRICT_COMPAT: "1"
+      GIT_SVN_RS_COMPAT_ARTIFACT_DIR: ${{ runner.temp }}/compat-artifacts
+      LC_ALL: C
+      TZ: UTC
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install compatibility dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential gettext libcurl4-openssl-dev libexpat1-dev \
+            libssl-dev libsvn-dev libsvn-perl pkg-config subversion zlib1g-dev
+
+      - name: Build frozen Git v2.54.0
+        env:
+          FROZEN_GIT_COMMIT: 0b13e48a3a30cdfa94e8ef842e24d6045ab3d015
+          FROZEN_GIT_PREFIX: ${{ runner.temp }}/git-2.54.0
+          FROZEN_GIT_SOURCE: ${{ runner.temp }}/git-source
+        run: |
+          git clone --filter=blob:none https://github.com/git/git.git "$FROZEN_GIT_SOURCE"
+          git -C "$FROZEN_GIT_SOURCE" checkout --detach "$FROZEN_GIT_COMMIT"
+          make -C "$FROZEN_GIT_SOURCE" -j2 \
+            prefix="$FROZEN_GIT_PREFIX" NO_TCLTK=YesPlease all
+          make -C "$FROZEN_GIT_SOURCE" \
+            prefix="$FROZEN_GIT_PREFIX" NO_TCLTK=YesPlease install
+          echo "$FROZEN_GIT_PREFIX/bin" >> "$GITHUB_PATH"
+
+      - name: Verify frozen tools
+        run: |
+          git --version
+          git svn --version
+          svn --version --quiet
+          pkg-config --modversion libsvn_client
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Strict frozen Perl comparison
+        run: cargo test --workspace
+
+      - name: Linked libsvn integration
+        run: cargo test -p git-svn-rs-core --features svn-libsvn
+
+      - name: Static gates
+        run: |
+          cargo fmt --all -- --check
+          cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Upload compatibility artifacts
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: frozen-compatibility-artifacts
+          path: ${{ runner.temp }}/compat-artifacts
+          if-no-files-found: error

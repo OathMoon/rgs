@@ -15,10 +15,7 @@ pub fn run_in_work_tree(
         return Err("fetch is unavailable after a --no-metadata one-shot import".to_string());
     }
     if args.dry_run {
-        return Ok(format!(
-            "would run fetch\nwould run git rebase {}\n",
-            tracked.refname
-        ));
+        return Ok(String::new());
     }
     if !tracked.git.is_work_tree_clean()? {
         return Err("rebase requires a clean index and work tree".to_string());

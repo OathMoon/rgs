@@ -61,7 +61,7 @@ fn clone_uses_mock_import_shell_for_mock_urls() {
 }
 
 #[test]
-fn clone_no_checkout_sets_head_without_populating_work_tree() {
+fn clone_no_checkout_leaves_an_unborn_branch_without_populating_work_tree() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");
 
@@ -73,10 +73,10 @@ fn clone_no_checkout_sets_head_without_populating_work_tree() {
         .success();
 
     let git = git_svn_rs_core::git::GitCli::new(&work);
-    assert_eq!(
-        git.run_for_test(["rev-parse", "HEAD"]).unwrap(),
-        git.run_for_test(["rev-parse", "refs/remotes/git-svn"])
-            .unwrap()
+    assert!(git.run_for_test(["rev-parse", "HEAD"]).is_err());
+    assert!(
+        git.run_for_test(["show-ref", "--verify", "refs/heads/master"])
+            .is_err()
     );
     assert!(!work.join("src/lib.rs").exists());
 }
@@ -105,6 +105,52 @@ fn fetch_uses_existing_mock_remote_config() {
         git.run_for_test(["show", "refs/remotes/git-svn:src/lib.rs"])
             .unwrap(),
         "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+}
+
+#[test]
+fn failed_fetch_does_not_advance_discovery_high_water() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["init", "mock://repo", "work", "--stdlayout"])
+        .assert()
+        .success();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.config_set(
+        "svn-remote.svn.authors-file",
+        work.join("missing-authors").to_str().unwrap(),
+    )
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .failure();
+
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.branches-maxRev")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.tags-maxRev")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.reposRoot")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.uuid").unwrap(),
+        None
     );
 }
 
@@ -234,4 +280,44 @@ fn fetch_all_imports_every_configured_svn_remote() {
             .unwrap(),
         "pub fn answer() -> u8 { 42 }\n".to_string()
     );
+}
+
+#[test]
+fn fetch_all_rejects_duplicate_remote_ref_before_import_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["init"]).unwrap();
+    for remote in ["one", "two"] {
+        git.run_for_test([
+            "config",
+            &format!("svn-remote.{remote}.url"),
+            &format!("mock://{remote}"),
+        ])
+        .unwrap();
+        git.run_for_test([
+            "config",
+            "--add",
+            &format!("svn-remote.{remote}.fetch"),
+            "trunk:refs/remotes/origin/trunk",
+        ])
+        .unwrap();
+    }
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["fetch", "--fetch-all"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "remote ref refs/remotes/origin/trunk is tracked by both",
+        ));
+
+    assert!(
+        git.run_for_test(["show-ref", "--verify", "refs/remotes/origin/trunk"])
+            .is_err()
+    );
+    assert!(!work.join(".git/svn").exists());
 }

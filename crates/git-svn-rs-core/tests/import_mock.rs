@@ -5,6 +5,10 @@ use git_svn_rs_core::config::SvnRemoteConfig;
 use git_svn_rs_core::git::GitCli;
 use git_svn_rs_core::import::{
     ImportOptions, import_mock_revisions, import_mock_revisions_for_ref, import_ra_revisions,
+    import_ra_revisions_for_ref,
+};
+use git_svn_rs_core::import_transaction::{
+    begin_or_resume_batch, ensure_no_pending, mark_batch_mapping_completed,
 };
 use git_svn_rs_core::mapping::{build_single_path, build_standard_layout};
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
@@ -87,12 +91,93 @@ fn imports_mock_revisions_into_sha256_git_repo() {
 }
 
 #[test]
+fn fixed_mapping_records_and_replaces_a_sparse_scan_marker() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+    let initial = sparse_fixed_mapping_revisions(false);
+    let backend = MockSvnBackend::new("mock-uuid", initial.clone());
+    let options = ImportOptions {
+        start_revision: 1,
+        end_revision: Some(100),
+    };
+
+    import_mock_revisions(&backend, &git, &config, options).unwrap();
+
+    let path = dir.path().join(".git/svn/origin.trunk/.rev_map.mock-uuid");
+    let map = RevMap::open_existing(&path, ObjectFormat::Sha1).unwrap();
+    let records = map.records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[0].revision, 1);
+    assert!(records[0].object_id_hex.bytes().any(|byte| byte != b'0'));
+    assert_eq!(records[1].revision, 100);
+    assert!(records[1].object_id_hex.bytes().all(|byte| byte == b'0'));
+    assert_eq!(map.max_revision(false).unwrap(), Some(100));
+    assert_eq!(map.max_revision(true).unwrap(), Some(1));
+    let original_bytes = std::fs::read(&path).unwrap();
+
+    import_mock_revisions(&backend, &git, &config, options).unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), original_bytes);
+
+    let backend = MockSvnBackend::new("mock-uuid", sparse_fixed_mapping_revisions(true));
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 101,
+            end_revision: Some(101),
+        },
+    )
+    .unwrap();
+
+    let map = RevMap::open_existing(&path, ObjectFormat::Sha1).unwrap();
+    let records = map.records().unwrap();
+    assert_eq!(records.len(), 2);
+    assert_eq!(records[1].revision, 101);
+    assert!(records[1].object_id_hex.bytes().any(|byte| byte != b'0'));
+    assert_eq!(map.max_revision(true).unwrap(), Some(101));
+}
+
+#[test]
+fn empty_log_window_still_records_the_fixed_mapping_scan_marker() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+    let backend = MockSvnBackend::new("mock-uuid", Vec::new());
+
+    let summary = import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(100),
+        },
+    )
+    .unwrap();
+
+    assert!(summary.imported_revisions.is_empty());
+    assert!(git.rev_parse("refs/remotes/origin/trunk").is_err());
+    let map = RevMap::open_existing(
+        dir.path().join(".git/svn/origin.trunk/.rev_map.mock-uuid"),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    assert_eq!(map.max_revision(false).unwrap(), Some(100));
+    assert_eq!(map.max_revision(true).unwrap(), None);
+}
+
+#[test]
 fn branch_copy_import_uses_source_revision_as_parent() {
     let dir = tempdir().unwrap();
     let git = GitCli::new(dir.path());
     git.init().unwrap();
     let backend = MockSvnBackend::new("mock-uuid", branch_copy_revisions());
-    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""))
+        .with_log_window_size(1);
 
     import_mock_revisions(
         &backend,
@@ -113,6 +198,194 @@ fn branch_copy_import_uses_source_revision_as_parent() {
         .unwrap();
 
     assert_eq!(branch_parent.trim(), trunk_commit.trim());
+}
+
+#[test]
+fn bounded_branch_to_branch_copy_discovers_unchanged_source_mapping() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", branch_to_branch_copy_revisions());
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""))
+        .with_log_window_size(1);
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        git.run_for_test(["rev-parse", "refs/remotes/origin/destination^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", "refs/remotes/origin/source"])
+            .unwrap()
+            .trim()
+    );
+}
+
+#[test]
+fn branch_copy_backfills_source_history_before_requested_start_revision() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", branch_to_branch_copy_revisions());
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        git.run_for_test(["rev-parse", "refs/remotes/origin/destination^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", "refs/remotes/origin/source"])
+            .unwrap()
+            .trim()
+    );
+}
+
+#[test]
+fn unmapped_copy_source_reuses_auxiliary_branch_revision_ref() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", unmapped_source_copy_revisions());
+    let config =
+        SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout("")).with_ignore_refs("@");
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    let auxiliary = "refs/remotes/origin/destination@1";
+    assert!(
+        git.config_get_all("svn-remote.svn.fetch")
+            .unwrap()
+            .iter()
+            .all(|mapping| !mapping.contains("destination@1"))
+    );
+    assert_eq!(
+        git.run_for_test(["rev-parse", "refs/remotes/origin/destination^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", auxiliary]).unwrap().trim()
+    );
+}
+
+#[test]
+fn bounded_multi_level_copy_backfills_each_auxiliary_parent() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", multi_level_unmapped_copy_revisions());
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""))
+        .with_log_window_size(1);
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(4),
+        },
+    )
+    .unwrap();
+
+    let destination = "refs/remotes/origin/destination";
+    let middle = "refs/remotes/origin/destination@3";
+    let root = "refs/remotes/origin/destination@2";
+    assert_eq!(
+        git.run_for_test(["rev-parse", &format!("{destination}^")])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", middle]).unwrap().trim()
+    );
+    assert_eq!(
+        git.run_for_test(["rev-parse", &format!("{middle}^")])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", root]).unwrap().trim()
+    );
+}
+
+#[test]
+fn unfinished_multi_mapping_batch_resumes_without_republishing_completed_mapping() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", branch_copy_revisions());
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+    let options = ImportOptions {
+        start_revision: 1,
+        end_revision: Some(2),
+    };
+    let trunk_ref = "refs/remotes/origin/trunk";
+    let branch_ref = "refs/remotes/origin/main";
+
+    import_mock_revisions_for_ref(&backend, &git, &config, options, Some(trunk_ref)).unwrap();
+    let original_trunk = git.rev_parse(trunk_ref).unwrap();
+    let batch_refs = vec![trunk_ref.to_string(), branch_ref.to_string()];
+    begin_or_resume_batch(&git, "mock-uuid", &batch_refs).unwrap();
+    mark_batch_mapping_completed(&git, trunk_ref).unwrap();
+
+    import_mock_revisions(&backend, &git, &config, options).unwrap();
+
+    assert_eq!(git.rev_parse(trunk_ref).unwrap(), original_trunk);
+    assert!(git.rev_parse(branch_ref).is_ok());
+    ensure_no_pending(&git).unwrap();
+}
+
+#[test]
+fn unfinished_ra_batch_preserves_completed_mapping_unhandled_log_exactly_once() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let session = PathFilteringRaSession::new();
+    let config = SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout(""));
+    let options = ImportOptions {
+        start_revision: 2,
+        end_revision: Some(3),
+    };
+    let trunk_ref = "refs/remotes/origin/trunk";
+    let branch_ref = "refs/remotes/origin/main";
+
+    import_ra_revisions_for_ref(&session, &git, &config, options, Some(trunk_ref)).unwrap();
+    let log_path = dir.path().join(".git/svn/origin.trunk/unhandled.log");
+    let completed_log = std::fs::read(&log_path).unwrap();
+    let completed_trunk = git.rev_parse(trunk_ref).unwrap();
+    let batch_refs = vec![trunk_ref.to_string(), branch_ref.to_string()];
+    begin_or_resume_batch(&git, "mock-uuid", &batch_refs).unwrap();
+    mark_batch_mapping_completed(&git, trunk_ref).unwrap();
+
+    import_ra_revisions(&session, &git, &config, options).unwrap();
+
+    assert_eq!(git.rev_parse(trunk_ref).unwrap(), completed_trunk);
+    assert!(git.rev_parse(branch_ref).is_ok());
+    assert_eq!(std::fs::read(log_path).unwrap(), completed_log);
+    ensure_no_pending(&git).unwrap();
 }
 
 #[test]
@@ -681,4 +954,214 @@ fn branch_copy_revisions() -> Vec<RevisionEvent> {
             ],
         },
     ]
+}
+
+fn branch_to_branch_copy_revisions() -> Vec<RevisionEvent> {
+    vec![
+        RevisionEvent {
+            revision: 1,
+            author: "alice".to_string(),
+            message: "create source branch".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/branches/source/file.txt".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"source\n".to_vec()),
+            }],
+        },
+        RevisionEvent {
+            revision: 2,
+            author: "alice".to_string(),
+            message: "copy source branch".to_string(),
+            timestamp: "2026-01-02T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/branches/destination".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: Some("/branches/source".to_string()),
+                copy_from_rev: Some(1),
+                kind: NodeKind::Directory,
+                properties_modified: false,
+                content_modified: false,
+                properties: BTreeMap::new(),
+                content: None,
+            }],
+        },
+    ]
+}
+
+fn unmapped_source_copy_revisions() -> Vec<RevisionEvent> {
+    vec![
+        RevisionEvent {
+            revision: 1,
+            author: "alice".to_string(),
+            message: "create legacy source".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/legacy/file.txt".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"legacy\n".to_vec()),
+            }],
+        },
+        RevisionEvent {
+            revision: 2,
+            author: "alice".to_string(),
+            message: "copy legacy into branches".to_string(),
+            timestamp: "2026-01-02T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/branches/destination".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: Some("/legacy".to_string()),
+                copy_from_rev: Some(1),
+                kind: NodeKind::Directory,
+                properties_modified: false,
+                content_modified: false,
+                properties: BTreeMap::new(),
+                content: None,
+            }],
+        },
+    ]
+}
+
+fn multi_level_unmapped_copy_revisions() -> Vec<RevisionEvent> {
+    vec![
+        RevisionEvent {
+            revision: 1,
+            author: "alice".to_string(),
+            message: "create legacy source".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/legacy/file.txt".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"one\n".to_vec()),
+            }],
+        },
+        RevisionEvent {
+            revision: 2,
+            author: "alice".to_string(),
+            message: "update legacy source".to_string(),
+            timestamp: "2026-01-02T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/legacy/file.txt".to_string(),
+                action: ChangeAction::Modify,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"two\n".to_vec()),
+            }],
+        },
+        RevisionEvent {
+            revision: 3,
+            author: "alice".to_string(),
+            message: "first move".to_string(),
+            timestamp: "2026-01-03T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/middle".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: Some("/legacy".to_string()),
+                copy_from_rev: Some(2),
+                kind: NodeKind::Directory,
+                properties_modified: false,
+                content_modified: false,
+                properties: BTreeMap::new(),
+                content: None,
+            }],
+        },
+        RevisionEvent {
+            revision: 4,
+            author: "alice".to_string(),
+            message: "second move".to_string(),
+            timestamp: "2026-01-04T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/branches/destination".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: Some("/middle".to_string()),
+                copy_from_rev: Some(3),
+                kind: NodeKind::Directory,
+                properties_modified: false,
+                content_modified: false,
+                properties: BTreeMap::new(),
+                content: None,
+            }],
+        },
+    ]
+}
+
+fn sparse_fixed_mapping_revisions(include_trunk_update: bool) -> Vec<RevisionEvent> {
+    let mut revisions = vec![
+        RevisionEvent {
+            revision: 1,
+            author: "alice".to_string(),
+            message: "create trunk".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/trunk/file.txt".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"one\n".to_vec()),
+            }],
+        },
+        RevisionEvent {
+            revision: 100,
+            author: "alice".to_string(),
+            message: "unrelated change".to_string(),
+            timestamp: "2026-01-02T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/unrelated/file.txt".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"unrelated\n".to_vec()),
+            }],
+        },
+    ];
+    if include_trunk_update {
+        revisions.push(RevisionEvent {
+            revision: 101,
+            author: "alice".to_string(),
+            message: "update trunk".to_string(),
+            timestamp: "2026-01-03T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/trunk/file.txt".to_string(),
+                action: ChangeAction::Modify,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"two\n".to_vec()),
+            }],
+        });
+    }
+    revisions
 }

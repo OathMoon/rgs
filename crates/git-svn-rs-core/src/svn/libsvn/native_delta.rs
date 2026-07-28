@@ -1,3 +1,8 @@
+#![cfg_attr(
+    all(not(windows), target_pointer_width = "64"),
+    allow(clippy::unnecessary_fallible_conversions)
+)]
+
 use super::*;
 use crate::path_url::add_path_to_url;
 use md5::{Digest, Md5};

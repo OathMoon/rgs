@@ -88,6 +88,10 @@ impl StandardSvnFixture {
         .map_err(|e| e.to_string())?;
         std::fs::write(wc.join("trunk/run.sh"), "#!/bin/sh\necho hi\n")
             .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("src/lib.rs", wc.join("trunk/link-to-lib"))
+            .map_err(|e| e.to_string())?;
+        #[cfg(not(unix))]
         std::fs::write(wc.join("trunk/link-to-lib"), "link src/lib.rs")
             .map_err(|e| e.to_string())?;
         run(
@@ -113,6 +117,7 @@ impl StandardSvnFixture {
                 "trunk/run.sh",
             ],
         )?;
+        #[cfg(not(unix))]
         run(
             &wc,
             "svn",
@@ -369,9 +374,14 @@ pub struct SvnServe {
     port: u16,
 }
 
+static SVNSERVE_START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[allow(dead_code)]
 impl SvnServe {
     pub fn start(root: &Path) -> Result<Self, String> {
+        let _start_guard = SVNSERVE_START_LOCK
+            .lock()
+            .map_err(|_| "svnserve start lock is poisoned".to_string())?;
         let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         drop(listener);
@@ -395,7 +405,11 @@ impl SvnServe {
     }
 
     pub fn repo_url(&self) -> String {
-        format!("svn://127.0.0.1:{}/repo", self.port)
+        self.repository_url("repo")
+    }
+
+    pub fn repository_url(&self, name: &str) -> String {
+        format!("svn://127.0.0.1:{}/{name}", self.port)
     }
 
     fn wait_until_ready(&mut self) -> Result<(), String> {

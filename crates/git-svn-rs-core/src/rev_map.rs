@@ -36,7 +36,7 @@ pub struct RevMapRecord {
 }
 
 impl RevMapRecord {
-    fn has_zero_object_id(&self) -> bool {
+    pub(crate) fn has_zero_object_id(&self) -> bool {
         self.object_id_hex.chars().all(|c| c == '0')
     }
 }
@@ -83,18 +83,31 @@ impl RevMap {
         record.extend_from_slice(&revision.to_be_bytes());
         record.extend_from_slice(&raw);
         let _lock = RevMapLock::acquire(&self.path)?;
-        if let Some(last) = self.max_record(false)?
-            && revision <= last.revision
+        let last = self.max_record(false)?;
+        let replace_trailing_zero = last.as_ref().is_some_and(RevMapRecord::has_zero_object_id);
+        let ordering_base = if replace_trailing_zero {
+            self.max_record(true)?.or_else(|| last.clone())
+        } else {
+            last
+        };
+        if let Some(last_commit) = ordering_base
+            && revision <= last_commit.revision
         {
             return Err(format!(
                 "out-of-order .rev_map append: revision {revision} after {}",
-                last.revision
+                last_commit.revision
             ));
         }
         let mut file = OpenOptions::new()
-            .append(true)
+            .write(true)
             .open(&self.path)
             .map_err(|e| e.to_string())?;
+        if replace_trailing_zero {
+            file.seek(SeekFrom::End(-(self.format.record_size() as i64)))
+                .map_err(|e| e.to_string())?;
+        } else {
+            file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
+        }
         file.write_all(&record).map_err(|e| e.to_string())?;
         file.sync_all().map_err(|e| e.to_string())?;
         Ok(())

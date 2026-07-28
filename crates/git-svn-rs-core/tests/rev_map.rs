@@ -119,14 +119,78 @@ fn max_revision_with_want_commit_uses_penultimate_when_last_is_zero() {
 }
 
 #[test]
+fn append_replaces_the_single_trailing_zero_record() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".rev_map.uuid");
+    let mut map = RevMap::open(&path, ObjectFormat::Sha1).unwrap();
+    let oid10 = "1010101010101010101010101010101010101010";
+    let oid50 = "5050505050505050505050505050505050505050";
+    let zero = "0000000000000000000000000000000000000000";
+
+    map.append(10, oid10).unwrap();
+    map.append(100, zero).unwrap();
+    map.append(50, oid50).unwrap();
+
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 48);
+    assert_eq!(map.get(50).unwrap(), Some(oid50.to_string()));
+    assert_eq!(map.get(100).unwrap(), None);
+    assert_eq!(map.max_revision(false).unwrap(), Some(50));
+    assert_eq!(map.max_revision(true).unwrap(), Some(50));
+
+    map.append(150, zero).unwrap();
+    map.append(200, zero).unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 72);
+    assert_eq!(map.max_revision(false).unwrap(), Some(200));
+    assert_eq!(map.max_revision(true).unwrap(), Some(50));
+}
+
+#[test]
+fn sha256_append_replaces_trailing_zero_without_growing_the_map() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".rev_map.uuid");
+    let mut map = RevMap::open(&path, ObjectFormat::Sha256).unwrap();
+    let oid = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let zero = "0".repeat(64);
+
+    map.append(10, oid).unwrap();
+    map.append(100, &zero).unwrap();
+    map.append(50, oid).unwrap();
+
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 72);
+    assert_eq!(map.max_revision(false).unwrap(), Some(50));
+    assert_eq!(map.get(50).unwrap(), Some(oid.to_string()));
+}
+
+#[test]
+fn a_single_zero_record_remains_the_ordering_baseline() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".rev_map.uuid");
+    let mut map = RevMap::open(&path, ObjectFormat::Sha1).unwrap();
+    let zero = "0000000000000000000000000000000000000000";
+
+    map.append(100, zero).unwrap();
+    let error = map
+        .append(50, "5050505050505050505050505050505050505050")
+        .unwrap_err();
+    assert!(error.contains("revision 50 after 100"));
+
+    map.append(110, "1111111111111111111111111111111111111111")
+        .unwrap();
+    assert_eq!(std::fs::metadata(&path).unwrap().len(), 24);
+    assert_eq!(map.max_revision(false).unwrap(), Some(110));
+}
+
+#[test]
 fn detects_two_trailing_zero_records_as_inconsistent() {
     let dir = tempdir().unwrap();
     let path = dir.path().join(".rev_map.uuid");
     let mut map = RevMap::open(&path, ObjectFormat::Sha1).unwrap();
     map.append(4, "0000000000000000000000000000000000000000")
         .unwrap();
-    map.append(5, "0000000000000000000000000000000000000000")
-        .unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes.extend_from_slice(&5_u32.to_be_bytes());
+    bytes.extend_from_slice(&[0_u8; 20]);
+    std::fs::write(&path, bytes).unwrap();
 
     assert!(
         map.max_record(true)

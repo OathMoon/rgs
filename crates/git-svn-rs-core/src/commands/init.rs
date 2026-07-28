@@ -2,10 +2,14 @@ use std::fs;
 
 use crate::cli::InitArgs;
 use crate::config::SvnRemoteConfig;
-use crate::git::GitCli;
+use crate::git::{GitCli, GitCommandOutput};
 use crate::mapping::{LayoutMappings, build_from_layout_args};
 
 pub fn run(args: InitArgs) -> Result<(), String> {
+    run_with_output(args).map(|_| ())
+}
+
+pub(crate) fn run_with_output(args: InitArgs) -> Result<GitCommandOutput, String> {
     if args.shared.revision.is_some() {
         return Err("init --revision is not supported; use clone or fetch".to_string());
     }
@@ -14,8 +18,8 @@ pub fn run(args: InitArgs) -> Result<(), String> {
             "init --password is not supported and passwords are never persisted".to_string(),
         );
     }
-    if args.shared.log_window_size.is_some() {
-        return Err("--log-window-size is not implemented".to_string());
+    if args.shared.log_window_size == Some(0) {
+        return Err("--log-window-size must be greater than zero".to_string());
     }
     let mappings = build_from_layout_args(
         args.layout.stdlayout,
@@ -29,10 +33,11 @@ pub fn run(args: InitArgs) -> Result<(), String> {
     fs::create_dir_all(work_tree).map_err(|e| e.to_string())?;
 
     let git = GitCli::new(work_tree);
-    git.init()?;
+    let output = git.init_with_output()?;
 
     let config = svn_remote_config(args, mappings);
-    write_svn_remote_config(&git, &config)
+    write_svn_remote_config(&git, &config)?;
+    Ok(output)
 }
 
 fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfig {

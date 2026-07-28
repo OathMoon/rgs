@@ -1,14 +1,30 @@
 #[path = "golden/fixtures.rs"]
 mod golden_fixtures;
+#[allow(dead_code)]
+#[path = "support/svn_fixture.rs"]
+mod svn_fixture;
 
+use git_svn_rs_core::cli::{FetchArgs, InitArgs, LayoutArgs, SharedFetchArgs};
+use git_svn_rs_core::commands;
+use git_svn_rs_core::git::GitCli;
 use golden_fixtures::{
     CloneStateArtifact, CommitGraphArtifact, CompatDecision, FileModeArtifact,
     FilePropertyArtifact, GoldenArtifactCapture, GoldenComparisonArtifacts, GoldenFixture,
     GoldenFixtureStep, RefTipArtifact, RevMapArtifactRecord, RevMapByteLengthArtifact,
     ToolAvailability, compare_supported_subset, missing_perl_git_svn_policy,
     perl_git_svn_available, require_golden_tools, require_svn_tools,
-    run_rust_stdlayout_ref_artifacts, run_standard_trunk_golden_comparison,
+    run_rust_stdlayout_ref_artifacts, run_standard_stdlayout_golden_comparison,
+    run_standard_subdirectory_golden_comparison, run_standard_trunk_golden_comparison,
+    supported_rev_map, supported_rev_map_byte_lengths,
 };
+#[cfg(unix)]
+use golden_fixtures::{
+    require_golden_svnserve, run_standard_authenticated_svn_dcommit_golden_comparison,
+    run_standard_dcommit_golden_comparison, run_standard_dirty_dcommit_golden_comparison,
+    run_standard_recovery_dcommit_golden_comparison,
+};
+use std::path::Path;
+use std::process::Command;
 
 #[test]
 fn missing_perl_git_svn_skips_by_default_and_fails_in_strict_mode() {
@@ -156,6 +172,11 @@ fn artifact_capture_writes_normalized_text_files() {
         std::fs::read_to_string(artifact).unwrap(),
         "line one\nline two\n"
     );
+    let summary =
+        std::fs::read_to_string(tmp.path().join("case-one/scenario-summary.json")).unwrap();
+    assert!(summary.contains("\"scenario\": \"case-one\""));
+    assert!(summary.contains("\"status\": \"started\""));
+    assert!(summary.contains("\"frozen_git_commit\": \"0b13e48"));
 }
 
 #[test]
@@ -366,7 +387,826 @@ fn standard_trunk_fixture_matches_perl_git_svn_supported_subset() {
 }
 
 #[test]
+fn standard_layout_fixture_matches_perl_git_svn_supported_subset() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!("stdlayout golden comparison is covered by the SVN CLI compatibility backend");
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!("Perl git-svn available ({version}); running stdlayout golden comparison");
+        }
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-stdlayout-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_stdlayout_golden_comparison(tmp.path()).unwrap();
+
+    comparison.assert_supported_subset_matches().unwrap();
+}
+
+#[test]
+fn single_subdirectory_fixture_matches_perl_git_svn_supported_subset() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!(
+            "single-subdirectory golden comparison is covered by the SVN CLI compatibility backend"
+        );
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!(
+                "Perl git-svn available ({version}); running single-subdirectory golden comparison"
+            );
+        }
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-subdirectory-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_subdirectory_golden_comparison(tmp.path()).unwrap();
+
+    comparison.assert_supported_subset_matches().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn linear_dcommit_write_artifacts_match_frozen_perl_git_svn() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!("dcommit golden comparison is covered by the SVN CLI compatibility backend");
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!("Perl git-svn available ({version}); running dcommit golden comparison");
+        }
+        Err(golden_fixtures::CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-dcommit-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_dcommit_golden_comparison(tmp.path()).unwrap();
+    comparison.assert_write_artifacts_match().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn authenticated_svn_dcommit_write_artifacts_match_frozen_perl_git_svn() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!(
+            "authenticated dcommit golden comparison is covered by the SVN CLI compatibility backend"
+        );
+        return;
+    }
+    match require_golden_tools().and_then(|version| {
+        require_golden_svnserve()?;
+        Ok(version)
+    }) {
+        Ok(version) => {
+            eprintln!(
+                "Perl git-svn available ({version}); running authenticated dcommit golden comparison"
+            );
+        }
+        Err(golden_fixtures::CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-auth-dcommit-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_authenticated_svn_dcommit_golden_comparison(tmp.path()).unwrap();
+    comparison.assert_write_artifacts_match().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn recovered_dcommit_write_artifacts_match_frozen_perl_git_svn() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!(
+            "recovery dcommit golden comparison is covered by the SVN CLI compatibility backend"
+        );
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!(
+                "Perl git-svn available ({version}); running recovery dcommit golden comparison"
+            );
+        }
+        Err(golden_fixtures::CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-recovery-dcommit-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_recovery_dcommit_golden_comparison(tmp.path()).unwrap();
+    comparison.assert_write_artifacts_match().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn dirty_dcommit_no_write_artifacts_match_frozen_perl_git_svn() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!(
+            "dirty dcommit golden comparison is covered by the SVN CLI compatibility backend"
+        );
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!(
+                "Perl git-svn available ({version}); running dirty dcommit no-write comparison"
+            );
+        }
+        Err(golden_fixtures::CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-dirty-dcommit-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_dirty_dcommit_golden_comparison(tmp.path()).unwrap();
+    comparison.assert_write_artifacts_match().unwrap();
+}
+
+#[test]
+fn auxiliary_follow_parent_ref_matches_frozen_perl_git_svn() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!("auxiliary golden comparison is covered by the SVN CLI compatibility backend");
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!("Perl git-svn available ({version}); comparing auxiliary follow-parent");
+        }
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::Builder::new()
+        .prefix("golden-follow-parent-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let repo = temp.path().join("repo");
+    let upstream = temp.path().join("upstream");
+    run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
+    let url = format!("file://{}", repo.display());
+    run_command(
+        temp.path(),
+        "svn",
+        &["checkout", "--non-interactive", &url, path_text(&upstream)],
+    );
+    std::fs::create_dir_all(upstream.join("trunk")).unwrap();
+    std::fs::write(upstream.join("trunk/readme"), "hello\n").unwrap();
+    run_command(&upstream, "svn", &["add", "--non-interactive", "trunk"]);
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "initial"],
+    );
+    std::fs::write(upstream.join("trunk/readme"), "hello\nworld\n").unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "another commit"],
+    );
+    run_command(&upstream, "svn", &["update", "--non-interactive"]);
+    run_command(
+        &upstream,
+        "svn",
+        &["mv", "--non-interactive", "trunk", "thunk"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "move trunk"],
+    );
+    run_command(&upstream, "svn", &["update", "--non-interactive"]);
+    run_command(
+        &upstream,
+        "svn",
+        &["mv", "--non-interactive", "thunk", "thonk"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "move trunk again"],
+    );
+
+    let perl = temp.path().join("perl");
+    let thonk_url = format!("{}/thonk", url.trim_end_matches('/'));
+    run_command(
+        temp.path(),
+        "git",
+        &[
+            "svn",
+            "init",
+            "--minimize-url",
+            "--ignore-refs",
+            "(?:@|thonk$)",
+            "-i",
+            "origin/thonk",
+            &thonk_url,
+            path_text(&perl),
+        ],
+    );
+    run_command(&perl, "git", &["svn", "fetch", "-r", "1:4"]);
+
+    let rust = temp.path().join("rust");
+    let mut rust_shared = shared_fetch_args(None);
+    rust_shared.ignore_refs = Some("(?:@|thonk$)".to_string());
+    commands::init::run(InitArgs {
+        url,
+        path: Some(path_text(&rust).to_string()),
+        layout: LayoutArgs {
+            stdlayout: false,
+            trunk: Some("thonk".to_string()),
+            branches: Vec::new(),
+            tags: Vec::new(),
+            prefix: None,
+        },
+        shared: rust_shared,
+    })
+    .unwrap();
+    run_command(
+        &rust,
+        "git",
+        &["config", "--unset-all", "svn-remote.svn.fetch"],
+    );
+    GitCli::new(&rust)
+        .config_add("svn-remote.svn.fetch", "thonk:refs/remotes/origin/thonk")
+        .unwrap();
+    commands::fetch::run_in_work_tree(
+        &rust,
+        FetchArgs {
+            remote: None,
+            shared: shared_fetch_args(Some("1:4")),
+            fetch_all: false,
+            parent: false,
+        },
+    )
+    .unwrap();
+
+    let perl_git = GitCli::new(&perl);
+    let rust_git = GitCli::new(&rust);
+    let mut perl_fetch = perl_git.config_get_all("svn-remote.svn.fetch").unwrap();
+    let mut rust_fetch = rust_git.config_get_all("svn-remote.svn.fetch").unwrap();
+    perl_fetch.sort();
+    rust_fetch.sort();
+    assert_eq!(
+        rust_fetch,
+        perl_fetch,
+        "svn config differs\nperl:\n{}\nrust:\n{}",
+        svn_config(&perl),
+        svn_config(&rust)
+    );
+    assert_eq!(
+        ref_tips(&rust),
+        ref_tips(&perl),
+        "auxiliary and destination commit identities must match frozen Perl\nperl:\n{}\nrust:\n{}",
+        history_details(&perl, "refs/remotes/origin/thonk"),
+        history_details(&rust, "refs/remotes/origin/thonk")
+    );
+}
+
+#[test]
+fn ancestor_directory_copy_discovery_matches_frozen_perl_git_svn() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!(
+            "ancestor-copy golden comparison is covered by the SVN CLI compatibility backend"
+        );
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!("Perl git-svn available ({version}); comparing ancestor-copy discovery");
+        }
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::Builder::new()
+        .prefix("golden-ancestor-copy-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let repo = temp.path().join("repo");
+    let upstream = temp.path().join("upstream");
+    run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
+    let url = format!("file://{}", repo.display());
+    run_command(
+        temp.path(),
+        "svn",
+        &["checkout", "--non-interactive", &url, path_text(&upstream)],
+    );
+    std::fs::create_dir_all(upstream.join("trunk")).unwrap();
+    std::fs::create_dir_all(upstream.join("archive/promoted/a")).unwrap();
+    std::fs::write(upstream.join("trunk/readme"), "trunk\n").unwrap();
+    std::fs::write(
+        upstream.join("archive/promoted/a/file.txt"),
+        "ancestor copy\n",
+    )
+    .unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["add", "--non-interactive", "trunk", "archive"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &[
+            "commit",
+            "--non-interactive",
+            "-m",
+            "create archived branch layout",
+        ],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["copy", "--non-interactive", "archive/promoted", "promoted"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &[
+            "commit",
+            "--non-interactive",
+            "-m",
+            "promote archived branch layout",
+        ],
+    );
+
+    let perl = temp.path().join("perl");
+    run_command(
+        temp.path(),
+        "git",
+        &[
+            "svn",
+            "init",
+            "--trunk=trunk",
+            "--branches=promoted/*",
+            "--prefix=origin/",
+            &url,
+            path_text(&perl),
+        ],
+    );
+    run_command(&perl, "git", &["svn", "fetch"]);
+
+    let rust = temp.path().join("rust");
+    commands::init::run(InitArgs {
+        url,
+        path: Some(path_text(&rust).to_string()),
+        layout: LayoutArgs {
+            stdlayout: false,
+            trunk: Some("trunk".to_string()),
+            branches: vec!["promoted/*".to_string()],
+            tags: Vec::new(),
+            prefix: Some("origin/".to_string()),
+        },
+        shared: shared_fetch_args(None),
+    })
+    .unwrap();
+    commands::fetch::run_in_work_tree(
+        &rust,
+        FetchArgs {
+            remote: None,
+            shared: shared_fetch_args(None),
+            fetch_all: false,
+            parent: false,
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        ref_tips(&rust),
+        ref_tips(&perl),
+        "ancestor-copy refs differ\nperl:\n{}\nrust:\n{}",
+        history_details(&perl, "refs/remotes/origin/a"),
+        history_details(&rust, "refs/remotes/origin/a")
+    );
+}
+
+#[test]
+fn sparse_fixed_mapping_scan_marker_matches_frozen_perl_git_svn() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!("scan-marker golden comparison is covered by the SVN CLI compatibility backend");
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!("Perl git-svn available ({version}); comparing fixed scan marker");
+        }
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::Builder::new()
+        .prefix("golden-scan-marker-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let repo = temp.path().join("repo");
+    let upstream = temp.path().join("upstream");
+    run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
+    let url = format!("file://{}", repo.display());
+    run_command(
+        temp.path(),
+        "svn",
+        &["checkout", "--non-interactive", &url, path_text(&upstream)],
+    );
+    std::fs::create_dir_all(upstream.join("trunk")).unwrap();
+    std::fs::create_dir_all(upstream.join("unrelated")).unwrap();
+    std::fs::write(upstream.join("trunk/file.txt"), "one\n").unwrap();
+    std::fs::write(upstream.join("unrelated/file.txt"), "one\n").unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["add", "--non-interactive", "trunk", "unrelated"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "initial"],
+    );
+    std::fs::write(upstream.join("unrelated/file.txt"), "two\n").unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "unrelated two"],
+    );
+    std::fs::write(upstream.join("unrelated/file.txt"), "three\n").unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "unrelated three"],
+    );
+
+    let perl = temp.path().join("perl");
+    run_command(
+        temp.path(),
+        "git",
+        &[
+            "svn",
+            "init",
+            "--trunk=trunk",
+            "--prefix=origin/",
+            &url,
+            path_text(&perl),
+        ],
+    );
+    run_command(&perl, "git", &["svn", "fetch"]);
+
+    let rust = temp.path().join("rust");
+    commands::init::run(InitArgs {
+        url,
+        path: Some(path_text(&rust).to_string()),
+        layout: LayoutArgs {
+            stdlayout: false,
+            trunk: Some("trunk".to_string()),
+            branches: Vec::new(),
+            tags: Vec::new(),
+            prefix: Some("origin/".to_string()),
+        },
+        shared: shared_fetch_args(None),
+    })
+    .unwrap();
+    commands::fetch::run_in_work_tree(
+        &rust,
+        FetchArgs {
+            remote: None,
+            shared: shared_fetch_args(None),
+            fetch_all: false,
+            parent: false,
+        },
+    )
+    .unwrap();
+
+    let refs = vec!["refs/remotes/origin/trunk".to_string()];
+    let initial_records = supported_rev_map(&perl, &refs).unwrap();
+    let initial_lengths = supported_rev_map_byte_lengths(&perl, &refs).unwrap();
+    assert_eq!(supported_rev_map(&rust, &refs).unwrap(), initial_records);
+    assert_eq!(
+        supported_rev_map_byte_lengths(&rust, &refs).unwrap(),
+        initial_lengths
+    );
+    let marker = initial_records.last().unwrap();
+    assert_eq!(marker.revision, 3);
+    assert_eq!(marker.object_id, None);
+
+    run_command(&perl, "git", &["svn", "fetch"]);
+    commands::fetch::run_in_work_tree(
+        &rust,
+        FetchArgs {
+            remote: None,
+            shared: shared_fetch_args(None),
+            fetch_all: false,
+            parent: false,
+        },
+    )
+    .unwrap();
+    assert_eq!(supported_rev_map(&rust, &refs).unwrap(), initial_records);
+    assert_eq!(
+        supported_rev_map_byte_lengths(&rust, &refs).unwrap(),
+        initial_lengths
+    );
+
+    std::fs::write(upstream.join("trunk/file.txt"), "two\n").unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "trunk two"],
+    );
+    run_command(&perl, "git", &["svn", "fetch"]);
+    commands::fetch::run_in_work_tree(
+        &rust,
+        FetchArgs {
+            remote: None,
+            shared: shared_fetch_args(None),
+            fetch_all: false,
+            parent: false,
+        },
+    )
+    .unwrap();
+
+    let final_records = supported_rev_map(&perl, &refs).unwrap();
+    assert_eq!(supported_rev_map(&rust, &refs).unwrap(), final_records);
+    assert_eq!(
+        supported_rev_map_byte_lengths(&rust, &refs).unwrap(),
+        supported_rev_map_byte_lengths(&perl, &refs).unwrap()
+    );
+    assert_eq!(final_records.len(), initial_records.len());
+    assert_eq!(final_records.last().unwrap().revision, 4);
+    assert!(final_records.last().unwrap().object_id.is_some());
+}
+
+#[test]
+fn discovery_high_water_matches_frozen_perl_across_incremental_fetch() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!("discovery golden comparison is covered by the SVN CLI compatibility backend");
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!("Perl git-svn available ({version}); comparing discovery high-water");
+        }
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::Builder::new()
+        .prefix("golden-discovery-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let repo = temp.path().join("repo");
+    let upstream = temp.path().join("upstream");
+    run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
+    let url = format!("file://{}", repo.display());
+    run_command(
+        temp.path(),
+        "svn",
+        &["checkout", "--non-interactive", &url, path_text(&upstream)],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["mkdir", "--non-interactive", "trunk", "branches", "tags"],
+    );
+    std::fs::write(upstream.join("trunk/file.txt"), "one\n").unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["add", "--non-interactive", "trunk/file.txt"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "layout and trunk"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["copy", "--non-interactive", "trunk", "branches/main"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "branch"],
+    );
+    run_command(&upstream, "svn", &["update", "--non-interactive"]);
+    run_command(
+        &upstream,
+        "svn",
+        &["copy", "--non-interactive", "trunk", "tags/v1"],
+    );
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "tag"],
+    );
+
+    let perl = temp.path().join("perl");
+    run_command(
+        temp.path(),
+        "git",
+        &[
+            "svn",
+            "init",
+            "--stdlayout",
+            "--prefix=origin/",
+            &url,
+            path_text(&perl),
+        ],
+    );
+    run_command(&perl, "git", &["svn", "fetch"]);
+
+    let rust = temp.path().join("rust");
+    commands::init::run(InitArgs {
+        url,
+        path: Some(path_text(&rust).to_string()),
+        layout: LayoutArgs {
+            stdlayout: true,
+            trunk: None,
+            branches: Vec::new(),
+            tags: Vec::new(),
+            prefix: None,
+        },
+        shared: shared_fetch_args(None),
+    })
+    .unwrap();
+    commands::fetch::run_in_work_tree(
+        &rust,
+        FetchArgs {
+            remote: None,
+            shared: shared_fetch_args(None),
+            fetch_all: false,
+            parent: false,
+        },
+    )
+    .unwrap();
+    assert_discovery_high_water_matches(&perl, &rust);
+
+    std::fs::write(upstream.join("trunk/file.txt"), "two\n").unwrap();
+    run_command(
+        &upstream,
+        "svn",
+        &["commit", "--non-interactive", "-m", "trunk only"],
+    );
+    run_command(&perl, "git", &["svn", "fetch"]);
+    commands::fetch::run_in_work_tree(
+        &rust,
+        FetchArgs {
+            remote: None,
+            shared: shared_fetch_args(None),
+            fetch_all: false,
+            parent: false,
+        },
+    )
+    .unwrap();
+    assert_discovery_high_water_matches(&perl, &rust);
+}
+
+fn assert_discovery_high_water_matches(perl: &Path, rust: &Path) {
+    let perl_git = GitCli::new(perl);
+    let rust_git = GitCli::new(rust);
+    for kind in ["branches", "tags"] {
+        let key = format!("svn-remote.svn.{kind}-maxRev");
+        let perl_value = perl_git.git_svn_metadata_get(&key).unwrap();
+        assert!(perl_value.is_some(), "Perl did not persist {key}");
+        assert_eq!(rust_git.git_svn_metadata_get(&key).unwrap(), perl_value);
+    }
+}
+
+fn shared_fetch_args(revision: Option<&str>) -> SharedFetchArgs {
+    SharedFetchArgs {
+        authors_file: None,
+        authors_prog: None,
+        ignore_paths: None,
+        include_paths: None,
+        ignore_refs: None,
+        revision: revision.map(str::to_string),
+        log_window_size: None,
+        localtime: false,
+        no_metadata: false,
+        rewrite_root: None,
+        rewrite_uuid: None,
+        username: None,
+        password: None,
+        config_dir: None,
+        no_auth_cache: false,
+        preserve_empty_dirs: false,
+        placeholder_filename: ".gitignore".to_string(),
+    }
+}
+
+fn path_text(path: &Path) -> &str {
+    path.to_str().expect("test paths are UTF-8")
+}
+
+fn run_command(cwd: &Path, program: &str, args: &[&str]) {
+    let output = Command::new(program)
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{program} {args:?} failed:\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn ref_tips(work_tree: &Path) -> Vec<String> {
+    let output = Command::new("git")
+        .current_dir(work_tree)
+        .args([
+            "for-each-ref",
+            "--format=%(refname) %(objectname)",
+            "refs/remotes/origin",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+fn history_details(work_tree: &Path, refname: &str) -> String {
+    let output = Command::new("git")
+        .current_dir(work_tree)
+        .args([
+            "log",
+            "--format=commit %H%nparents %P%nauthor %an <%ae> %at %ai%ncommitter %cn <%ce> %ct %ci%n%B%x00",
+            "--reverse",
+            refname,
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+fn svn_config(work_tree: &Path) -> String {
+    let output = Command::new("git")
+        .current_dir(work_tree)
+        .args(["config", "--get-regexp", "^svn-remote\\."])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout).into_owned()
+}
+
+#[test]
 fn rust_stdlayout_golden_correlates_ref_tips_and_rev_maps() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!("stdlayout golden comparison is covered by the SVN CLI compatibility backend");
+        return;
+    }
     match require_svn_tools() {
         Ok(()) => {}
         Err(CompatDecision::Skip(message)) => {

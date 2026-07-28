@@ -478,3 +478,72 @@ fn submit_error_leaves_durable_in_flight_state_and_retry_does_not_resubmit() {
     ));
     assert_eq!(sink.borrow().submitted, vec![oid('b')]);
 }
+
+#[test]
+fn manual_adoption_verifies_before_persisting_and_never_resubmits() {
+    let mut prepared = prepared(1, true);
+    set_recovery_state(
+        &mut prepared,
+        0,
+        40,
+        EntryState::SubmissionInFlight {
+            expected_base_revision: 40,
+            expected_tracking_oid: oid('a'),
+        },
+    );
+    let (mut coordinator, sink, post, persistence) = make_coordinator([], []);
+
+    coordinator.adopt_in_flight(&mut prepared, 41).unwrap();
+
+    assert!(sink.borrow().submitted.is_empty());
+    assert_eq!(post.borrow().fetched, vec![41]);
+    assert!(matches!(
+        prepared.journal.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision: 41,
+            ..
+        }
+    ));
+    assert!(matches!(
+        persistence.borrow().snapshots.last().unwrap().entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision: 41,
+            ..
+        }
+    ));
+
+    coordinator.run(&mut prepared).unwrap();
+    assert!(sink.borrow().submitted.is_empty());
+    assert_eq!(prepared.journal.batch_state, BatchState::Complete);
+}
+
+#[test]
+fn failed_manual_adoption_keeps_the_durable_in_flight_state() {
+    let mut prepared = prepared(1, true);
+    set_recovery_state(
+        &mut prepared,
+        0,
+        40,
+        EntryState::SubmissionInFlight {
+            expected_base_revision: 40,
+            expected_tracking_oid: oid('a'),
+        },
+    );
+    let (mut coordinator, sink, post, persistence) = make_coordinator([], []);
+    post.borrow_mut().fail_next_fetch = true;
+
+    assert!(matches!(
+        coordinator.adopt_in_flight(&mut prepared, 41),
+        Err(CoordinatorError::ReconciliationFailed {
+            svn_revision: 41,
+            ..
+        })
+    ));
+    assert!(sink.borrow().submitted.is_empty());
+    assert_eq!(post.borrow().fetched, vec![41]);
+    assert!(persistence.borrow().snapshots.is_empty());
+    assert!(matches!(
+        prepared.journal.entries[0].state,
+        EntryState::SubmissionInFlight { .. }
+    ));
+}

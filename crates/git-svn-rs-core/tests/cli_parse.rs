@@ -47,6 +47,16 @@ fn parses_dcommit_dry_run_commit_url() {
 }
 
 #[test]
+fn parses_dcommit_manual_revision_adoption() {
+    let cli = Cli::try_parse_from(["git-svn-rs", "dcommit", "--adopt-revision", "42"]).unwrap();
+    let Command::Dcommit(args) = cli.command else {
+        panic!("expected dcommit");
+    };
+    assert_eq!(args.adopt_revision, Some(42));
+    assert!(!args.dry_run);
+}
+
+#[test]
 fn parses_dcommit_explicit_mergeinfo() {
     let cli = Cli::parse_from([
         "git-svn-rs",

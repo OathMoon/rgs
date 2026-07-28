@@ -2,14 +2,25 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+#[cfg(unix)]
+use super::svn_fixture::SvnServe;
+#[cfg(unix)]
+use git_svn_rs_core::cli::DcommitArgs;
 use git_svn_rs_core::cli::{
     CloneArgs, FindRevArgs, InfoArgs, LayoutArgs, LogArgs, RebaseArgs, ResetArgs, SharedFetchArgs,
 };
 use git_svn_rs_core::commands;
+#[cfg(unix)]
+use git_svn_rs_core::dcommit::journal::{BatchState, EntryState};
+#[cfg(unix)]
+use git_svn_rs_core::dcommit::journal_registry::discover_repository_journals;
 use git_svn_rs_core::git_svn_id::GitSvnId;
 
 const PERL_GIT_SVN_REQUIRED: &str = "Perl git-svn is required";
+const FROZEN_GIT_SVN_VERSION: &str = "2.54.0";
+const FROZEN_GIT_COMMIT: &str = "0b13e48a3a30cdfa94e8ef842e24d6045ab3d015";
 const SVN_TOOLS_REQUIRED: &str = "svnadmin and svn are required";
+const SVNSERVE_REQUIRED: &str = "svnserve is required";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompatDecision {
@@ -121,6 +132,24 @@ pub struct FilePropertyArtifact {
     pub path: String,
     pub name: String,
     pub value: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DcommitWriteArtifacts {
+    pub svn_revision: u32,
+    pub svn_uuid: String,
+    pub svn_revision_metadata: String,
+    pub svn_changed_paths: String,
+    pub svn_tree: String,
+    pub svn_contents: Vec<String>,
+    pub svn_properties: Vec<String>,
+    pub ref_tips: Vec<RefTipArtifact>,
+    pub commit_graph: Vec<CommitGraphArtifact>,
+    pub clone_state: CloneStateArtifact,
+    pub git_svn_id_footers: Vec<String>,
+    pub rev_map: Vec<RevMapArtifactRecord>,
+    pub rev_map_byte_lengths: Vec<RevMapByteLengthArtifact>,
+    pub dcommit_summary: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -240,13 +269,22 @@ impl GoldenFixture {
 #[derive(Debug, Clone)]
 pub struct GoldenArtifactCapture {
     root: PathBuf,
+    case_name: String,
 }
 
 impl GoldenArtifactCapture {
     pub fn new(root: impl AsRef<Path>, case_name: &str) -> Result<Self, String> {
-        let root = root.as_ref().join(case_name);
+        let root = std::env::var_os("GIT_SVN_RS_COMPAT_ARTIFACT_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| root.as_ref().to_path_buf())
+            .join(case_name);
         fs::create_dir_all(&root).map_err(|e| e.to_string())?;
-        Ok(Self { root })
+        let capture = Self {
+            root,
+            case_name: case_name.to_string(),
+        };
+        capture.write_scenario_summary("started", None)?;
+        Ok(capture)
     }
 
     pub fn write_text(&self, relative_path: &str, contents: &str) -> Result<PathBuf, String> {
@@ -262,16 +300,84 @@ impl GoldenArtifactCapture {
         fs::write(&path, normalized).map_err(|e| e.to_string())?;
         Ok(path)
     }
+
+    fn write_scenario_summary(&self, status: &str, detail: Option<&str>) -> Result<(), String> {
+        let detail = detail
+            .map(|value| format!(",\n  \"detail\": \"{}\"", json_escape(value)))
+            .unwrap_or_default();
+        let summary = format!(
+            concat!(
+                "{{\n",
+                "  \"schema_version\": 1,\n",
+                "  \"scenario\": \"{}\",\n",
+                "  \"status\": \"{}\",\n",
+                "  \"frozen_git_commit\": \"{}\",\n",
+                "  \"git_version\": \"{}\",\n",
+                "  \"git_svn_version\": \"{}\",\n",
+                "  \"svn_version\": \"{}\",\n",
+                "  \"rustc_version\": \"{}\",\n",
+                "  \"os\": \"{}\",\n",
+                "  \"artifact_profile\": \"exact-supported-subset-v1\"",
+                "{}\n",
+                "}}\n"
+            ),
+            json_escape(&self.case_name),
+            json_escape(status),
+            FROZEN_GIT_COMMIT,
+            json_escape(&command_version("git", &["--version"])),
+            json_escape(&command_version("git", &["svn", "--version"])),
+            json_escape(&command_version("svn", &["--version", "--quiet"])),
+            json_escape(&command_version("rustc", &["--version"])),
+            std::env::consts::OS,
+            detail,
+        );
+        fs::write(self.root.join("scenario-summary.json"), summary).map_err(|error| {
+            format!(
+                "failed to write scenario summary under {}: {error}",
+                self.root.display()
+            )
+        })
+    }
 }
 
 pub struct GoldenComparison {
     pub perl: GoldenComparisonArtifacts,
     pub rust: GoldenComparisonArtifacts,
+    capture: GoldenArtifactCapture,
+}
+
+pub struct DcommitGoldenComparison {
+    pub perl: DcommitWriteArtifacts,
+    pub rust: DcommitWriteArtifacts,
+    capture: GoldenArtifactCapture,
 }
 
 impl GoldenComparison {
     pub fn assert_supported_subset_matches(&self) -> Result<(), String> {
-        compare_supported_subset(&self.perl, &self.rust)
+        let comparison = compare_supported_subset(&self.perl, &self.rust);
+        let summary = match &comparison {
+            Ok(()) => self.capture.write_scenario_summary("passed", None),
+            Err(error) => self.capture.write_scenario_summary("failed", Some(error)),
+        };
+        comparison.and(summary)
+    }
+}
+
+impl DcommitGoldenComparison {
+    pub fn assert_write_artifacts_match(&self) -> Result<(), String> {
+        let comparison = if self.perl == self.rust {
+            Ok(())
+        } else {
+            Err(format!(
+                "dcommit write artifacts differ\nperl: {:#?}\nrust: {:#?}",
+                self.perl, self.rust
+            ))
+        };
+        let summary = match &comparison {
+            Ok(()) => self.capture.write_scenario_summary("passed", None),
+            Err(error) => self.capture.write_scenario_summary("failed", Some(error)),
+        };
+        comparison.and(summary)
     }
 }
 
@@ -295,6 +401,12 @@ fn classify_git_svn_version(version: &str) -> ToolAvailability {
         ToolAvailability::Missing {
             reason: format!("git svn resolved to git-svn-rs shim, not Perl git-svn: {version}"),
         }
+    } else if version.split_whitespace().nth(2) != Some(FROZEN_GIT_SVN_VERSION) {
+        ToolAvailability::Missing {
+            reason: format!(
+                "frozen Perl git-svn {FROZEN_GIT_SVN_VERSION} is required, detected: {version}"
+            ),
+        }
     } else {
         ToolAvailability::Available {
             version: version.to_string(),
@@ -313,7 +425,14 @@ pub fn missing_perl_git_svn_policy(strict_compat: bool) -> CompatDecision {
 pub fn require_perl_git_svn() -> Result<String, CompatDecision> {
     match perl_git_svn_available() {
         ToolAvailability::Available { version } => Ok(version),
-        ToolAvailability::Missing { .. } => Err(missing_perl_git_svn_policy(strict_compat())),
+        ToolAvailability::Missing { reason } => {
+            let message = format!("{PERL_GIT_SVN_REQUIRED}: {reason}");
+            if strict_compat() {
+                Err(CompatDecision::Fail(message))
+            } else {
+                Err(CompatDecision::Skip(format!("skipping: {message}")))
+            }
+        }
     }
 }
 
@@ -338,6 +457,18 @@ pub fn require_svn_tools() -> Result<(), CompatDecision> {
     } else {
         Err(CompatDecision::Skip(format!(
             "skipping: {SVN_TOOLS_REQUIRED}"
+        )))
+    }
+}
+
+pub fn require_golden_svnserve() -> Result<(), CompatDecision> {
+    if command_succeeds("svnserve", &["--version"]) {
+        Ok(())
+    } else if strict_compat() {
+        Err(CompatDecision::Fail(SVNSERVE_REQUIRED.to_string()))
+    } else {
+        Err(CompatDecision::Skip(format!(
+            "skipping: {SVNSERVE_REQUIRED}"
         )))
     }
 }
@@ -411,47 +542,861 @@ pub fn run_rust_stdlayout_ref_artifacts(
 pub fn run_standard_trunk_golden_comparison(
     root: impl AsRef<Path>,
 ) -> Result<GoldenComparison, String> {
+    run_standard_golden_comparison(root, GoldenLayout::Trunk)
+}
+
+pub fn run_standard_stdlayout_golden_comparison(
+    root: impl AsRef<Path>,
+) -> Result<GoldenComparison, String> {
+    run_standard_golden_comparison(root, GoldenLayout::StdLayout)
+}
+
+pub fn run_standard_subdirectory_golden_comparison(
+    root: impl AsRef<Path>,
+) -> Result<GoldenComparison, String> {
+    run_standard_golden_comparison(root, GoldenLayout::Subdirectory)
+}
+
+#[cfg(unix)]
+pub fn run_standard_dcommit_golden_comparison(
+    root: impl AsRef<Path>,
+) -> Result<DcommitGoldenComparison, String> {
+    run_standard_dcommit_golden_comparison_for(root, DcommitTransport::File, DcommitBehavior::Write)
+}
+
+#[cfg(unix)]
+pub fn run_standard_authenticated_svn_dcommit_golden_comparison(
+    root: impl AsRef<Path>,
+) -> Result<DcommitGoldenComparison, String> {
+    run_standard_dcommit_golden_comparison_for(
+        root,
+        DcommitTransport::AuthenticatedSvn,
+        DcommitBehavior::Write,
+    )
+}
+
+#[cfg(unix)]
+pub fn run_standard_recovery_dcommit_golden_comparison(
+    root: impl AsRef<Path>,
+) -> Result<DcommitGoldenComparison, String> {
+    run_standard_dcommit_golden_comparison_for(
+        root,
+        DcommitTransport::File,
+        DcommitBehavior::RecoverPostFetch,
+    )
+}
+
+#[cfg(unix)]
+pub fn run_standard_dirty_dcommit_golden_comparison(
+    root: impl AsRef<Path>,
+) -> Result<DcommitGoldenComparison, String> {
+    run_standard_dcommit_golden_comparison_for(
+        root,
+        DcommitTransport::File,
+        DcommitBehavior::RejectDirty,
+    )
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum DcommitTransport {
+    File,
+    AuthenticatedSvn,
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum DcommitBehavior {
+    Write,
+    RecoverPostFetch,
+    RejectDirty,
+}
+
+#[cfg(unix)]
+fn run_standard_dcommit_golden_comparison_for(
+    root: impl AsRef<Path>,
+    transport: DcommitTransport,
+    behavior: DcommitBehavior,
+) -> Result<DcommitGoldenComparison, String> {
+    use std::os::unix::fs::PermissionsExt;
+
     let root = root.as_ref();
     let fixture = MaterializedSvnFixture::create(root)?;
-    let capture = GoldenArtifactCapture::new(root, "standard-linear-history")?;
+    if matches!(transport, DcommitTransport::AuthenticatedSvn) {
+        configure_authenticated_svnserve(&fixture.repo)?;
+    }
+    let capture_name = match (transport, behavior) {
+        (DcommitTransport::File, DcommitBehavior::RecoverPostFetch) => "recovered-dcommit-write",
+        (DcommitTransport::File, DcommitBehavior::RejectDirty) => "dirty-dcommit-no-write",
+        (DcommitTransport::File, DcommitBehavior::Write) => "standard-dcommit-write",
+        (DcommitTransport::AuthenticatedSvn, _) => "authenticated-svn-dcommit-write",
+    };
+    let capture = GoldenArtifactCapture::new(root, capture_name)?;
+    let fixed_date = "2026-07-27T12:34:56.000000Z";
+    let hook = fixture.repo.join("hooks").join("post-commit");
+    let date_file = fixture.repo.join("hooks").join("compat-date");
+    fs::write(&date_file, fixed_date).map_err(|error| error.to_string())?;
+    fs::write(
+        &hook,
+        "#!/bin/sh\nexec svnadmin setrevprop \"$1\" -r \"$2\" svn:date \"$1/hooks/compat-date\"\n",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut permissions = fs::metadata(&hook)
+        .map_err(|error| error.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(&hook, permissions).map_err(|error| error.to_string())?;
 
-    let perl_path = root.join("perl-clone");
-    let perl_clone_output = run_capture(
+    let standby_repo = root.join("standby-svn-repo");
+    run(
         root,
-        "git",
+        "svnadmin",
         &[
-            "svn",
-            "clone",
-            "--preserve-empty-dirs",
-            "--placeholder-filename",
-            ".gitkeep",
-            "--trunk",
-            "trunk",
-            "--prefix=origin/",
-            &fixture.url(),
-            path_arg(&perl_path)?,
+            "hotcopy",
+            path_arg(&fixture.repo)?,
+            path_arg(&standby_repo)?,
         ],
     )?;
+
+    let server = match transport {
+        DcommitTransport::File => None,
+        DcommitTransport::AuthenticatedSvn => Some(SvnServe::start(root)?),
+    };
+    let fixture_url = server
+        .as_ref()
+        .map(|server| server.repository_url("svn-repo"))
+        .unwrap_or_else(|| fixture.url());
+    let perl_config_dir = root.join("perl-svn-config");
+    if matches!(transport, DcommitTransport::AuthenticatedSvn) {
+        prewarm_perl_svn_credentials(root, &fixture_url, &perl_config_dir)?;
+    }
+    let recovery_authors_prog = (behavior == DcommitBehavior::RecoverPostFetch)
+        .then(|| root.join("recovery-authors-prog"))
+        .map(|path| {
+            write_recovery_authors_prog(&path, false)?;
+            Ok::<_, String>(path)
+        })
+        .transpose()?;
+    let perl_path = root.join("perl-dcommit");
+    clone_perl_dcommit_repo(
+        root,
+        &fixture_url,
+        &perl_path,
+        transport,
+        &perl_config_dir,
+        recovery_authors_prog.as_deref(),
+    )?;
+    let rust_path = root.join("rust-dcommit");
+    let mut rust_shared = dcommit_shared_fetch_args(transport);
+    rust_shared.authors_prog = recovery_authors_prog
+        .as_ref()
+        .map(|path| path_arg(path).map(str::to_string))
+        .transpose()?;
+    commands::clone::run(CloneArgs {
+        url: fixture_url,
+        path: Some(path_arg(&rust_path)?.to_string()),
+        layout: golden_layout(match transport {
+            DcommitTransport::File => GoldenLayout::StdLayout,
+            DcommitTransport::AuthenticatedSvn => GoldenLayout::Trunk,
+        }),
+        shared: rust_shared.clone(),
+        no_checkout: false,
+    })?;
+
+    prepare_dcommit_commit(&perl_path)?;
+    prepare_dcommit_commit(&rust_path)?;
+    if behavior == DcommitBehavior::RejectDirty {
+        make_dcommit_worktree_dirty(&perl_path)?;
+        make_dcommit_worktree_dirty(&rust_path)?;
+    }
+    let perl_output = run_perl_dcommit(
+        &perl_path,
+        transport,
+        &perl_config_dir,
+        recovery_authors_prog.as_deref(),
+        behavior == DcommitBehavior::RejectDirty,
+    )?;
+    if behavior == DcommitBehavior::RejectDirty {
+        assert_repository_revision(&fixture.repo, 6, "Perl dirty preflight")?;
+    }
+
+    let perl_repo = root.join("perl-result-svn-repo");
+    fs::rename(&fixture.repo, &perl_repo).map_err(|error| error.to_string())?;
+    fs::rename(&standby_repo, &fixture.repo).map_err(|error| error.to_string())?;
+
+    let dcommit_args = || DcommitArgs {
+        dry_run: false,
+        adopt_revision: None,
+        commit_url: None,
+        mergeinfo: None,
+        no_rebase: true,
+        shared: rust_shared.clone(),
+    };
+    let rust_capture = if behavior == DcommitBehavior::RejectDirty {
+        let failure = commands::dcommit::run_in_work_tree(&rust_path, dcommit_args())
+            .expect_err("dirty tracked worktree must fail dcommit");
+        if !failure.contains("dcommit requires a clean index and working tree") {
+            return Err(format!(
+                "dirty dcommit did not report the clean-worktree preflight: {failure}"
+            ));
+        }
+        assert_repository_revision(&fixture.repo, 6, "Rust dirty preflight")?;
+        assert_no_dcommit_journal(&rust_path)?;
+        CapturedCommandOutput {
+            status: 1,
+            stdout: String::new(),
+            stderr: failure,
+        }
+    } else if let Some(authors_prog) = recovery_authors_prog.as_deref() {
+        write_recovery_authors_prog(authors_prog, true)?;
+        let failure = commands::dcommit::run_in_work_tree(&rust_path, dcommit_args())
+            .expect_err("post-submit authors failure must interrupt dcommit");
+        if !failure.contains("post-submit") {
+            return Err(format!(
+                "recovery dcommit did not report a post-submit failure: {failure}"
+            ));
+        }
+        let submitted_revision =
+            run_text(root, "svnlook", &["youngest", path_arg(&fixture.repo)?])?;
+        if submitted_revision.trim() != "7" {
+            return Err(format!(
+                "failed dcommit submitted an unexpected SVN revision: {submitted_revision:?}"
+            ));
+        }
+        let git_dir = run_text(&rust_path, "git", &["rev-parse", "--absolute-git-dir"])?;
+        let discovery = discover_repository_journals(Path::new(git_dir.trim()).join("svn"))
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "post-submit failure did not persist a dcommit journal".to_string())?;
+        let active = discovery
+            .active
+            .ok_or_else(|| "post-submit failure did not retain an active journal".to_string())?;
+        if active.journal.batch_state != BatchState::Submitting
+            || active.journal.entries.len() != 1
+            || active.journal.entries[0].state != (EntryState::Submitted { svn_revision: 7 })
+        {
+            return Err(format!(
+                "post-submit journal did not durably record r7: {:#?}",
+                active.journal
+            ));
+        }
+        let tracking_message = run_text(
+            &rust_path,
+            "git",
+            &["show", "-s", "--format=%B", "refs/remotes/origin/trunk"],
+        )?;
+        let tracking_footer = tracking_message
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .ok_or_else(|| "tracking ref has no git-svn-id footer".to_string())?;
+        let tracking_id = GitSvnId::parse(tracking_footer)
+            .map_err(|error| format!("invalid tracking footer after failed fetch: {error}"))?;
+        if tracking_id.revision != 6 {
+            return Err(format!(
+                "post-submit failure published tracking revision {} before recovery",
+                tracking_id.revision
+            ));
+        }
+        capture.write_text("rust/recovery-failure.txt", &failure)?;
+        write_recovery_authors_prog(authors_prog, false)?;
+        let rust_output = commands::dcommit::run_in_work_tree(&rust_path, dcommit_args())?;
+        let recovered_revision =
+            run_text(root, "svnlook", &["youngest", path_arg(&fixture.repo)?])?;
+        if recovered_revision.trim() != "7" {
+            return Err(format!(
+                "recovery resubmitted the Git commit as another SVN revision: {recovered_revision:?}"
+            ));
+        }
+        CapturedCommandOutput {
+            status: 0,
+            stdout: rust_output,
+            stderr: String::new(),
+        }
+    } else {
+        let rust_output = commands::dcommit::run_in_work_tree(&rust_path, dcommit_args())?;
+        CapturedCommandOutput {
+            status: 0,
+            stdout: rust_output,
+            stderr: String::new(),
+        }
+    };
+
+    let expected_revision = if behavior == DcommitBehavior::RejectDirty {
+        6
+    } else {
+        7
+    };
+    let perl_summary = normalize_dcommit_summary(&perl_output, expected_revision)?;
+    let perl = collect_dcommit_write_artifacts(&perl_path, &perl_repo, perl_summary)?;
+    let rust_summary = normalize_dcommit_summary(&rust_capture, expected_revision)?;
+    let rust = collect_dcommit_write_artifacts(&rust_path, &fixture.repo, rust_summary)?;
+    write_dcommit_artifacts(&capture, "perl", &perl, &perl_output)?;
+    write_dcommit_artifacts(&capture, "rust", &rust, &rust_capture)?;
+
+    Ok(DcommitGoldenComparison {
+        perl,
+        rust,
+        capture,
+    })
+}
+
+#[cfg(unix)]
+fn configure_authenticated_svnserve(repository: &Path) -> Result<(), String> {
+    let conf = repository.join("conf");
+    fs::write(
+        conf.join("svnserve.conf"),
+        "[general]\nanon-access = none\nauth-access = write\npassword-db = passwd\nrealm = git-svn-rs-golden\n",
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(conf.join("passwd"), "[users]\nalice = secret\n").map_err(|error| error.to_string())
+}
+
+#[cfg(unix)]
+fn prewarm_perl_svn_credentials(root: &Path, url: &str, config_dir: &Path) -> Result<(), String> {
+    fs::create_dir_all(config_dir).map_err(|error| error.to_string())?;
+    fs::write(config_dir.join("config"), "[auth]\npassword-stores =\n")
+        .map_err(|error| error.to_string())?;
+    fs::write(
+        config_dir.join("servers"),
+        "[global]\nstore-auth-creds = yes\nstore-passwords = yes\nstore-plaintext-passwords = yes\n",
+    )
+    .map_err(|error| error.to_string())?;
+    run(
+        root,
+        "svn",
+        &[
+            "--config-dir",
+            path_arg(config_dir)?,
+            "info",
+            "--non-interactive",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            url,
+        ],
+    )?;
+    let simple_auth = config_dir.join("auth").join("svn.simple");
+    let cached = simple_auth
+        .read_dir()
+        .map_err(|error| format!("failed to inspect isolated SVN auth cache: {error}"))?
+        .any(|entry| entry.is_ok_and(|entry| entry.path().is_file()));
+    if !cached {
+        return Err(format!(
+            "SVN did not persist credentials under {}",
+            simple_auth.display()
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn clone_perl_dcommit_repo(
+    root: &Path,
+    url: &str,
+    destination: &Path,
+    transport: DcommitTransport,
+    config_dir: &Path,
+    authors_prog: Option<&Path>,
+) -> Result<(), String> {
+    let mut args = vec![
+        "svn".to_string(),
+        "clone".to_string(),
+        "--prefix=origin/".to_string(),
+        "--preserve-empty-dirs".to_string(),
+        "--placeholder-filename".to_string(),
+        ".gitkeep".to_string(),
+    ];
+    match transport {
+        DcommitTransport::File => args.push("--stdlayout".to_string()),
+        DcommitTransport::AuthenticatedSvn => {
+            args.extend(["--trunk".to_string(), "trunk".to_string()]);
+        }
+    }
+    if matches!(transport, DcommitTransport::AuthenticatedSvn) {
+        args.extend([
+            "--config-dir".to_string(),
+            path_arg(config_dir)?.to_string(),
+            "--username".to_string(),
+            "alice".to_string(),
+        ]);
+    }
+    if let Some(authors_prog) = authors_prog {
+        args.extend([
+            "--authors-prog".to_string(),
+            path_arg(authors_prog)?.to_string(),
+        ]);
+    }
+    args.extend([url.to_string(), path_arg(destination)?.to_string()]);
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    match transport {
+        DcommitTransport::File => run(root, "git", &args),
+        DcommitTransport::AuthenticatedSvn => {
+            run_capture_with_stdin(root, "git", &args, "secret\nsecret\nsecret\n").map(|_| ())
+        }
+    }
+}
+
+#[cfg(unix)]
+fn write_recovery_authors_prog(path: &Path, fail: bool) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let script = if fail {
+        "#!/bin/sh\nexit 1\n"
+    } else {
+        "#!/bin/sh\necho 'Recovery Author <recovery@example.com>'\n"
+    };
+    fs::write(path, script).map_err(|error| error.to_string())?;
+    let mut permissions = fs::metadata(path)
+        .map_err(|error| error.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions).map_err(|error| error.to_string())
+}
+
+#[cfg(unix)]
+fn make_dcommit_worktree_dirty(work_tree: &Path) -> Result<(), String> {
+    fs::write(
+        work_tree.join("src/lib.rs"),
+        "pub fn answer() -> u8 { 99 }\n",
+    )
+    .map_err(|error| error.to_string())?;
+    run(work_tree, "git", &["add", "src/lib.rs"])
+}
+
+#[cfg(unix)]
+fn assert_repository_revision(
+    repository: &Path,
+    expected: u32,
+    context: &str,
+) -> Result<(), String> {
+    let actual = run_text(repository, "svnlook", &["youngest", path_arg(repository)?])?;
+    if actual.trim() == expected.to_string() {
+        Ok(())
+    } else {
+        Err(format!(
+            "{context} changed SVN from r{expected} to r{}",
+            actual.trim()
+        ))
+    }
+}
+
+#[cfg(unix)]
+fn assert_no_dcommit_journal(work_tree: &Path) -> Result<(), String> {
+    let git_dir = run_text(work_tree, "git", &["rev-parse", "--absolute-git-dir"])?;
+    let discovery = discover_repository_journals(Path::new(git_dir.trim()).join("svn"))
+        .map_err(|error| error.to_string())?;
+    if discovery.is_none() {
+        Ok(())
+    } else {
+        Err("dirty preflight created a dcommit journal before rejecting the write".to_string())
+    }
+}
+
+#[cfg(unix)]
+fn run_perl_dcommit(
+    work_tree: &Path,
+    transport: DcommitTransport,
+    config_dir: &Path,
+    authors_prog: Option<&Path>,
+    expect_failure: bool,
+) -> Result<CapturedCommandOutput, String> {
+    let mut args = vec![
+        "svn".to_string(),
+        "dcommit".to_string(),
+        "--no-rebase".to_string(),
+    ];
+    match transport {
+        DcommitTransport::File => {
+            args.extend(["--username".to_string(), "compat-user".to_string()]);
+        }
+        DcommitTransport::AuthenticatedSvn => {
+            args.extend([
+                "--config-dir".to_string(),
+                path_arg(config_dir)?.to_string(),
+                "--username".to_string(),
+                "alice".to_string(),
+            ]);
+        }
+    }
+    if let Some(authors_prog) = authors_prog {
+        args.extend([
+            "--authors-prog".to_string(),
+            path_arg(authors_prog)?.to_string(),
+        ]);
+    }
+    let args = args.iter().map(String::as_str).collect::<Vec<_>>();
+    if expect_failure {
+        return run_capture_expect_failure(work_tree, "git", &args);
+    }
+    match transport {
+        DcommitTransport::File => run_capture(work_tree, "git", &args),
+        DcommitTransport::AuthenticatedSvn => {
+            run_capture_with_stdin(work_tree, "git", &args, "secret\nsecret\nsecret\n")
+        }
+    }
+}
+
+#[cfg(unix)]
+fn dcommit_shared_fetch_args(transport: DcommitTransport) -> SharedFetchArgs {
+    match transport {
+        DcommitTransport::File => SharedFetchArgs {
+            username: Some("compat-user".to_string()),
+            ..default_shared_fetch_args()
+        },
+        DcommitTransport::AuthenticatedSvn => SharedFetchArgs {
+            username: Some("alice".to_string()),
+            password: Some("secret".to_string()),
+            no_auth_cache: true,
+            ..default_shared_fetch_args()
+        },
+    }
+}
+
+#[cfg(unix)]
+fn prepare_dcommit_commit(work_tree: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    run(
+        work_tree,
+        "git",
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    )?;
+    fs::create_dir_all(work_tree.join("docs")).map_err(|error| error.to_string())?;
+    fs::create_dir_all(work_tree.join("scripts")).map_err(|error| error.to_string())?;
+    fs::write(
+        work_tree.join("src/lib.rs"),
+        "pub fn answer() -> u8 { 43 }\n",
+    )
+    .map_err(|error| error.to_string())?;
+    fs::write(
+        work_tree.join("docs/guide.txt"),
+        "compatibility guide\nsecond line\n",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut permissions = fs::metadata(work_tree.join("docs/guide.txt"))
+        .map_err(|error| error.to_string())?
+        .permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(work_tree.join("docs/guide.txt"), permissions)
+        .map_err(|error| error.to_string())?;
+    run(work_tree, "git", &["mv", "run.sh", "scripts/run.sh"])?;
+    run(work_tree, "git", &["rm", "link-to-lib"])?;
+    run(work_tree, "git", &["add", "src/lib.rs", "docs/guide.txt"])?;
+
+    let output = Command::new("git")
+        .current_dir(work_tree)
+        .env("GIT_AUTHOR_DATE", "2026-07-27T12:00:00+0000")
+        .env("GIT_COMMITTER_DATE", "2026-07-27T12:00:00+0000")
+        .args([
+            "-c",
+            "user.name=Compat User",
+            "-c",
+            "user.email=compat@example.com",
+            "commit",
+            "-m",
+            "compat dcommit subject",
+            "-m",
+            "compat dcommit body",
+        ])
+        .output()
+        .map_err(|error| format!("git failed to start: {error}"))?;
+    if !output.status.success() {
+        return Err(command_error("git", output));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn collect_dcommit_write_artifacts(
+    work_tree: &Path,
+    repository: &Path,
+    dcommit_summary: String,
+) -> Result<DcommitWriteArtifacts, String> {
+    let revision = run_text(work_tree, "svnlook", &["youngest", path_arg(repository)?])?
+        .trim()
+        .parse::<u32>()
+        .map_err(|error| format!("invalid svnlook youngest output: {error}"))?;
+    let revision_text = revision.to_string();
+    let svn_uuid = run_text(work_tree, "svnlook", &["uuid", path_arg(repository)?])?
+        .trim()
+        .to_string();
+    let svn_author = run_text(
+        work_tree,
+        "svnlook",
+        &["author", "-r", &revision_text, path_arg(repository)?],
+    )?;
+    let svn_date = run_text(
+        work_tree,
+        "svnlook",
+        &["date", "-r", &revision_text, path_arg(repository)?],
+    )?;
+    let svn_log = run_text(
+        work_tree,
+        "svnlook",
+        &["log", "-r", &revision_text, path_arg(repository)?],
+    )?;
+    let svn_revision_metadata = format!(
+        "revision: {revision}\nauthor: {}\ndate: {}\nmessage:\n{}",
+        svn_author.trim_end(),
+        svn_date.trim_end(),
+        svn_log.trim_end()
+    );
+    let svn_changed_paths = run_text(
+        work_tree,
+        "svnlook",
+        &[
+            "changed",
+            "--copy-info",
+            "-r",
+            &revision_text,
+            path_arg(repository)?,
+        ],
+    )?;
+    let svn_tree = run_text(
+        work_tree,
+        "svnlook",
+        &[
+            "tree",
+            "--full-paths",
+            "-r",
+            &revision_text,
+            path_arg(repository)?,
+        ],
+    )?;
+    let paths = svn_tree
+        .lines()
+        .map(str::trim)
+        .filter(|path| !path.is_empty() && *path != "/" && !path.ends_with('/'))
+        .collect::<Vec<_>>();
+    let mut svn_contents = Vec::new();
+    let mut svn_properties = Vec::new();
+    for path in paths {
+        let contents = run_text(
+            work_tree,
+            "svnlook",
+            &["cat", "-r", &revision_text, path_arg(repository)?, path],
+        )?;
+        svn_contents.push(format!("{path}\t{}", escape_artifact_value(&contents)));
+        let property_names = run_text(
+            work_tree,
+            "svnlook",
+            &[
+                "proplist",
+                "-r",
+                &revision_text,
+                path_arg(repository)?,
+                path,
+            ],
+        )?
+        .lines()
+        .skip(1)
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_string)
+        .collect::<Vec<_>>();
+        for name in property_names {
+            let value = run_text(
+                work_tree,
+                "svnlook",
+                &[
+                    "propget",
+                    "-r",
+                    &revision_text,
+                    path_arg(repository)?,
+                    &name,
+                    path,
+                ],
+            )?;
+            svn_properties.push(format!("{path}\t{name}\t{}", escape_artifact_value(&value)));
+        }
+    }
+    svn_contents.sort();
+    svn_properties.sort();
+
+    let refs = run_text(
+        work_tree,
+        "git",
+        &["for-each-ref", "refs/remotes", "--format=%(refname)"],
+    )?
+    .lines()
+    .map(str::to_string)
+    .filter(|line| !line.ends_with("/HEAD"))
+    .collect::<Vec<_>>();
+    let mut graph_revisions = refs.clone();
+    graph_revisions.push("HEAD".to_string());
+    let git_svn_id_footers = run_text(
+        work_tree,
+        "git",
+        &[
+            "log",
+            "--reverse",
+            "--format=%B",
+            "refs/remotes/origin/trunk",
+        ],
+    )?
+    .lines()
+    .filter(|line| line.starts_with("git-svn-id: "))
+    .map(str::to_string)
+    .collect();
+
+    Ok(DcommitWriteArtifacts {
+        svn_revision: revision,
+        svn_uuid,
+        svn_revision_metadata,
+        svn_changed_paths,
+        svn_tree,
+        svn_contents,
+        svn_properties,
+        ref_tips: supported_ref_tips(work_tree)?,
+        commit_graph: supported_commit_graph(work_tree, &graph_revisions)?,
+        clone_state: collect_clone_state(work_tree)?,
+        git_svn_id_footers,
+        rev_map: supported_rev_map(work_tree, &refs)?,
+        rev_map_byte_lengths: supported_rev_map_byte_lengths(work_tree, &refs)?,
+        dcommit_summary,
+    })
+}
+
+#[cfg(unix)]
+fn write_dcommit_artifacts(
+    capture: &GoldenArtifactCapture,
+    tool: &str,
+    artifacts: &DcommitWriteArtifacts,
+    raw_output: &CapturedCommandOutput,
+) -> Result<(), String> {
+    capture.write_text(
+        &format!("{tool}/dcommit-output.txt"),
+        &format!(
+            "status: {}\nstdout:\n{}\nstderr:\n{}",
+            raw_output.status, raw_output.stdout, raw_output.stderr
+        ),
+    )?;
+    capture.write_text(
+        &format!("{tool}/svn-revision-metadata.txt"),
+        &artifacts.svn_revision_metadata,
+    )?;
+    capture.write_text(
+        &format!("{tool}/svn-changed-paths.txt"),
+        &artifacts.svn_changed_paths,
+    )?;
+    capture.write_text(&format!("{tool}/svn-tree.txt"), &artifacts.svn_tree)?;
+    capture.write_text(
+        &format!("{tool}/svn-contents.txt"),
+        &artifacts.svn_contents.join("\n"),
+    )?;
+    capture.write_text(
+        &format!("{tool}/svn-properties.txt"),
+        &artifacts.svn_properties.join("\n\n"),
+    )?;
+    capture.write_text(
+        &format!("{tool}/ref-tips.txt"),
+        &format_ref_tips(&artifacts.ref_tips),
+    )?;
+    capture.write_text(
+        &format!("{tool}/commit-graph.txt"),
+        &format_commit_graph(&artifacts.commit_graph),
+    )?;
+    capture.write_text(
+        &format!("{tool}/clone-state.txt"),
+        &format_clone_state(&artifacts.clone_state),
+    )?;
+    capture.write_text(
+        &format!("{tool}/git-svn-id-footers.txt"),
+        &artifacts.git_svn_id_footers.join("\n"),
+    )?;
+    capture.write_text(
+        &format!("{tool}/rev-map.txt"),
+        &format_rev_map(&artifacts.rev_map),
+    )?;
+    capture.write_text(
+        &format!("{tool}/rev-map-byte-lengths.txt"),
+        &format_rev_map_byte_lengths(&artifacts.rev_map_byte_lengths),
+    )?;
+    capture.write_text(
+        &format!("{tool}/dcommit-summary.txt"),
+        &artifacts.dcommit_summary,
+    )?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn normalize_dcommit_summary(
+    output: &CapturedCommandOutput,
+    revision: u32,
+) -> Result<String, String> {
+    if output.status != 0 {
+        return Ok(format!("status: nonzero\nrevision: {revision}"));
+    }
+    let combined = format!("{}\n{}", output.stdout, output.stderr);
+    let revision_marker = format!("r{revision}");
+    if !combined.contains(&revision_marker) {
+        return Err(format!(
+            "successful dcommit output did not identify {revision_marker}: {combined:?}"
+        ));
+    }
+    Ok(format!("status: 0\nrevision: {revision}"))
+}
+
+#[derive(Clone, Copy)]
+enum GoldenLayout {
+    Trunk,
+    StdLayout,
+    Subdirectory,
+}
+
+fn run_standard_golden_comparison(
+    root: impl AsRef<Path>,
+    layout: GoldenLayout,
+) -> Result<GoldenComparison, String> {
+    let root = root.as_ref();
+    let fixture = MaterializedSvnFixture::create(root)?;
+    let capture_name = match layout {
+        GoldenLayout::Trunk => "standard-linear-history",
+        GoldenLayout::StdLayout => "standard-layout-history",
+        GoldenLayout::Subdirectory => "standard-subdirectory-history",
+    };
+    let capture = GoldenArtifactCapture::new(root, capture_name)?;
+    let fixture_url = match layout {
+        GoldenLayout::Subdirectory => format!("{}/trunk", fixture.url().trim_end_matches('/')),
+        GoldenLayout::Trunk | GoldenLayout::StdLayout => fixture.url(),
+    };
+
+    let perl_path = root.join("perl-clone");
+    let mut perl_clone_args = vec![
+        "svn",
+        "clone",
+        "--preserve-empty-dirs",
+        "--placeholder-filename",
+        ".gitkeep",
+    ];
+    match layout {
+        GoldenLayout::Trunk => perl_clone_args.extend(["--trunk", "trunk"]),
+        GoldenLayout::StdLayout => perl_clone_args.push("--stdlayout"),
+        GoldenLayout::Subdirectory => {}
+    }
+    if !matches!(layout, GoldenLayout::Subdirectory) {
+        perl_clone_args.push("--prefix=origin/");
+    }
+    perl_clone_args.extend([fixture_url.as_str(), path_arg(&perl_path)?]);
+    let perl_clone_output = run_capture(root, "git", &perl_clone_args)?;
     let mut perl = collect_supported_artifacts(
         &perl_path,
         GoldenTool::Perl,
         normalize_clone_output(&perl_clone_output),
     )?;
     let perl_no_checkout_path = root.join("perl-clone-no-checkout");
-    run(
-        root,
-        "git",
-        &[
-            "svn",
-            "clone",
-            "--no-checkout",
-            "--trunk",
-            "trunk",
-            "--prefix=origin/",
-            &fixture.url(),
-            path_arg(&perl_no_checkout_path)?,
-        ],
-    )?;
+    let mut perl_no_checkout_args = vec!["svn", "clone", "--no-checkout"];
+    match layout {
+        GoldenLayout::Trunk => perl_no_checkout_args.extend(["--trunk", "trunk"]),
+        GoldenLayout::StdLayout => perl_no_checkout_args.push("--stdlayout"),
+        GoldenLayout::Subdirectory => {}
+    }
+    if !matches!(layout, GoldenLayout::Subdirectory) {
+        perl_no_checkout_args.push("--prefix=origin/");
+    }
+    perl_no_checkout_args.extend([fixture_url.as_str(), path_arg(&perl_no_checkout_path)?]);
+    run(root, "git", &perl_no_checkout_args)?;
     perl.no_checkout_clone_state = collect_clone_state(&perl_no_checkout_path)?;
     capture.write_text("perl/clone-output.txt", &perl.clone_output)?;
     capture.write_text("perl/config.txt", &format_config(&perl.config))?;
@@ -516,35 +1461,27 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("perl/gc-output.txt", &perl.gc_output)?;
 
     let rust_path = root.join("rust-clone");
-    commands::clone::run(CloneArgs {
-        url: fixture.url(),
+    let rust_clone_output = commands::clone::run_with_output(CloneArgs {
+        url: fixture_url.clone(),
         path: Some(path_arg(&rust_path)?.to_string()),
-        layout: LayoutArgs {
-            stdlayout: false,
-            trunk: Some("trunk".to_string()),
-            branches: Vec::new(),
-            tags: Vec::new(),
-            prefix: None,
-        },
+        layout: golden_layout(layout),
         shared: default_shared_fetch_args(),
         no_checkout: false,
     })?;
     let mut rust = collect_supported_artifacts(
         &rust_path,
         GoldenTool::Rust,
-        "status: 0\nstdout:\n\nstderr:\n".to_string(),
+        normalize_clone_output(&CapturedCommandOutput {
+            status: 0,
+            stdout: rust_clone_output.stdout,
+            stderr: rust_clone_output.stderr,
+        }),
     )?;
     let rust_no_checkout_path = root.join("rust-clone-no-checkout");
     commands::clone::run(CloneArgs {
-        url: fixture.url(),
+        url: fixture_url,
         path: Some(path_arg(&rust_no_checkout_path)?.to_string()),
-        layout: LayoutArgs {
-            stdlayout: false,
-            trunk: Some("trunk".to_string()),
-            branches: Vec::new(),
-            tags: Vec::new(),
-            prefix: None,
-        },
+        layout: golden_layout(layout),
         shared: default_shared_fetch_args(),
         no_checkout: true,
     })?;
@@ -611,7 +1548,21 @@ pub fn run_standard_trunk_golden_comparison(
     capture.write_text("rust/reset.txt", &rust.reset)?;
     capture.write_text("rust/gc-output.txt", &rust.gc_output)?;
 
-    Ok(GoldenComparison { perl, rust })
+    Ok(GoldenComparison {
+        perl,
+        rust,
+        capture,
+    })
+}
+
+fn golden_layout(layout: GoldenLayout) -> LayoutArgs {
+    LayoutArgs {
+        stdlayout: matches!(layout, GoldenLayout::StdLayout),
+        trunk: matches!(layout, GoldenLayout::Trunk).then(|| "trunk".to_string()),
+        branches: Vec::new(),
+        tags: Vec::new(),
+        prefix: None,
+    }
 }
 
 pub fn compare_supported_subset(
@@ -861,6 +1812,10 @@ impl MaterializedSvnFixture {
         )
         .map_err(|e| e.to_string())?;
         fs::write(wc.join("trunk/run.sh"), "#!/bin/sh\necho hi\n").map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("src/lib.rs", wc.join("trunk/link-to-lib"))
+            .map_err(|e| e.to_string())?;
+        #[cfg(not(unix))]
         fs::write(wc.join("trunk/link-to-lib"), "link src/lib.rs").map_err(|e| e.to_string())?;
         fs::write(wc.join("trunk/deleted.txt"), "temporary\n").map_err(|e| e.to_string())?;
         run(
@@ -886,6 +1841,7 @@ impl MaterializedSvnFixture {
                 "trunk/run.sh",
             ],
         )?;
+        #[cfg(not(unix))]
         run(
             &wc,
             "svn",
@@ -994,9 +1950,33 @@ fn collect_supported_artifacts(
     let clone_state = collect_clone_state(work_tree)?;
 
     let config = supported_config(work_tree)?;
-    let rev = refs
-        .first()
-        .ok_or_else(|| "golden clone did not create a remote ref".to_string())?;
+    let head_object_id = clone_state
+        .head_object_id
+        .as_deref()
+        .ok_or_else(|| "golden clone did not create HEAD".to_string())?;
+    let matching_refs = refs
+        .iter()
+        .filter_map(|source_ref| {
+            run_text(work_tree, "git", &["rev-parse", source_ref])
+                .ok()
+                .filter(|object_id| object_id.trim() == head_object_id)
+                .map(|_| source_ref)
+        })
+        .collect::<Vec<_>>();
+    let rev = match matching_refs.as_slice() {
+        [source_ref] => *source_ref,
+        [] => return Err("golden clone HEAD does not match a remote ref".to_string()),
+        _ => {
+            return Err(format!(
+                "golden clone HEAD ambiguously matches remote refs: {}",
+                matching_refs
+                    .iter()
+                    .map(|source_ref| source_ref.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    };
     let git_svn_id_footers = run_text(work_tree, "git", &["log", "--reverse", "--format=%B", rev])?
         .lines()
         .filter(|line| line.starts_with("git-svn-id: "))
@@ -1008,7 +1988,8 @@ fn collect_supported_artifacts(
     let tree_contents = supported_tree_contents(work_tree, rev, &file_modes)?;
     let empty_dir_placeholders = supported_empty_dir_placeholders(work_tree, rev)?;
     let first_revision = rev_map
-        .first()
+        .iter()
+        .find(|record| record.source_ref == *rev && record.object_id.is_some())
         .ok_or_else(|| "golden clone did not write a rev_map record".to_string())?
         .revision;
     let log_oneline = supported_log_oneline(work_tree, tool)?;
@@ -1019,7 +2000,8 @@ fn collect_supported_artifacts(
     let log_path_oneline = supported_log_path_oneline(work_tree, tool)?;
     let find_rev = supported_find_rev(work_tree, tool, first_revision)?;
     let info_url = supported_info_url(work_tree, tool)?;
-    let file_properties = supported_file_properties(work_tree, &info_url, &file_modes)?;
+    let file_properties =
+        supported_file_properties(work_tree, &info_url, &file_modes, &empty_dir_placeholders)?;
     let info_summary = supported_info_summary(work_tree, tool)?;
     let log_revision_oneline = supported_log_revision_oneline(work_tree, tool, first_revision)?;
     let log_revision_range_oneline =
@@ -1222,6 +2204,9 @@ fn supported_commit_graph(
 }
 
 fn iso8601_offset(value: &str) -> Result<String, String> {
+    if value.ends_with('Z') {
+        return Ok("+0000".to_string());
+    }
     let offset = value
         .get(value.len().saturating_sub(6)..)
         .ok_or_else(|| format!("invalid ISO-8601 timestamp: {value}"))?;
@@ -1423,17 +2408,22 @@ fn supported_log_revision_oneline(
     tool: GoldenTool,
     revision: u32,
 ) -> Result<String, String> {
-    let revision_arg = format!("r{revision}");
     let output = match tool {
         GoldenTool::Perl => run_text(
             work_tree,
             "git",
-            &["svn", "log", "--revision", &revision_arg, "--oneline"],
+            &[
+                "svn",
+                "log",
+                "--revision",
+                &revision.to_string(),
+                "--oneline",
+            ],
         )?,
         GoldenTool::Rust => commands::log::run_in_work_tree(
             work_tree,
             LogArgs {
-                revision: Some(revision_arg),
+                revision: Some(format!("r{revision}")),
                 limit: None,
                 verbose: false,
                 incremental: false,
@@ -1452,17 +2442,22 @@ fn supported_log_revision_range_oneline(
     start_revision: u32,
     end_revision: u32,
 ) -> Result<String, String> {
-    let revision_arg = format!("r{start_revision}:r{end_revision}");
     let output = match tool {
         GoldenTool::Perl => run_text(
             work_tree,
             "git",
-            &["svn", "log", "--revision", &revision_arg, "--oneline"],
+            &[
+                "svn",
+                "log",
+                "--revision",
+                &format!("{start_revision}:{end_revision}"),
+                "--oneline",
+            ],
         )?,
         GoldenTool::Rust => commands::log::run_in_work_tree(
             work_tree,
             LogArgs {
-                revision: Some(revision_arg),
+                revision: Some(format!("r{start_revision}:r{end_revision}")),
                 limit: None,
                 verbose: false,
                 incremental: false,
@@ -1805,10 +2800,14 @@ fn supported_file_properties(
     work_tree: &Path,
     info_url: &str,
     file_modes: &[FileModeArtifact],
+    empty_dir_placeholders: &[String],
 ) -> Result<Vec<FilePropertyArtifact>, String> {
     let mut records = Vec::new();
     let root_url = info_url.trim();
-    for file in file_modes.iter().filter(|record| record.mode != "040000") {
+    for file in file_modes
+        .iter()
+        .filter(|record| record.mode != "040000" && !empty_dir_placeholders.contains(&record.path))
+    {
         let url = format!(
             "{}/{}",
             root_url.trim_end_matches('/'),
@@ -1859,6 +2858,34 @@ fn escape_artifact_value(value: &str) -> String {
         .replace('\r', "\\r")
 }
 
+fn command_version(program: &str, args: &[&str]) -> String {
+    match Command::new(program).args(args).output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+        Ok(output) => String::from_utf8_lossy(&output.stderr).trim().to_string(),
+        Err(error) => format!("unavailable: {error}"),
+    }
+}
+
+fn json_escape(value: &str) -> String {
+    let mut escaped = String::new();
+    for character in value.chars() {
+        match character {
+            '"' => escaped.push_str("\\\""),
+            '\\' => escaped.push_str("\\\\"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            character if character.is_control() => {
+                escaped.push_str(&format!("\\u{:04x}", character as u32));
+            }
+            character => escaped.push(character),
+        }
+    }
+    escaped
+}
+
 fn supported_empty_dir_placeholders(
     work_tree: &Path,
     refname: &str,
@@ -1873,12 +2900,9 @@ fn supported_empty_dir_placeholders(
 }
 
 fn supported_config(work_tree: &Path) -> Result<Vec<(String, String)>, String> {
-    let required_keys = [
-        "svn-remote.svn.url",
-        "svn-remote.svn.fetch",
-        "svn-remote.svn.uuid",
-    ];
+    let required_keys = ["svn-remote.svn.url", "svn-remote.svn.fetch"];
     let optional_keys = [
+        "svn-remote.svn.uuid",
         "svn-remote.svn.branches",
         "svn-remote.svn.tags",
         "svn-remote.svn.ignore-paths",
@@ -1952,7 +2976,7 @@ fn normalize_config_value<'a>(key: &str, value: &'a str) -> &'a str {
     }
 }
 
-fn supported_rev_map(
+pub(crate) fn supported_rev_map(
     work_tree: &Path,
     refs: &[String],
 ) -> Result<Vec<RevMapArtifactRecord>, String> {
@@ -2028,7 +3052,7 @@ fn git_object_format(work_tree: &Path) -> Result<String, String> {
         .map(|format| format.trim().to_string())
 }
 
-fn supported_rev_map_byte_lengths(
+pub(crate) fn supported_rev_map_byte_lengths(
     work_tree: &Path,
     refs: &[String],
 ) -> Result<Vec<RevMapByteLengthArtifact>, String> {
@@ -2253,15 +3277,18 @@ fn format_file_properties(records: &[FilePropertyArtifact]) -> String {
 }
 
 struct CapturedCommandOutput {
+    status: i32,
     stdout: String,
     stderr: String,
 }
 
 fn normalize_clone_output(output: &CapturedCommandOutput) -> String {
     format!(
-        "status: 0\nstdout:\n{}\nstderr:\n{}",
-        output.stdout, output.stderr
+        "status: {}\nstdout:\n{}\nstderr:\n{}",
+        output.status, output.stdout, output.stderr
     )
+    .replace("perl-clone", "<clone>")
+    .replace("rust-clone", "<clone>")
 }
 
 fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
@@ -2287,12 +3314,72 @@ fn run_capture(cwd: &Path, program: &str, args: &[&str]) -> Result<CapturedComma
 
     if output.status.success() {
         Ok(CapturedCommandOutput {
+            status: 0,
             stdout: String::from_utf8_lossy(&output.stdout).to_string(),
             stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         })
     } else {
         Err(command_error(program, output))
     }
+}
+
+#[cfg(unix)]
+fn run_capture_with_stdin(
+    cwd: &Path,
+    program: &str,
+    args: &[&str],
+    stdin: &str,
+) -> Result<CapturedCommandOutput, String> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = Command::new(program)
+        .current_dir(cwd)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("{program} failed to start: {error}"))?;
+    child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("{program} stdin was not piped"))?
+        .write_all(stdin.as_bytes())
+        .map_err(|error| format!("failed to write {program} stdin: {error}"))?;
+    let output = child
+        .wait_with_output()
+        .map_err(|error| format!("{program} failed while waiting: {error}"))?;
+    if output.status.success() {
+        Ok(CapturedCommandOutput {
+            status: 0,
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
+    } else {
+        Err(command_error(program, output))
+    }
+}
+
+#[cfg(unix)]
+fn run_capture_expect_failure(
+    cwd: &Path,
+    program: &str,
+    args: &[&str],
+) -> Result<CapturedCommandOutput, String> {
+    let output = Command::new(program)
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .map_err(|error| format!("{program} failed to start: {error}"))?;
+    if output.status.success() {
+        return Err(format!("{program} unexpectedly succeeded"));
+    }
+    Ok(CapturedCommandOutput {
+        status: output.status.code().unwrap_or(-1),
+        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+    })
 }
 
 fn run_text(cwd: &Path, program: &str, args: &[&str]) -> Result<String, String> {
@@ -2352,6 +3439,35 @@ mod tests {
                 reason: "git svn resolved to git-svn-rs shim, not Perl git-svn: git-svn-rs 0.1.0"
                     .to_string()
             }
+        );
+    }
+
+    #[test]
+    fn accepts_frozen_perl_git_svn_version() {
+        assert_eq!(
+            classify_git_svn_version("git-svn version 2.54.0 (svn 1.14.3)"),
+            ToolAvailability::Available {
+                version: "git-svn version 2.54.0 (svn 1.14.3)".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_non_frozen_perl_git_svn_version() {
+        assert_eq!(
+            classify_git_svn_version("git-svn version 2.43.0 (svn 1.14.3)"),
+            ToolAvailability::Missing {
+                reason: "frozen Perl git-svn 2.54.0 is required, detected: git-svn version 2.43.0 (svn 1.14.3)".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn iso8601_offsets_normalize_utc_and_numeric_offsets() {
+        assert_eq!(iso8601_offset("2026-07-27T03:32:03Z").unwrap(), "+0000");
+        assert_eq!(
+            iso8601_offset("2026-01-02T03:04:05+05:30").unwrap(),
+            "+0530"
         );
     }
 
@@ -2673,6 +3789,39 @@ mod tests {
             "svn-remote.svn.uuid".to_string(),
             "fixture-uuid".to_string()
         )));
+    }
+
+    #[test]
+    fn supported_config_accepts_absent_svn_remote_uuid() {
+        let tmp = tempfile::tempdir().unwrap();
+        run(tmp.path(), "git", &["init"]).unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &["config", "svn-remote.svn.url", "file:///repo"],
+        )
+        .unwrap();
+        run(
+            tmp.path(),
+            "git",
+            &[
+                "config",
+                "svn-remote.svn.fetch",
+                "+trunk:refs/remotes/origin/trunk",
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            supported_config(tmp.path()).unwrap(),
+            vec![
+                (
+                    "svn-remote.svn.fetch".to_string(),
+                    "trunk:refs/remotes/origin/trunk".to_string()
+                ),
+                ("svn-remote.svn.url".to_string(), "file:///repo".to_string()),
+            ]
+        );
     }
 
     #[test]
