@@ -2,17 +2,15 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `53707fe Harden dcommit recovery client intent`
+Committed HEAD at audit: `046bf41 Bind dcommit post-fetch recovery intent`
 Latest implementation commits:
 
-- `fc2c420 Complete scoped rebase orchestration options`
-- `f16c366 Handle frozen non-interactive log pager mode`
-- `9cdd6ec Advance readonly phase to covered behavior pass`
 - `d270051 Validate svn+ssh clone and fetch transport`
 - `0f5ac1e Harden svn+ssh tunnel fixture boundaries`
 - `5dd0ede Add strict HTTP DAV read profile`
 - `b7d1a9e Verify explicit dcommit target mappings`
 - `53707fe Harden dcommit recovery client intent`
+- `046bf41 Bind dcommit post-fetch recovery intent`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -48,7 +46,7 @@ workflow has not yet had its first successful run.
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, byte properties, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered non-interactive profiles | scoped queries/log/reset/gc plus option-complete rebase | TTY pager and successful stderr stream fidelity |
-| 7 dcommit | `behavior-pass` for covered local profiles | typed plans, v3 intent-bound recovery, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
+| 7 dcommit | `behavior-pass` for covered local profiles | typed plans, v4 intent-bound recovery, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 40/40 locally; Linux workflow defined | first hosted execution |
 
 ## Validated Capabilities
@@ -166,10 +164,11 @@ workflow has not yet had its first successful run.
   multiple active journals, and completed-ledger overlap fail closed.
 - `--adopt-revision` resumes an unknown-outcome local file/svn submission only
   after exact imported-tree verification.
-- Recovery fingerprints use a versioned v3 encoding and bind explicit commit-URL,
+- Recovery fingerprints use a versioned v4 encoding and bind explicit commit-URL,
   username, config-dir, and auth-cache intent while excluding passwords. Active
-  v2 journals migrate on a compatible retry. A non-advancing sink revision remains
-  durably in-flight and ambiguous, so retry cannot resubmit it.
+  v2/v3 journals migrate on a compatible retry. Effective post-fetch author,
+  filter, rewrite, and empty-directory intent is also bound, including authors-file
+  content. A non-advancing sink revision stays ambiguous and cannot be resubmitted.
 - Explicit commit URLs must resolve to one tracked mapping before write. The
   journal binds that ref/rev_map, verifies the imported footer/tree/OID, and a
   submitted-state restart re-verifies without creating another SVN revision.
@@ -177,7 +176,7 @@ workflow has not yet had its first successful run.
   revision nor a dcommit journal.
 - A post-submit password rotation resumes with the same username and new secret
   without credential leakage or a duplicate SVN revision; changing username is
-  rejected against the active journal.
+  rejected, as is changing bound authors-file content.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
   options consistently.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
@@ -202,7 +201,7 @@ workflow has not yet had its first successful run.
 Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
-- `cargo test --workspace`
+- `cargo test --workspace` (core unit suite 116/116)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (63/63)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (47/47)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
@@ -226,8 +225,8 @@ Verified on 2026-07-28:
   streaming for release-level output fidelity.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
-- Extend dcommit recovery fault injection and bind remaining post-fetch
-  author/rewrite intent where recovery semantics require it.
+- Extend dcommit recovery fault injection beyond auth/fetch and non-advancing
+  submission failures.
 - Decide whether an explicit `--placeholder-filename` without
   `--preserve-empty-dirs` should fail rather than remain a low-risk no-op.
 
@@ -273,6 +272,8 @@ Verified on 2026-07-28:
   and no-resubmit recovery evidence.
 - `53707fe`: v3 recovery client intent, v2 journal migration, and secret-safe
   password-rotation recovery without duplicate submission.
+- `046bf41`: v4 effective post-fetch intent, authors-content binding, and v2/v3
+  compatible recovery migration.
 
 ## Next Steps
 
