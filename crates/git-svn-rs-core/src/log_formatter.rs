@@ -82,10 +82,11 @@ impl GitSvnLogFormatter {
             return format!("r{revision} | {}\n", first_line(&entry.message));
         }
 
+        let message = collapse_trailing_blank_lines(&entry.message);
         let mut out = String::new();
         out.push_str(SEPARATOR);
         out.push('\n');
-        let line_count = line_count(&entry.message);
+        let line_count = line_count(message);
         let line_label = if line_count == 1 { "line" } else { "lines" };
         out.push_str(&format!("r{} | ", entry.revision));
         if self.show_commit {
@@ -110,8 +111,8 @@ impl GitSvnLogFormatter {
             }
         }
         out.push('\n');
-        out.push_str(&entry.message);
-        if !entry.message.ends_with('\n') {
+        out.push_str(message);
+        if !message.ends_with('\n') {
             out.push('\n');
         }
         let git_output = git_output.trim_matches(['\r', '\n']);
@@ -142,5 +143,20 @@ fn short_commit(commit: &str) -> &str {
 }
 
 fn line_count(message: &str) -> usize {
-    message.split('\n').count().max(1)
+    if message.bytes().all(|byte| byte == b'\n') {
+        1
+    } else {
+        message.split('\n').count().max(1)
+    }
+}
+
+fn collapse_trailing_blank_lines(message: &str) -> &str {
+    let trailing_newlines = message
+        .as_bytes()
+        .iter()
+        .rev()
+        .take_while(|byte| **byte == b'\n')
+        .count();
+    let retained = trailing_newlines.min(1);
+    &message[..message.len() - (trailing_newlines - retained)]
 }

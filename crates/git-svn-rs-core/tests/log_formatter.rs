@@ -191,7 +191,7 @@ fn oneline_skips_leading_blank_lines_like_frozen_log_pm() {
 }
 
 #[test]
-fn preserves_trailing_message_whitespace_and_counts_a_trailing_blank_line() {
+fn preserves_trailing_message_whitespace_and_the_frozen_blank_line() {
     let entry = GitSvnLogEntry {
         revision: 19,
         author: "alice".to_string(),
@@ -204,6 +204,23 @@ fn preserves_trailing_message_whitespace_and_counts_a_trailing_blank_line() {
 
     let rendered = GitSvnLogFormatter::new(false, false, false).format_entry(&entry);
     assert!(rendered.contains(" | 2 lines\n\nsubject  \n"));
+}
+
+#[test]
+fn collapses_repeated_trailing_blank_lines_like_frozen_log_pm() {
+    let entry = GitSvnLogEntry {
+        revision: 21,
+        author: "alice".to_string(),
+        date: "2026-01-01 00:00:00 +0000 (Thu, 01 Jan 2026)".to_string(),
+        message: "subject\n\n\n\n".to_string(),
+        commit: "0123456789abcdef".to_string(),
+        abbreviated_commit: None,
+        changed_paths: Vec::new(),
+    };
+
+    let rendered = GitSvnLogFormatter::new(false, false, false).format_entry(&entry);
+    assert!(rendered.contains(" | 2 lines\n\nsubject\n"));
+    assert!(!rendered.contains("subject\n\n"));
 }
 
 #[test]
