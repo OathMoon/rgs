@@ -19,6 +19,12 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: FetchArgs,
 ) -> Result<(), String> {
+    if args.fetch_all && args.remote.is_some() {
+        return Err("fetch cannot combine a remote name with --fetch-all".to_string());
+    }
+    if args.parent && args.fetch_all {
+        return Err("fetch --parent cannot be combined with --fetch-all".to_string());
+    }
     let work_tree = work_tree.into();
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
@@ -26,9 +32,6 @@ pub fn run_in_work_tree(
     validate_requested_urls_before_recovery(&git, &args)?;
     crate::import_transaction::recover_pending(&git)?;
     if args.parent {
-        if args.fetch_all {
-            return Err("fetch --parent cannot be combined with --fetch-all".to_string());
-        }
         let tracked =
             crate::commands::resolver::resolve_tracked_svn_allow_import_batch(git.work_tree())?;
         if let Some(remote) = &args.remote

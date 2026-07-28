@@ -2,6 +2,31 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 #[test]
+fn fetch_rejects_ambiguous_all_combinations_before_repository_access() {
+    let cases: &[(&[&str], &str)] = &[
+        (
+            &["fetch", "named", "--fetch-all"],
+            "cannot combine a remote name with --fetch-all",
+        ),
+        (
+            &["fetch", "--parent", "--fetch-all"],
+            "fetch --parent cannot be combined with --fetch-all",
+        ),
+    ];
+    for (args, message) in cases {
+        let temp = tempfile::tempdir().unwrap();
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(temp.path())
+            .args(*args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(*message));
+        assert!(!temp.path().join(".git").exists());
+    }
+}
+
+#[test]
 fn fetch_rejects_legacy_rev_db_without_creating_rev_map() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
