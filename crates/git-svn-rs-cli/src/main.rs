@@ -6,6 +6,12 @@ use git_svn_rs_core::diagnostics;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    if cli.quiet {
+        bail!("global --quiet is not supported in v1");
+    }
+    if cli.verbose > 0 {
+        bail!("global --verbose is not supported in v1");
+    }
     match cli.command {
         Command::Init(args) => commands::init::run(args).map_err(anyhow::Error::msg),
         Command::Clone(args) => {

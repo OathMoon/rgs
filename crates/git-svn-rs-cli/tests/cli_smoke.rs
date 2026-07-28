@@ -43,3 +43,23 @@ fn branch_is_explicitly_unsupported() {
         .failure()
         .stderr(predicate::str::contains("unsupported in v1: branch"));
 }
+
+#[test]
+fn inert_global_output_options_are_explicitly_rejected() {
+    for (option, canonical) in [
+        ("--quiet", "--quiet"),
+        ("-q", "--quiet"),
+        ("--verbose", "--verbose"),
+        ("-v", "--verbose"),
+    ] {
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .args([option, "diagnose"])
+            .assert()
+            .failure()
+            .stdout("")
+            .stderr(predicate::str::contains(format!(
+                "global {canonical} is not supported in v1"
+            )));
+    }
+}
