@@ -7,8 +7,6 @@ use super::*;
 use crate::path_url::add_path_to_url;
 use md5::{Digest, Md5};
 
-const SVN_ERR_CANCELLED: c_int = 200_015;
-
 struct FileBaton {
     path: String,
     source: *mut svn_stringbuf_t,
@@ -347,7 +345,9 @@ fn drive_report(
     })
 }
 
-unsafe fn baton<'a>(raw: *mut c_void) -> Option<&'a mut UpdateBaton<'a>> {
+// The operation baton lives on `drive_report`'s stack until the synchronous
+// reporter finishes. Each callback borrows it only for that callback invocation.
+unsafe fn baton<'borrow, 'editor>(raw: *mut c_void) -> Option<&'borrow mut UpdateBaton<'editor>> {
     if raw.is_null() {
         None
     } else {
@@ -359,9 +359,7 @@ unsafe fn callback_error(baton: &UpdateBaton<'_>) -> *mut svn_error_t {
     let Some(error) = baton.error.as_deref() else {
         return ptr::null_mut();
     };
-    let message = CString::new(error)
-        .unwrap_or_else(|_| CString::new("FetchEditor callback failed").expect("static string"));
-    unsafe { svn_error_create(SVN_ERR_CANCELLED, ptr::null_mut(), message.as_ptr()) }
+    unsafe { callback_error_message(error) }
 }
 
 unsafe fn path(raw: *const c_char) -> Option<String> {
@@ -378,7 +376,7 @@ unsafe extern "C" fn set_target_revision(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(edit_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn target-revision callback had no baton") };
     };
     match u32::try_from(revision) {
         Ok(revision) => baton.invoke(|editor| editor.open_root(revision)),
@@ -395,9 +393,12 @@ unsafe extern "C" fn open_root(
     _pool: *mut AprPoolT,
     root_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
-    if !root_baton.is_null() {
-        unsafe { *root_baton = edit_baton };
+    if edit_baton.is_null() || root_baton.is_null() {
+        return unsafe {
+            callback_error_message("libsvn open-root callback had null baton or output")
+        };
     }
+    unsafe { *root_baton = edit_baton };
     ptr::null_mut()
 }
 
@@ -408,7 +409,7 @@ unsafe extern "C" fn delete_entry(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(parent_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn delete callback had no baton") };
     };
     let Some(path) = (unsafe { path(raw_path) }) else {
         baton.fail("libsvn delete callback had a null path");
@@ -432,11 +433,14 @@ unsafe extern "C" fn add_directory(
     _pool: *mut AprPoolT,
     child_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
-    if !child_baton.is_null() {
-        unsafe { *child_baton = parent_baton };
+    if parent_baton.is_null() || child_baton.is_null() {
+        return unsafe {
+            callback_error_message("libsvn add-directory callback had null baton or output")
+        };
     }
+    unsafe { *child_baton = parent_baton };
     let Some(baton) = (unsafe { baton(parent_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn add-directory callback had no baton") };
     };
     let Some(path) = (unsafe { path(raw_path) }) else {
         baton.fail("libsvn add-directory callback had a null path");
@@ -457,9 +461,12 @@ unsafe extern "C" fn open_directory(
     _pool: *mut AprPoolT,
     child_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
-    if !child_baton.is_null() {
-        unsafe { *child_baton = parent_baton };
+    if parent_baton.is_null() || child_baton.is_null() {
+        return unsafe {
+            callback_error_message("libsvn open-directory callback had null baton or output")
+        };
     }
+    unsafe { *child_baton = parent_baton };
     if let Some(baton) = unsafe { baton(parent_baton) } {
         if let Some(path) = unsafe { path(raw_path) } {
             let path = baton.map_path(&path);
@@ -469,7 +476,7 @@ unsafe extern "C" fn open_directory(
         }
         return unsafe { callback_error(baton) };
     }
-    ptr::null_mut()
+    unsafe { callback_error_message("libsvn open-directory callback had no baton") }
 }
 
 unsafe extern "C" fn close_directory(
@@ -477,9 +484,12 @@ unsafe extern "C" fn close_directory(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     if let Some(baton) = unsafe { baton(dir_baton) } {
-        baton.directories.pop();
+        if baton.directories.pop().is_none() {
+            baton.fail("libsvn close-directory callback had no active directory");
+        }
+        return unsafe { callback_error(baton) };
     }
-    ptr::null_mut()
+    unsafe { callback_error_message("libsvn close-directory callback had no baton") }
 }
 
 unsafe extern "C" fn add_file(
@@ -490,11 +500,14 @@ unsafe extern "C" fn add_file(
     pool: *mut AprPoolT,
     file_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
-    if !file_baton.is_null() {
-        unsafe { *file_baton = parent_baton };
+    if parent_baton.is_null() || file_baton.is_null() || pool.is_null() {
+        return unsafe {
+            callback_error_message("libsvn add-file callback had null baton, output, or pool")
+        };
     }
+    unsafe { *file_baton = parent_baton };
     let Some(baton) = (unsafe { baton(parent_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn add-file callback had no baton") };
     };
     let Some(path) = (unsafe { path(raw_path) }) else {
         baton.fail("libsvn add-file callback had a null path");
@@ -529,6 +542,9 @@ unsafe extern "C" fn add_file(
     } else {
         ptr::null_mut()
     };
+    if copy.is_some() && source.is_null() {
+        baton.fail("libsvn failed to allocate copy-source buffer");
+    }
     baton.file = Some(FileBaton {
         path,
         source,
@@ -545,11 +561,14 @@ unsafe extern "C" fn open_file(
     pool: *mut AprPoolT,
     file_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
-    if !file_baton.is_null() {
-        unsafe { *file_baton = parent_baton };
+    if parent_baton.is_null() || file_baton.is_null() || pool.is_null() {
+        return unsafe {
+            callback_error_message("libsvn open-file callback had null baton, output, or pool")
+        };
     }
+    unsafe { *file_baton = parent_baton };
     let Some(baton) = (unsafe { baton(parent_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn open-file callback had no baton") };
     };
     let Some(path) = (unsafe { path(raw_path) }) else {
         baton.fail("libsvn open-file callback had a null path");
@@ -565,6 +584,9 @@ unsafe extern "C" fn open_file(
     );
     if !baton.base_contents.contains_key(&path) {
         baton.fail(format!("libsvn update had no base content for {path}"));
+    }
+    if source.is_null() {
+        baton.fail(format!("libsvn failed to allocate base buffer for {path}"));
     }
     baton.file = Some(FileBaton {
         path,
@@ -583,7 +605,7 @@ unsafe extern "C" fn apply_textdelta(
     handler_baton: *mut *mut c_void,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(file_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn apply-textdelta callback had no baton") };
     };
     if handler.is_null() || handler_baton.is_null() || pool.is_null() {
         baton.fail("libsvn apply-textdelta callback had null output or pool");
@@ -604,12 +626,20 @@ unsafe extern "C" fn apply_textdelta(
     if file.target.is_null() {
         file.target = unsafe { svn_stringbuf_create_empty(pool) };
     }
+    if file.target.is_null() {
+        baton.fail("libsvn failed to allocate textdelta target buffer");
+        return unsafe { callback_error(baton) };
+    }
     let source = if file.source.is_null() {
         unsafe { svn_stream_empty(pool) }
     } else {
         unsafe { svn_stream_from_stringbuf(file.source, pool) }
     };
     let target = unsafe { svn_stream_from_stringbuf(file.target, pool) };
+    if source.is_null() || target.is_null() {
+        baton.fail("libsvn failed to allocate textdelta streams");
+        return unsafe { callback_error(baton) };
+    }
     unsafe {
         svn_txdelta_apply(
             source,
@@ -621,6 +651,9 @@ unsafe extern "C" fn apply_textdelta(
             handler_baton,
         );
     }
+    if unsafe { (*handler).is_none() } || unsafe { (*handler_baton).is_null() } {
+        baton.fail("libsvn textdelta apply returned a null handler or baton");
+    }
     unsafe { callback_error(baton) }
 }
 
@@ -631,7 +664,7 @@ unsafe extern "C" fn change_file_prop(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(file_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn file-property callback had no baton") };
     };
     let Some(name) = (unsafe { path(raw_name) }) else {
         baton.fail("libsvn file-property callback had a null name");
@@ -644,7 +677,17 @@ unsafe extern "C" fn change_file_prop(
         baton.fail("libsvn file-property callback had no active file");
         return unsafe { callback_error(baton) };
     };
-    let value = (!value.is_null()).then(|| unsafe { svn_string_bytes(value) });
+    let value = if value.is_null() {
+        None
+    } else {
+        match unsafe { svn_string_bytes(value) } {
+            Ok(value) => Some(value),
+            Err(error) => {
+                baton.fail(error);
+                return unsafe { callback_error(baton) };
+            }
+        }
+    };
     baton.invoke(|editor| editor.change_file_prop_bytes(&path, &name, value.as_deref()));
     unsafe { callback_error(baton) }
 }
@@ -656,7 +699,9 @@ unsafe extern "C" fn change_dir_prop(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(dir_baton) }) else {
-        return ptr::null_mut();
+        return unsafe {
+            callback_error_message("libsvn directory-property callback had no baton")
+        };
     };
     let Some(name) = (unsafe { path(raw_name) }) else {
         baton.fail("libsvn directory-property callback had a null name");
@@ -665,18 +710,36 @@ unsafe extern "C" fn change_dir_prop(
     if name.starts_with("svn:entry:") {
         return ptr::null_mut();
     }
-    let path = baton.directories.last().cloned().unwrap_or_default();
-    let value = (!value.is_null()).then(|| unsafe { svn_string_bytes(value) });
+    let Some(path) = baton.directories.last().cloned() else {
+        baton.fail("libsvn directory-property callback had no active directory");
+        return unsafe { callback_error(baton) };
+    };
+    let value = if value.is_null() {
+        None
+    } else {
+        match unsafe { svn_string_bytes(value) } {
+            Ok(value) => Some(value),
+            Err(error) => {
+                baton.fail(error);
+                return unsafe { callback_error(baton) };
+            }
+        }
+    };
     baton.invoke(|editor| editor.change_directory_prop_bytes(&path, &name, value.as_deref()));
     unsafe { callback_error(baton) }
 }
 
-unsafe fn svn_string_bytes(value: *const svn_string_t) -> Vec<u8> {
+unsafe fn svn_string_bytes(value: *const svn_string_t) -> Result<Vec<u8>, String> {
+    if value.is_null() {
+        return Err("libsvn property callback had a null string".to_string());
+    }
     let value = unsafe { &*value };
-    if value.data.is_null() || value.len == 0 {
-        Vec::new()
+    if value.len == 0 {
+        Ok(Vec::new())
+    } else if value.data.is_null() {
+        Err("libsvn property string had nonzero length and null data".to_string())
     } else {
-        unsafe { slice::from_raw_parts(value.data.cast::<u8>(), value.len) }.to_vec()
+        Ok(unsafe { slice::from_raw_parts(value.data.cast::<u8>(), value.len) }.to_vec())
     }
 }
 
@@ -686,7 +749,7 @@ unsafe extern "C" fn close_file(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(file_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn close-file callback had no baton") };
     };
     if let Some(file) = baton.file.take() {
         let content = if file.target.is_null() {
@@ -702,6 +765,8 @@ unsafe extern "C" fn close_file(
         if !file.target.is_null() {
             baton.invoke(|editor| editor.apply_textdelta(&file.path, &content));
         }
+    } else {
+        baton.fail("libsvn close-file callback had no active file");
     }
     unsafe { callback_error(baton) }
 }
@@ -722,7 +787,7 @@ unsafe extern "C" fn close_edit(edit_baton: *mut c_void, _pool: *mut AprPoolT) -
         baton.invoke(|editor| editor.close_edit());
         return unsafe { callback_error(baton) };
     }
-    ptr::null_mut()
+    unsafe { callback_error_message("libsvn close-edit callback had no baton") }
 }
 
 unsafe extern "C" fn absent_directory(
@@ -731,7 +796,7 @@ unsafe extern "C" fn absent_directory(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(parent_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn absent-directory callback had no baton") };
     };
     let Some(path) = (unsafe { path(raw_path) }) else {
         baton.fail("libsvn absent-directory callback had a null path");
@@ -748,7 +813,7 @@ unsafe extern "C" fn absent_file(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     let Some(baton) = (unsafe { baton(parent_baton) }) else {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn absent-file callback had no baton") };
     };
     let Some(path) = (unsafe { path(raw_path) }) else {
         baton.fail("libsvn absent-file callback had a null path");
@@ -765,12 +830,12 @@ unsafe extern "C" fn abort_edit(edit_baton: *mut c_void, _pool: *mut AprPoolT) -
         baton.fail("libsvn aborted the native update edit");
         return unsafe { callback_error(baton) };
     }
-    ptr::null_mut()
+    unsafe { callback_error_message("libsvn abort-edit callback had no baton") }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::validate_md5;
+    use super::*;
 
     #[test]
     fn validates_md5_and_reports_mismatch() {
@@ -781,5 +846,34 @@ mod tests {
             error.contains("5d41402abc4b2a76b9719d911017c592"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn native_callbacks_return_owned_errors_for_null_required_inputs() {
+        AprRuntime::initialize().unwrap();
+        let _pool = AprRuntime.create_pool().unwrap();
+        let error = unsafe { open_root(ptr::null_mut(), 0, ptr::null_mut(), ptr::null_mut()) };
+        assert!(!error.is_null());
+        let detail = unsafe { svn_error_detail(error, "open_root") };
+        unsafe { svn_error_clear(error) };
+        assert!(detail.contains("null baton or output"), "{detail}");
+
+        let error = unsafe { close_file(ptr::null_mut(), ptr::null(), ptr::null_mut()) };
+        assert!(!error.is_null());
+        let detail = unsafe { svn_error_detail(error, "close_file") };
+        unsafe { svn_error_clear(error) };
+        assert!(detail.contains("no baton"), "{detail}");
+    }
+
+    #[test]
+    fn property_string_rejects_nonzero_length_with_null_data() {
+        let value = svn_string_t {
+            data: ptr::null(),
+            len: 1,
+        };
+
+        let error = unsafe { svn_string_bytes(&value) }.unwrap_err();
+
+        assert!(error.contains("nonzero length and null data"), "{error}");
     }
 }

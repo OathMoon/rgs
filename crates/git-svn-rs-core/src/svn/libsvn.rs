@@ -62,6 +62,8 @@ const SVN_AUTH_PRESENT_VALUE: &[u8] = b"1\0";
 #[cfg(git_svn_rs_libsvn_linked)]
 #[allow(dead_code)]
 const SVN_DEPTH_INFINITY: c_int = 3;
+#[cfg(git_svn_rs_libsvn_linked)]
+const SVN_ERR_CANCELLED: c_int = 200_015;
 
 #[derive(Default)]
 pub struct LibSvnBackend {
@@ -899,15 +901,19 @@ unsafe extern "C" fn prompt_simple_credentials(
     may_save: c_int,
     pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
+    if !cred.is_null() {
+        unsafe {
+            *cred = ptr::null_mut();
+        }
+    }
     if cred.is_null() || baton.is_null() || pool.is_null() {
-        return ptr::null_mut();
+        return unsafe {
+            callback_error_message("libsvn credential callback had null input or pool")
+        };
     }
 
     let prompt_baton = unsafe { &*(baton.cast::<SimplePromptBaton>()) };
     if prompt_baton.prompt.is_null() {
-        unsafe {
-            *cred = ptr::null_mut();
-        }
         return ptr::null_mut();
     }
     let prompt = unsafe { &*prompt_baton.prompt };
@@ -938,42 +944,29 @@ unsafe extern "C" fn prompt_simple_credentials(
         })
     })) {
         Ok(Ok(credentials)) => credentials,
-        Ok(Err(_)) | Err(_) => {
-            unsafe {
-                *cred = ptr::null_mut();
-            }
-            return ptr::null_mut();
-        }
+        Ok(Err(_)) | Err(_) => return ptr::null_mut(),
     };
     let username = match CString::new(credentials.username) {
         Ok(username) => username,
-        Err(_) => {
-            unsafe {
-                *cred = ptr::null_mut();
-            }
-            return ptr::null_mut();
-        }
+        Err(_) => return ptr::null_mut(),
     };
     let password = match CString::new(credentials.password) {
         Ok(password) => password,
-        Err(_) => {
-            unsafe {
-                *cred = ptr::null_mut();
-            }
-            return ptr::null_mut();
-        }
+        Err(_) => return ptr::null_mut(),
     };
     let raw_cred = unsafe { apr_palloc(pool, std::mem::size_of::<svn_auth_cred_simple_t>()) }
         as *mut svn_auth_cred_simple_t;
     if raw_cred.is_null() {
-        unsafe {
-            *cred = ptr::null_mut();
-        }
-        return ptr::null_mut();
+        return unsafe { callback_error_message("APR failed to allocate SVN credentials") };
+    }
+    let username = unsafe { apr_pstrdup(pool, username.as_ptr()) };
+    let password = unsafe { apr_pstrdup(pool, password.as_ptr()) };
+    if username.is_null() || password.is_null() {
+        return unsafe { callback_error_message("APR failed to copy SVN credentials") };
     }
     unsafe {
-        (*raw_cred).username = apr_pstrdup(pool, username.as_ptr());
-        (*raw_cred).password = apr_pstrdup(pool, password.as_ptr());
+        (*raw_cred).username = username;
+        (*raw_cred).password = password;
         (*raw_cred).may_save = if credentials.may_save { 1 } else { 0 };
         *cred = raw_cred;
     }
@@ -987,28 +980,48 @@ unsafe extern "C" fn receive_log_entry(
     _pool: *mut AprPoolT,
 ) -> *mut svn_error_t {
     if baton.is_null() || log_entry.is_null() {
-        return ptr::null_mut();
+        return unsafe { callback_error_message("libsvn log callback had a null baton or entry") };
     }
 
-    let revisions = unsafe { &mut *(baton as *mut Vec<RevisionEvent>) };
-    let log_entry = unsafe { &*log_entry };
-    if log_entry.revision < 0 {
-        return ptr::null_mut();
+    match catch_unwind(AssertUnwindSafe(|| {
+        let revisions = unsafe { &mut *(baton as *mut Vec<RevisionEvent>) };
+        let log_entry = unsafe { &*log_entry };
+        if log_entry.revision < 0 {
+            return Ok(());
+        }
+        let revision = u32::try_from(log_entry.revision).map_err(|_| {
+            format!(
+                "SVN log revision {} does not fit in u32",
+                log_entry.revision
+            )
+        })?;
+        revisions.push(RevisionEvent {
+            revision,
+            author: unsafe {
+                revprop_string(log_entry.revprops, SVN_PROP_REVISION_AUTHOR.as_ptr())
+            },
+            message: unsafe { revprop_string(log_entry.revprops, SVN_PROP_REVISION_LOG.as_ptr()) },
+            timestamp: unsafe {
+                revprop_string(log_entry.revprops, SVN_PROP_REVISION_DATE.as_ptr())
+            },
+            changed_paths: unsafe { changed_paths(log_entry.changed_paths2) },
+        });
+        Ok::<(), String>(())
+    })) {
+        Ok(Ok(())) => ptr::null_mut(),
+        Ok(Err(error)) => unsafe { callback_error_message(&error) },
+        Err(_) => unsafe { callback_error_message("libsvn log callback panicked") },
     }
+}
 
-    let Ok(revision) = u32::try_from(log_entry.revision) else {
-        return ptr::null_mut();
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn callback_error_message(message: &str) -> *mut svn_error_t {
+    let message = CString::new(message);
+    let message_ptr = match message.as_ref() {
+        Ok(message) => message.as_ptr(),
+        Err(_) => c"libsvn callback failed".as_ptr(),
     };
-
-    revisions.push(RevisionEvent {
-        revision,
-        author: unsafe { revprop_string(log_entry.revprops, SVN_PROP_REVISION_AUTHOR.as_ptr()) },
-        message: unsafe { revprop_string(log_entry.revprops, SVN_PROP_REVISION_LOG.as_ptr()) },
-        timestamp: unsafe { revprop_string(log_entry.revprops, SVN_PROP_REVISION_DATE.as_ptr()) },
-        changed_paths: unsafe { changed_paths(log_entry.changed_paths2) },
-    });
-
-    ptr::null_mut()
+    unsafe { svn_error_create(SVN_ERR_CANCELLED, ptr::null_mut(), message_ptr) }
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
@@ -1067,12 +1080,14 @@ unsafe fn hash_key_to_string(key: *const c_void, key_len: isize) -> Option<Strin
     if key_len >= 0 {
         let bytes = unsafe { slice::from_raw_parts(key.cast::<u8>(), key_len as usize) };
         Some(String::from_utf8_lossy(bytes).into_owned())
-    } else {
+    } else if key_len == APR_HASH_KEY_STRING {
         Some(
             unsafe { CStr::from_ptr(key.cast::<c_char>()) }
                 .to_string_lossy()
                 .into_owned(),
         )
+    } else {
+        None
     }
 }
 
@@ -2253,6 +2268,45 @@ mod tests {
 
         assert!(error.is_null());
         assert!(credentials.is_null());
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn production_callbacks_return_owned_errors_for_invalid_inputs() {
+        AprRuntime::initialize().unwrap();
+        let _pool = AprRuntime.create_pool().unwrap();
+        let error = unsafe { receive_log_entry(ptr::null_mut(), ptr::null_mut(), ptr::null_mut()) };
+        assert!(!error.is_null());
+        let detail = unsafe { svn_error_detail(error, "receive_log_entry") };
+        unsafe { svn_error_clear(error) };
+        assert!(detail.contains("null baton or entry"), "{detail}");
+
+        let error = unsafe {
+            prompt_simple_credentials(
+                ptr::null_mut(),
+                ptr::null_mut(),
+                ptr::null(),
+                ptr::null(),
+                0,
+                ptr::null_mut(),
+            )
+        };
+        assert!(!error.is_null());
+        let detail = unsafe { svn_error_detail(error, "prompt_simple_credentials") };
+        unsafe { svn_error_clear(error) };
+        assert!(detail.contains("null input or pool"), "{detail}");
+    }
+
+    #[cfg(git_svn_rs_libsvn_linked)]
+    #[test]
+    fn callback_error_falls_back_for_interior_nul_without_panicking() {
+        AprRuntime::initialize().unwrap();
+        let _pool = AprRuntime.create_pool().unwrap();
+        let error = unsafe { callback_error_message("bad\0callback") };
+        assert!(!error.is_null());
+        let detail = unsafe { svn_error_detail(error, "callback") };
+        unsafe { svn_error_clear(error) };
+        assert!(detail.contains("libsvn callback failed"), "{detail}");
     }
 
     #[cfg(git_svn_rs_libsvn_linked)]
