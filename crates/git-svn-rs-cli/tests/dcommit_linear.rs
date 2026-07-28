@@ -2551,8 +2551,14 @@ fn dcommit_without_dry_run_is_guarded_for_non_mock_urls() {
         .arg("dcommit")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("mock://"))
-        .stderr(predicate::str::contains("not implemented"));
+        .stderr(predicate::str::contains("HTTP(S) SVN dcommit"))
+        .stderr(predicate::str::contains("before recovery"));
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/git-svn/dcommit-journal")
+            .exists(),
+        "unsupported remote profiles must fail before journal setup"
+    );
 }
 
 fn clone_mock_repo(parent: &std::path::Path) -> std::path::PathBuf {

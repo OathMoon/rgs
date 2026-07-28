@@ -39,6 +39,7 @@ pub fn run_in_work_tree(
     let git = GitCli::new(&work_tree);
     if crate::import_transaction::has_pending_batch(&git)? {
         let pending = resolve_tracked_svn_allow_import_batch(&work_tree)?;
+        crate::path_url::validate_fetch_url(&pending.config.url)?;
         let refnames = crate::import_transaction::pending_batch_refnames(&git)?;
         for refname in refnames {
             fetch::run_for_tracking_identity(
@@ -61,6 +62,9 @@ pub fn run_in_work_tree(
         .map(|record| record.revision)
         .unwrap_or(0);
     let target_url = args.commit_url.as_deref().unwrap_or(&tracked.config.url);
+    if !args.dry_run {
+        crate::path_url::validate_dcommit_write_urls(target_url, &tracked.config.url)?;
+    }
     let commits = if tracked.git.rev_parse("HEAD").is_ok() {
         tracked
             .git
@@ -755,7 +759,7 @@ struct DcommitSvnOptions {
 
 impl DcommitSvnOptions {
     fn command_args(&self, args: &[String]) -> Vec<String> {
-        let mut command_args = Vec::new();
+        let mut command_args = vec!["--non-interactive".to_string()];
         if let Some(config_dir) = &self.config_dir {
             command_args.push("--config-dir".to_string());
             command_args.push(config_dir.clone());
@@ -1010,6 +1014,7 @@ mod tests {
         assert_eq!(
             options.command_args(&["checkout".to_string(), "url".to_string()]),
             vec![
+                "--non-interactive",
                 "--config-dir",
                 "cli-config",
                 "--username",

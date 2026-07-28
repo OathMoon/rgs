@@ -23,6 +23,7 @@ pub fn run_in_work_tree(
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
     verify_remote_fetch_ref_sanity(&git)?;
+    validate_requested_urls_before_recovery(&git, &args)?;
     crate::import_transaction::recover_pending(&git)?;
     if args.parent {
         if args.fetch_all {
@@ -64,6 +65,7 @@ pub(crate) fn run_for_tracking_identity(
     shared: &SharedFetchArgs,
 ) -> Result<(), String> {
     let work_tree = work_tree.into();
+    crate::path_url::validate_fetch_url(&config.url)?;
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
     verify_remote_fetch_ref_sanity(&git)?;
@@ -77,6 +79,7 @@ fn fetch_config(
     shared: &SharedFetchArgs,
     selected_ref: Option<&str>,
 ) -> Result<(), String> {
+    crate::path_url::validate_fetch_url(&config.url)?;
     config.validate_mapping_destinations()?;
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
@@ -117,6 +120,24 @@ fn fetch_config(
     backend.import_revisions(git, &config, import_options, selected_ref)?;
     persist_repository_identity(git, &config, &repos_root, &uuid)?;
     persist_discovery_high_water(git, &config, selected_ref, scanned_end)?;
+    Ok(())
+}
+
+fn validate_requested_urls_before_recovery(git: &GitCli, args: &FetchArgs) -> Result<(), String> {
+    if args.parent {
+        let tracked =
+            crate::commands::resolver::resolve_tracked_svn_allow_import_batch(git.work_tree())?;
+        return crate::path_url::validate_fetch_url(&tracked.config.url);
+    }
+    let remotes = if args.fetch_all {
+        svn_remote_names(git)?
+    } else {
+        vec![args.remote.clone().unwrap_or_else(|| "svn".to_string())]
+    };
+    for remote in remotes {
+        let config = read_remote_config(git, &remote)?;
+        crate::path_url::validate_fetch_url(&config.url)?;
+    }
     Ok(())
 }
 

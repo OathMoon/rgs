@@ -109,6 +109,33 @@ fn fetch_uses_existing_mock_remote_config() {
 }
 
 #[test]
+fn fetch_rejects_unvalidated_remote_profiles_before_metadata_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["init", "https://svn.example/repo/trunk", "work"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("HTTP(S) SVN fetch"))
+        .stderr(predicate::str::contains("deferred"));
+
+    assert!(
+        !work.join(".git/svn").exists(),
+        "unvalidated remote profiles must fail before creating SVN metadata"
+    );
+}
+
+#[test]
 fn failed_fetch_does_not_advance_discovery_high_water() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");

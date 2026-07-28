@@ -1,4 +1,7 @@
-use git_svn_rs_core::path_url::{add_path_to_url, canonicalize_path, canonicalize_url, join_paths};
+use git_svn_rs_core::path_url::{
+    SvnUrlProfile, add_path_to_url, canonicalize_path, canonicalize_url, join_paths,
+    svn_url_profile, validate_dcommit_write_urls, validate_fetch_url,
+};
 
 #[test]
 fn canonicalize_path_collapses_dotdot_and_slashes() {
@@ -26,5 +29,29 @@ fn adds_path_to_url_without_double_slashes() {
     assert_eq!(
         add_path_to_url("https://svn.example/repo/", "/trunk"),
         "https://svn.example/repo/trunk"
+    );
+}
+
+#[test]
+fn remote_protocol_profiles_fail_closed_until_validated() {
+    assert_eq!(svn_url_profile("file:///repo"), SvnUrlProfile::File);
+    assert_eq!(svn_url_profile("svn://host/repo"), SvnUrlProfile::Svn);
+    assert_eq!(svn_url_profile("HTTPS://host/repo"), SvnUrlProfile::Http);
+    assert!(validate_fetch_url("file:///repo").is_ok());
+    assert!(validate_fetch_url("svn://host/repo").is_ok());
+    assert!(
+        validate_fetch_url("https://host/repo")
+            .unwrap_err()
+            .contains("deferred")
+    );
+    assert!(
+        validate_fetch_url("svn+ssh://host/repo")
+            .unwrap_err()
+            .contains("deferred")
+    );
+    assert!(
+        validate_dcommit_write_urls("https://host/repo", "https://host/repo")
+            .unwrap_err()
+            .contains("before recovery")
     );
 }
