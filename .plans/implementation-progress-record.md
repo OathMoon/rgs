@@ -2,11 +2,12 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `b7d84b7 Stream successful rebase progress`
+Committed HEAD at audit: `9ad34d8 Run explicit log pager under TTY`
 Latest implementation commits:
 
 - `77e0c0c Lock placeholder no-op compatibility`
 - `b7d84b7 Stream successful rebase progress`
+- `9ad34d8 Run explicit log pager under TTY`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -30,9 +31,8 @@ The repository now provides an initially complete core workflow for the covered
 and mock profiles, plus an implemented plain HTTP read profile whose strict
 Apache DAV fixture awaits its first equipped execution. It remains a preview
 rather than a general `git svn` replacement: HTTPS, real OpenSSH
-authentication/trust, and remote dcommit are not validated; interactive TTY
-paging remains incomplete; and the required hosted compatibility
-workflow has not yet had its first successful run.
+authentication/trust, and remote dcommit are not validated, and the required
+hosted compatibility workflow has not yet had its first successful run.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
@@ -41,7 +41,7 @@ workflow has not yet had its first successful run.
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, byte properties, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
-| 6 readonly | `behavior-pass` for covered non-interactive profiles | scoped queries/log/reset/gc plus option-complete rebase and streamed progress | TTY pager |
+| 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, v4 intent-bound recovery, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 40/40 locally; Linux workflow defined | first hosted execution |
 
@@ -145,9 +145,9 @@ workflow has not yet had its first successful run.
   unrelated remotes, and retains the original upstream identity after fetch.
 - CLI rebase inherits Git's stderr so successful progress is streamed without
   changing the core/dcommit captured-output interface.
-- Log accepts typed `--pager=<value>` as a frozen no-op when stdout is not a TTY,
-  rather than passing it incorrectly to `git log`; an explicit TTY pager request
-  fails clearly until interactive streaming is implemented.
+- Log treats typed `--pager=<value>` as a frozen no-op when stdout is not a TTY
+  and starts the explicit pager with inherited output when stdout is a TTY; a
+  Linux PTY fixture verifies invocation and complete record output.
 - Reset `--parent` selects the nearest earlier nonzero rev_map record, including
   sparse histories, while exact reset remains exact.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
@@ -207,7 +207,7 @@ Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`; `cargo test -p git-svn-rs-core --lib` (117/117)
-- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (64/64)
+- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (65/65)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (37/37; HTTP DAV skipped without Apache)
@@ -226,9 +226,9 @@ Verified on 2026-07-28:
 
 ### P1
 
-- Add real TTY pager execution for release-level output fidelity.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
+
 ## Important Commit Anchors
 
 - `7f531ee`, `ab52ef1`: CLI, workspace, config/mapping foundations.
@@ -276,15 +276,15 @@ Verified on 2026-07-28:
   and post-rebase durable restart boundaries.
 - `77e0c0c`: frozen placeholder-without-preserve no-op semantics.
 - `b7d84b7`: inherited successful Git rebase stderr/progress streaming.
+- `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 6 release gap: add PTY-backed log pager execution.
-2. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
-3. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
-4. Phase 8: run hosted CI when credentials/external execution are available.
+1. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
+2. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
+3. Phase 8: run hosted CI when credentials/external execution are available.
 
 ## Handoff Notes
 
