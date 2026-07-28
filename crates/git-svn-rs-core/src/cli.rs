@@ -139,6 +139,8 @@ pub struct RebaseArgs {
     pub local: bool,
     #[arg(short = 'm', short_alias = 'M', long = "merge")]
     pub merge: bool,
+    #[arg(short = 'p', long = "rebase-merges")]
+    pub rebase_merges: bool,
     #[arg(short = 's', long = "strategy")]
     pub strategy: Option<String>,
     #[command(flatten)]

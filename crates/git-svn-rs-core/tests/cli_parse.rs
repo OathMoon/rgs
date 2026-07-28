@@ -21,6 +21,21 @@ fn parses_rebase_local_alias() {
 }
 
 #[test]
+fn parses_rebase_merges_short_alias() {
+    let cli = Cli::parse_from(["git-svn-rs", "rebase", "-p"]);
+    let Command::Rebase(args) = cli.command else {
+        panic!("expected rebase");
+    };
+    assert!(args.rebase_merges);
+
+    let cli = Cli::parse_from(["git-svn-rs", "rebase", "--rebase-merges"]);
+    let Command::Rebase(args) = cli.command else {
+        panic!("expected rebase");
+    };
+    assert!(args.rebase_merges);
+}
+
+#[test]
 fn parses_clone_with_standard_layout() {
     let cli = Cli::parse_from([
         "git-svn-rs",

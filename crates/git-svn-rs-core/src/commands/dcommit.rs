@@ -577,6 +577,7 @@ impl PostSubmit for FileSvnPostSubmit<'_> {
                 dry_run: false,
                 local: false,
                 merge: false,
+                rebase_merges: false,
                 strategy: None,
                 shared: self.rebase_shared.clone(),
             },
@@ -951,7 +952,7 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
     if ctx.no_rebase {
         out.push_str("Skipped rebase (--no-rebase).\n");
     } else {
-        let rebase_output = ctx.git.rebase(ctx.refname, false, None)?;
+        let rebase_output = ctx.git.rebase(ctx.refname, false, None, false)?;
         if rebase_output.is_empty() {
             out.push_str("Rebased onto tracked SVN ref.\n");
         } else {

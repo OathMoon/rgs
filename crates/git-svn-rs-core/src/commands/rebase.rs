@@ -30,7 +30,10 @@ pub fn run_in_work_tree(
         )?;
     }
     let tracked = resolve_tracked_svn(work_tree)?;
-    tracked
-        .git
-        .rebase(&tracked.refname, args.merge, args.strategy.as_deref())
+    tracked.git.rebase(
+        &tracked.refname,
+        args.merge,
+        args.strategy.as_deref(),
+        args.rebase_merges,
+    )
 }

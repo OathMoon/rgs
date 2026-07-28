@@ -1734,6 +1734,70 @@ fn rebase_local_skips_remote_fetch() {
 }
 
 #[test]
+fn rebase_merges_preserves_local_merge_topology() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let base = commit_file(
+        work,
+        "base.txt",
+        "base\n",
+        "base\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let upstream = commit_file(
+        work,
+        "upstream.txt",
+        "upstream\n",
+        "upstream\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map(work, &[&base, &upstream]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &upstream]);
+
+    git(work, ["checkout", "-b", "side", &base]);
+    commit_file(work, "side.txt", "side\n", "side");
+    git(work, ["checkout", "-b", "topic", &base]);
+    commit_file(work, "topic.txt", "topic\n", "topic");
+    git(work, ["merge", "--no-ff", "side", "-m", "merge side"]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["rebase", "--local", "--rebase-merges"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        git_output(work, ["merge-base", "HEAD", "refs/remotes/git-svn"]).trim(),
+        upstream
+    );
+    assert_eq!(
+        git_output(
+            work,
+            [
+                "rev-list",
+                "--count",
+                "--merges",
+                "refs/remotes/git-svn..HEAD",
+            ],
+        )
+        .trim(),
+        "1"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("side.txt")).unwrap(),
+        "side\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("topic.txt")).unwrap(),
+        "topic\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(work.join("upstream.txt")).unwrap(),
+        "upstream\n"
+    );
+}
+
+#[test]
 fn rebase_fetches_and_runs_git_rebase_against_tracked_ref() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
