@@ -732,6 +732,108 @@ fn dcommit_fetches_after_authenticated_svnserve_write_when_reads_require_auth() 
 }
 
 #[test]
+fn dcommit_auth_failure_stops_before_journal_or_svn_write() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_read_write_auth("alice", "secret").unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let work = parent.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 50 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "must not write with bad credentials",
+        ],
+    );
+    let revision_before = svn_stdout(&[
+        "--username",
+        "alice",
+        "--password",
+        "secret",
+        "--no-auth-cache",
+        "--non-interactive",
+        "info",
+        "--show-item",
+        "revision",
+        &server.repo_url(),
+    ]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--password",
+            "wrong",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .failure();
+
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/origin/trunk/dcommit-journal")
+            .exists(),
+        "authentication preflight must fail before creating a dcommit journal"
+    );
+    assert_eq!(
+        svn_stdout(&[
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+            "--non-interactive",
+            "info",
+            "--show-item",
+            "revision",
+            &server.repo_url(),
+        ]),
+        revision_before,
+        "authentication failure must not create an SVN revision"
+    );
+}
+
+#[test]
 fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}

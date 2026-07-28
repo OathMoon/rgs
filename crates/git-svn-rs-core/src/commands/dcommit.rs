@@ -290,6 +290,7 @@ fn dcommit_file_svn(
     };
     let config_fingerprint = recovery_config_fingerprint(RecoveryFingerprintInput {
         target: &target,
+        commit_url_override: ctx.commit_url_override,
         no_rebase: ctx.no_rebase,
         mergeinfo: ctx.mergeinfo,
     });
@@ -1023,6 +1024,31 @@ mod tests {
                 "cli-secret",
                 "--no-auth-cache",
                 "checkout",
+                "url",
+            ]
+        );
+    }
+
+    #[test]
+    fn dcommit_svn_options_apply_persisted_non_secret_auth_defaults() {
+        let options = dcommit_svn_options(
+            Some("persisted-user"),
+            Some("persisted-config"),
+            true,
+            None,
+            &default_shared_args(),
+        );
+
+        assert_eq!(
+            options.command_args(&["info".to_string(), "url".to_string()]),
+            vec![
+                "--non-interactive",
+                "--config-dir",
+                "persisted-config",
+                "--username",
+                "persisted-user",
+                "--no-auth-cache",
+                "info",
                 "url",
             ]
         );

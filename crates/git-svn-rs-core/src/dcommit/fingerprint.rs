@@ -9,10 +9,12 @@ use super::diff_planner::{
 use super::journal::DcommitTargetIdentity;
 
 const FORMAT_VERSION: u32 = 1;
+const RECOVERY_CONFIG_FORMAT_VERSION: u32 = 2;
 
 #[derive(Clone, Copy, Debug)]
 pub struct RecoveryFingerprintInput<'a> {
     pub target: &'a DcommitTargetIdentity,
+    pub commit_url_override: bool,
     pub no_rebase: bool,
     pub mergeinfo: Option<&'a str>,
 }
@@ -38,7 +40,10 @@ pub fn message_fingerprint(message: &str) -> String {
 }
 
 pub fn canonical_recovery_config_bytes(input: RecoveryFingerprintInput<'_>) -> Vec<u8> {
-    let mut encoder = Encoder::new("git-svn-rs/dcommit-recovery-config");
+    let mut encoder = Encoder::new_with_version(
+        "git-svn-rs/dcommit-recovery-config",
+        RECOVERY_CONFIG_FORMAT_VERSION,
+    );
     encoder.structure("target", |encoder| {
         encoder.field_str("remote_id", &input.target.remote_id);
         encoder.field_str("repository_root_url", &input.target.repository_root_url);
@@ -47,6 +52,7 @@ pub fn canonical_recovery_config_bytes(input: RecoveryFingerprintInput<'_>) -> V
         encoder.field_path("rev_map_path", Path::new(&input.target.rev_map_path));
         encoder.field_str("commit_url", &input.target.commit_url);
     });
+    encoder.field_bool("commit_url_override", input.commit_url_override);
     encoder.field_bool("no_rebase", input.no_rebase);
     encoder.option("mergeinfo", input.mergeinfo, |encoder, value| {
         encoder.value_str(value);
@@ -135,9 +141,13 @@ struct Encoder {
 
 impl Encoder {
     fn new(domain: &str) -> Self {
+        Self::new_with_version(domain, FORMAT_VERSION)
+    }
+
+    fn new_with_version(domain: &str, version: u32) -> Self {
         let mut encoder = Self { bytes: Vec::new() };
         encoder.value_bytes(domain.as_bytes());
-        encoder.value_u32(FORMAT_VERSION);
+        encoder.value_u32(version);
         encoder
     }
 
@@ -374,6 +384,7 @@ mod tests {
         let target = target();
         let input = RecoveryFingerprintInput {
             target: &target,
+            commit_url_override: false,
             no_rebase: false,
             mergeinfo: None,
         };
@@ -400,6 +411,13 @@ mod tests {
         );
         assert_ne!(
             recovery_config_fingerprint(RecoveryFingerprintInput {
+                commit_url_override: true,
+                ..input
+            }),
+            expected
+        );
+        assert_ne!(
+            recovery_config_fingerprint(RecoveryFingerprintInput {
                 no_rebase: true,
                 ..input
             }),
@@ -411,6 +429,44 @@ mod tests {
                 ..input
             }),
             expected
+        );
+    }
+
+    #[test]
+    fn recovery_config_encoding_has_its_own_version_marker() {
+        let encoded = Encoder::new_with_version(
+            "git-svn-rs/dcommit-recovery-config",
+            RECOVERY_CONFIG_FORMAT_VERSION,
+        )
+        .finish();
+        assert_eq!(
+            encoded,
+            [
+                0, 0, 0, 0, 0, 0, 0, 34, b'g', b'i', b't', b'-', b's', b'v', b'n', b'-', b'r',
+                b's', b'/', b'd', b'c', b'o', b'm', b'm', b'i', b't', b'-', b'r', b'e', b'c', b'o',
+                b'v', b'e', b'r', b'y', b'-', b'c', b'o', b'n', b'f', b'i', b'g', 0, 0, 0, 2,
+            ]
+        );
+    }
+
+    #[test]
+    fn recovery_config_fingerprint_matches_the_v2_fixed_vector() {
+        let target = target();
+        let actual = recovery_config_fingerprint(RecoveryFingerprintInput {
+            target: &target,
+            commit_url_override: false,
+            no_rebase: false,
+            mergeinfo: None,
+        });
+        #[cfg(unix)]
+        assert_eq!(
+            actual,
+            "dea600009ba3bdf162b614e4bc01bb3787a29e9410c47f4fa17280334f507e2b"
+        );
+        #[cfg(windows)]
+        assert_eq!(
+            actual,
+            "b6027b42a02142824b763d069743f867c23d95c06eccd821095df48da1b9d30f"
         );
     }
 }

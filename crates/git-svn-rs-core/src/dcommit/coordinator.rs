@@ -252,9 +252,12 @@ where
                         }
                     };
                     if svn_revision <= expected_base_revision {
-                        return Err(CoordinatorError::Invalid(format!(
-                            "commit sink returned SVN revision {svn_revision} after base revision {expected_base_revision}"
-                        )));
+                        return Err(CoordinatorError::AmbiguousSubmission {
+                            svn_revision: Some(svn_revision),
+                            detail: format!(
+                                "the commit sink returned a non-advancing revision after base r{expected_base_revision}"
+                            ),
+                        });
                     }
                     prepared.journal.entries[index].state = EntryState::Submitted { svn_revision };
                     if let Err(error) = self.persist(&prepared.journal) {

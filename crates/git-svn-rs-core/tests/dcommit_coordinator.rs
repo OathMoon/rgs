@@ -480,6 +480,41 @@ fn submit_error_leaves_durable_in_flight_state_and_retry_does_not_resubmit() {
 }
 
 #[test]
+fn non_advancing_submit_revision_remains_an_ambiguous_in_flight_submission() {
+    let mut prepared = prepared(1, false);
+    let (mut coordinator, sink, _, persistence) = make_coordinator([head(40, oid('a'))], [40]);
+
+    assert!(matches!(
+        coordinator.run(&mut prepared),
+        Err(CoordinatorError::AmbiguousSubmission {
+            svn_revision: Some(40),
+            ..
+        })
+    ));
+    assert_eq!(sink.borrow().submitted, vec![oid('b')]);
+    assert!(matches!(
+        prepared.journal.entries[0].state,
+        EntryState::SubmissionInFlight {
+            expected_base_revision: 40,
+            ..
+        }
+    ));
+    assert!(matches!(
+        persistence.borrow().snapshots.last().unwrap().entries[0].state,
+        EntryState::SubmissionInFlight { .. }
+    ));
+
+    assert!(matches!(
+        coordinator.run(&mut prepared),
+        Err(CoordinatorError::AmbiguousSubmission {
+            svn_revision: None,
+            ..
+        })
+    ));
+    assert_eq!(sink.borrow().submitted, vec![oid('b')]);
+}
+
+#[test]
 fn manual_adoption_verifies_before_persisting_and_never_resubmits() {
     let mut prepared = prepared(1, true);
     set_recovery_state(
