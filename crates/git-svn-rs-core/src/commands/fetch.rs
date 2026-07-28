@@ -948,6 +948,18 @@ mod tests {
     }
 
     #[test]
+    fn placeholder_filename_without_preserve_empty_dirs_is_a_noop() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        let mut shared = default_shared_args();
+        shared.placeholder_filename = ".custom-empty".to_string();
+
+        let effective = effective_fetch_config(config, &shared, 0).unwrap();
+
+        assert!(!effective.preserve_empty_dirs);
+        assert_eq!(effective.placeholder_filename, ".gitignore");
+    }
+
+    #[test]
     fn metadata_identity_overrides_fail_after_import() {
         let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
         let mut shared = default_shared_args();
