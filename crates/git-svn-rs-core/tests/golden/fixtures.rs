@@ -2750,14 +2750,7 @@ fn parse_changed_path_line(line: &str) -> Option<(String, String)> {
     if !matches!(action.chars().next(), Some('A' | 'D' | 'M' | 'R' | 'C')) {
         return None;
     }
-    Some((action.to_string(), normalize_changed_path(path)))
-}
-
-fn normalize_changed_path(path: &str) -> String {
-    path.trim_start_matches('/')
-        .strip_prefix("trunk/")
-        .unwrap_or_else(|| path.trim_start_matches('/'))
-        .to_string()
+    Some((action.to_string(), path.to_string()))
 }
 
 fn normalize_find_rev_output(revision: u32, output: &str) -> String {
@@ -3484,7 +3477,7 @@ mod tests {
         let header = "r2 | alice | 2026-01-01 08:00:00 +0800 (Thu, 01 Jan 2026) | 2 lines";
         let incremental = format!("{header}\n\nsubject\nbody\n");
         let verbose = format!(
-            "------------------------------------------------------------------------\n{header}\nChanged paths:\n   M /trunk/src/lib.rs\n\nsubject\nbody\n------------------------------------------------------------------------\n"
+            "------------------------------------------------------------------------\n{header}\nChanged paths:\n   M src/lib.rs\n\nsubject\nbody\n------------------------------------------------------------------------\n"
         );
         let expected_header = "revision r2\nauthor alice\ndate 2026-01-01 08:00:00 +0800 (Thu, 01 Jan 2026)\ncount 2 lines";
 

@@ -57,7 +57,6 @@ pub fn run_in_work_tree(
         args.verbose,
         args.incremental,
     );
-    let verbose_path_prefix = verbose_path_prefix(&tracked.svn_path, &tracked.config.url);
     let authors = load_authors(&tracked, args.authors_file.as_deref())?;
     let mut entries = Vec::new();
     let mut last_revision = None;
@@ -95,7 +94,7 @@ pub fn run_in_work_tree(
                 .git
                 .commit_name_status(fields[0])?
                 .into_iter()
-                .map(|change| format_verbose_change(&verbose_path_prefix, &change))
+                .filter_map(|change| format_verbose_change(&change))
                 .collect()
         } else {
             Vec::new()
@@ -225,38 +224,11 @@ fn parse_timezone_offset(timezone: &str) -> Result<i64, String> {
     Ok(if bytes[0] == b'-' { -seconds } else { seconds })
 }
 
-fn verbose_path_prefix(svn_path: &str, url: &str) -> String {
-    let svn_path = svn_path.trim_matches('/');
-    if !svn_path.is_empty() {
-        return svn_path.to_string();
-    }
-    url.trim_end_matches('/')
-        .rsplit('/')
-        .next()
-        .filter(|segment| !segment.contains("://"))
-        .unwrap_or("")
-        .to_string()
-}
-
-fn format_verbose_change(svn_path: &str, change: &crate::git::GitNameStatus) -> String {
-    let status = change.status.chars().next().unwrap_or('M');
-    let path = svn_log_path(svn_path, &change.path);
-    if let Some(old_path) = &change.old_path {
-        return format!(
-            "{status} {path} (from {})",
-            svn_log_path(svn_path, old_path)
-        );
-    }
-    format!("{status} {path}")
-}
-
-fn svn_log_path(prefix: &str, path: &str) -> String {
-    match (prefix.trim_matches('/'), path.trim_start_matches('/')) {
-        ("", "") => "/".to_string(),
-        ("", path) => format!("/{path}"),
-        (prefix, "") => format!("/{prefix}"),
-        (prefix, path) => format!("/{prefix}/{path}"),
-    }
+fn format_verbose_change(change: &crate::git::GitNameStatus) -> Option<String> {
+    // Frozen Log.pm only recognizes one-letter name-status records. Git emits
+    // scored rename/copy records (for example R100), which it leaves out.
+    matches!(change.status.as_str(), "A" | "C" | "R" | "M" | "D" | "T")
+        .then(|| format!("{} {}", change.status, change.path))
 }
 
 fn split_git_svn_footer(message: &str) -> Option<(GitSvnId, String)> {

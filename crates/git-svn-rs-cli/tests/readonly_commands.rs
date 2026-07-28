@@ -869,11 +869,11 @@ fn log_verbose_prints_changed_paths() {
         .assert()
         .success()
         .stdout(predicate::str::contains("Changed paths:"))
-        .stdout(predicate::str::contains("   A /trunk/src/lib.rs"));
+        .stdout(predicate::str::contains("   A src/lib.rs"));
 }
 
 #[test]
-fn log_verbose_detects_renamed_paths() {
+fn log_verbose_matches_frozen_omission_of_scored_renames() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
@@ -902,9 +902,8 @@ fn log_verbose_detects_renamed_paths() {
         .args(["log", "--verbose", "--revision", "2"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "   R /trunk/new.txt (from /trunk/old.txt)",
-        ));
+        .stdout(predicate::str::contains("rename"))
+        .stdout(predicate::str::contains("Changed paths:").not());
 }
 
 #[test]
