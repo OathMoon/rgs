@@ -632,6 +632,18 @@ impl FetchEditor for FilteredFetchEditor<'_> {
         self.inner.change_file_prop(path, name, value)
     }
 
+    fn change_file_prop_bytes(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&[u8]>,
+    ) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.change_file_prop_bytes(path, name, value)
+    }
+
     fn change_directory_prop(
         &mut self,
         path: &str,
@@ -642,6 +654,18 @@ impl FetchEditor for FilteredFetchEditor<'_> {
             return Ok(());
         }
         self.inner.change_directory_prop(path, name, value)
+    }
+
+    fn change_directory_prop_bytes(
+        &mut self,
+        path: &str,
+        name: &str,
+        value: Option<&[u8]>,
+    ) -> Result<(), String> {
+        if !self.path_is_included(path)? {
+            return Ok(());
+        }
+        self.inner.change_directory_prop_bytes(path, name, value)
     }
 
     fn apply_textdelta(&mut self, path: &str, content: &[u8]) -> Result<(), String> {

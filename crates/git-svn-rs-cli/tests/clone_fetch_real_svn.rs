@@ -1191,6 +1191,78 @@ fn incremental_fetch_reconciles_empty_directory_placeholders_from_the_final_tree
 }
 
 #[test]
+fn incremental_fetch_preserves_binary_unknown_property_bytes_in_unhandled_log() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let upstream = temp.path().join("upstream");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_svn(temp.path(), &["checkout", &fixture.url(), "upstream"]);
+
+    let property_value = temp.path().join("binary-property-value");
+    std::fs::write(
+        &property_value,
+        [0x00, 0xf0, 0x28, 0x8c, 0x28, 0xff, b'\n', b'%', b'A', b' '],
+    )
+    .unwrap();
+    run_svn(
+        &upstream,
+        &[
+            "propset",
+            "--non-interactive",
+            "git-svn-rs:binary",
+            "--file",
+            property_value.to_str().unwrap(),
+            "trunk/run.sh",
+        ],
+    );
+    run_svn(
+        &upstream,
+        &[
+            "commit",
+            "--non-interactive",
+            "-m",
+            "set binary custom property",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    let unhandled =
+        std::fs::read_to_string(work.join(".git/svn/refs/remotes/origin/trunk/unhandled.log"))
+            .unwrap();
+    let encoded_property =
+        "  +file_prop: trunk/run.sh git-svn-rs:binary %00%F0%28%8C%28%FF%0A%25A%20";
+    assert_eq!(
+        unhandled
+            .lines()
+            .filter(|line| *line == encoded_property)
+            .count(),
+        1,
+        "binary property should be recorded byte-exactly:\n{unhandled}"
+    );
+}
+
+#[test]
 fn incremental_fetch_preserves_an_unowned_real_placeholder_named_file() {
     match require_svn_tools() {
         Ok(()) => {}
