@@ -1,4 +1,5 @@
 use chrono::{Local, TimeZone};
+use std::io::IsTerminal;
 
 use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::cli::LogArgs;
@@ -43,11 +44,16 @@ pub fn run_in_work_tree(
     } else {
         Some(tracked.refname.clone())
     };
+    let color = args.color
+        || tracked
+            .git
+            .config_color_bool("color.diff", std::io::stdout().is_terminal())?;
     let raw = match log_target {
         Some(log_target) => tracked.git.log_records(
             &log_target,
             exact_revision.map(|_| 1),
             !args.non_recursive,
+            color,
             &git_log_args,
         )?,
         None => String::new(),

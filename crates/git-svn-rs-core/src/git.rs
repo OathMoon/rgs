@@ -121,6 +121,16 @@ impl GitCli {
         <Self as GitBackend>::config_get_all(self, key)
     }
 
+    pub fn config_color_bool(&self, key: &str, stdout_is_terminal: bool) -> Result<bool, String> {
+        self.run_args([
+            "config",
+            "--get-colorbool",
+            key,
+            if stdout_is_terminal { "true" } else { "false" },
+        ])
+        .map(|value| value.trim() == "true")
+    }
+
     pub fn git_svn_metadata_get(&self, key: &str) -> Result<Option<String>, String> {
         let path = self.git_svn_metadata_path()?;
         let old_path = path
@@ -290,9 +300,16 @@ impl GitCli {
         rev: &str,
         limit: Option<u32>,
         recursive: bool,
+        color: bool,
         passthrough_args: &[String],
     ) -> Result<String, String> {
-        self.run_args(log_record_args(rev, limit, recursive, passthrough_args))
+        self.run_args(log_record_args(
+            rev,
+            limit,
+            recursive,
+            color,
+            passthrough_args,
+        ))
     }
 
     pub fn commit_summaries_between(
@@ -504,6 +521,7 @@ fn log_record_args(
     rev: &str,
     limit: Option<u32>,
     recursive: bool,
+    color: bool,
     passthrough_args: &[String],
 ) -> Vec<String> {
     let mut args = vec![
@@ -515,6 +533,9 @@ fn log_record_args(
     }
     if let Some(limit) = limit {
         args.push(format!("-n{limit}"));
+    }
+    if color {
+        args.push("--color".to_string());
     }
     args.push(rev.to_string());
     args.extend(passthrough_args.iter().cloned());
@@ -803,7 +824,7 @@ mod tests {
     #[test]
     fn log_recursive_arguments_match_frozen_git_svn() {
         assert_eq!(
-            log_record_args("refs/remotes/git-svn", None, true, &[])[2..],
+            log_record_args("refs/remotes/git-svn", None, true, false, &[])[2..],
             ["-r", "refs/remotes/git-svn"]
         );
         assert_eq!(
@@ -811,9 +832,10 @@ mod tests {
                 "refs/remotes/git-svn",
                 Some(2),
                 false,
+                true,
                 &["--raw".to_string()]
             )[2..],
-            ["-n2", "refs/remotes/git-svn", "--raw"]
+            ["-n2", "--color", "refs/remotes/git-svn", "--raw"]
         );
     }
 

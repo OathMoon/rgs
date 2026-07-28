@@ -178,6 +178,8 @@ pub struct LogArgs {
     pub authors_file: Option<String>,
     #[arg(long = "non-recursive")]
     pub non_recursive: bool,
+    #[arg(long)]
+    pub color: bool,
     #[arg(short = 'n', long)]
     pub limit: Option<u32>,
     #[arg(short = 'v', long)]

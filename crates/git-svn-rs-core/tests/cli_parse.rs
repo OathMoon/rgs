@@ -173,6 +173,16 @@ fn parses_log_non_recursive() {
 }
 
 #[test]
+fn parses_log_color_as_typed_option() {
+    let cli = Cli::parse_from(["git-svn-rs", "log", "--color", "-p"]);
+    let Command::Log(args) = cli.command else {
+        panic!("expected log");
+    };
+    assert!(args.color);
+    assert_eq!(args.git_log_args, ["-p"]);
+}
+
+#[test]
 fn find_rev_before_and_after_conflict() {
     let err =
         Cli::try_parse_from(["git-svn-rs", "find-rev", "--before", "--after", "r3"]).unwrap_err();

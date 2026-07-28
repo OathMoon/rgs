@@ -1441,6 +1441,43 @@ fn log_passthrough_patch_and_raw_output_are_preserved() {
 }
 
 #[test]
+fn log_color_preserves_ansi_for_explicit_and_configured_modes() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
+    git(work, ["config", "color.diff", "false"]);
+
+    let explicit = Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--color", "-p"])
+        .output()
+        .unwrap();
+    assert!(explicit.status.success());
+    assert!(explicit.stdout.windows(2).any(|bytes| bytes == b"\x1b["));
+    assert!(String::from_utf8_lossy(&explicit.stdout).contains("r1 |"));
+
+    git(work, ["config", "color.diff", "always"]);
+    let configured = Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "-p"])
+        .output()
+        .unwrap();
+    assert!(configured.status.success());
+    assert!(configured.stdout.windows(2).any(|bytes| bytes == b"\x1b["));
+    assert!(String::from_utf8_lossy(&configured.stdout).contains("r1 |"));
+}
+
+#[test]
 fn gc_preserves_unverifiable_legacy_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
