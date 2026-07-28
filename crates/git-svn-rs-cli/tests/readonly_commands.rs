@@ -1478,6 +1478,30 @@ fn log_color_preserves_ansi_for_explicit_and_configured_modes() {
 }
 
 #[test]
+fn log_pager_is_a_non_tty_noop_and_not_git_passthrough() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    let baseline = Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--oneline"])
+        .output()
+        .unwrap();
+    let paged = Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--oneline", "--pager=definitely-not-a-command"])
+        .output()
+        .unwrap();
+
+    assert!(baseline.status.success());
+    assert!(paged.status.success());
+    assert_eq!(paged.stdout, baseline.stdout);
+    assert_eq!(paged.stderr, baseline.stderr);
+}
+
+#[test]
 fn gc_preserves_unverifiable_legacy_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

@@ -16,6 +16,7 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: LogArgs,
 ) -> Result<String, String> {
+    validate_pager(args.pager.as_deref(), std::io::stdout().is_terminal())?;
     let work_tree = work_tree.into();
     let git = GitCli::new(&work_tree);
     let (treeish, git_log_args) = select_log_treeish(&git, &args.git_log_args);
@@ -138,6 +139,13 @@ pub fn run_in_work_tree(
         out.push_str("------------------------------------------------------------------------\n");
     }
     Ok(out)
+}
+
+fn validate_pager(pager: Option<&str>, stdout_is_terminal: bool) -> Result<(), String> {
+    if pager.is_some() && stdout_is_terminal {
+        return Err("interactive log paging is not implemented in v1".to_string());
+    }
+    Ok(())
 }
 
 fn select_log_treeish(git: &GitCli, args: &[String]) -> (Option<String>, Vec<String>) {
@@ -328,10 +336,22 @@ fn parse_revision(value: &str) -> Result<u32, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_svn_date, parse_timezone_offset, split_git_svn_footer, svn_author};
+    use super::{
+        format_svn_date, parse_timezone_offset, split_git_svn_footer, svn_author, validate_pager,
+    };
     use crate::authors::parse_authors_file;
 
     const FOOTER: &str = "git-svn-id: mock://repo/trunk@2 mock-uuid";
+
+    #[test]
+    fn pager_is_a_noop_off_tty_and_explicit_at_tty_boundary() {
+        assert!(validate_pager(Some("anything"), false).is_ok());
+        assert_eq!(
+            validate_pager(Some("cat"), true).unwrap_err(),
+            "interactive log paging is not implemented in v1"
+        );
+        assert!(validate_pager(None, true).is_ok());
+    }
 
     #[test]
     fn footer_split_preserves_crlf_body() {

@@ -184,6 +184,8 @@ pub struct LogArgs {
     pub non_recursive: bool,
     #[arg(long)]
     pub color: bool,
+    #[arg(long)]
+    pub pager: Option<String>,
     #[arg(short = 'n', long)]
     pub limit: Option<u32>,
     #[arg(short = 'v', long)]
