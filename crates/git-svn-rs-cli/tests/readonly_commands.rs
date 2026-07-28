@@ -1501,6 +1501,49 @@ fn log_pager_is_a_non_tty_noop_and_not_git_passthrough() {
     assert_eq!(paged.stderr, baseline.stderr);
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn log_runs_explicit_pager_when_stdout_is_a_pty() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if std::process::Command::new("script")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("script(1) is unavailable; skipping PTY pager coverage");
+        return;
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let marker = temp.path().join("pager-invoked");
+    let pager = temp.path().join("pager.sh");
+    assert!(!marker.to_string_lossy().contains('\''));
+    assert!(!pager.to_string_lossy().contains('\''));
+    std::fs::write(
+        &pager,
+        format!("#!/bin/sh\n: > '{}'\nexec cat\n", marker.to_string_lossy()),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&pager).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&pager, permissions).unwrap();
+
+    let binary = env!("CARGO_BIN_EXE_git-svn-rs");
+    assert!(!binary.contains('\''));
+    let command = format!("'{binary}' log --oneline --pager='{}'", pager.display());
+    Command::new("script")
+        .current_dir(&work)
+        .args(["-qec", &command, "/dev/null"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("r2 |"));
+    assert!(
+        marker.is_file(),
+        "explicit pager was not invoked under a PTY"
+    );
+}
+
 #[test]
 fn gc_preserves_unverifiable_legacy_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();

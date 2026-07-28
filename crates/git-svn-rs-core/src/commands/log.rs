@@ -1,5 +1,6 @@
 use chrono::{Local, TimeZone};
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
+use std::process::{Command, Stdio};
 
 use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::cli::LogArgs;
@@ -16,7 +17,8 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: LogArgs,
 ) -> Result<String, String> {
-    validate_pager(args.pager.as_deref(), std::io::stdout().is_terminal())?;
+    let stdout_is_terminal = std::io::stdout().is_terminal();
+    validate_pager(args.pager.as_deref())?;
     let work_tree = work_tree.into();
     let git = GitCli::new(&work_tree);
     let (treeish, git_log_args) = select_log_treeish(&git, &args.git_log_args);
@@ -48,7 +50,7 @@ pub fn run_in_work_tree(
     let color = args.color
         || tracked
             .git
-            .config_color_bool("color.diff", std::io::stdout().is_terminal())?;
+            .config_color_bool("color.diff", stdout_is_terminal)?;
     let raw = match log_target {
         Some(log_target) => tracked.git.log_records(
             &log_target,
@@ -138,12 +140,55 @@ pub fn run_in_work_tree(
     if !args.oneline && !args.incremental {
         out.push_str("------------------------------------------------------------------------\n");
     }
+    if stdout_is_terminal && let Some(pager) = args.pager.as_deref() {
+        run_pager(pager, out.as_bytes())?;
+        out.clear();
+    }
     Ok(out)
 }
 
-fn validate_pager(pager: Option<&str>, stdout_is_terminal: bool) -> Result<(), String> {
-    if pager.is_some() && stdout_is_terminal {
-        return Err("interactive log paging is not implemented in v1".to_string());
+fn validate_pager(pager: Option<&str>) -> Result<(), String> {
+    if pager.is_some_and(|pager| pager.trim().is_empty()) {
+        return Err("--pager requires a non-empty command".to_string());
+    }
+    Ok(())
+}
+
+fn run_pager(pager: &str, input: &[u8]) -> Result<(), String> {
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("cmd");
+        command.args(["/C", pager]);
+        command
+    };
+    #[cfg(not(windows))]
+    let mut command = {
+        let mut command = Command::new("sh");
+        command.args(["-c", pager]);
+        command
+    };
+    let mut child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .map_err(|error| format!("failed to start log pager `{pager}`: {error}"))?;
+    let write_result = child
+        .stdin
+        .take()
+        .ok_or_else(|| "log pager stdin was not available".to_string())?
+        .write_all(input);
+    let write_error = write_result
+        .err()
+        .filter(|error| error.kind() != std::io::ErrorKind::BrokenPipe);
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed to wait for log pager `{pager}`: {error}"))?;
+    if let Some(error) = write_error {
+        return Err(format!("failed to write log output to pager: {error}"));
+    }
+    if !status.success() {
+        return Err(format!("log pager `{pager}` exited with status {status}"));
     }
     Ok(())
 }
@@ -344,13 +389,13 @@ mod tests {
     const FOOTER: &str = "git-svn-id: mock://repo/trunk@2 mock-uuid";
 
     #[test]
-    fn pager_is_a_noop_off_tty_and_explicit_at_tty_boundary() {
-        assert!(validate_pager(Some("anything"), false).is_ok());
+    fn pager_command_must_be_nonempty() {
+        assert!(validate_pager(Some("anything")).is_ok());
         assert_eq!(
-            validate_pager(Some("cat"), true).unwrap_err(),
-            "interactive log paging is not implemented in v1"
+            validate_pager(Some("  ")).unwrap_err(),
+            "--pager requires a non-empty command"
         );
-        assert!(validate_pager(None, true).is_ok());
+        assert!(validate_pager(None).is_ok());
     }
 
     #[test]
