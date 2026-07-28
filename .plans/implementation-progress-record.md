@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `32dd27a Match frozen log trailing blank lines`
+Committed HEAD at audit: `d42efb3 Harden dcommit recovery intent`
 Latest implementation commits:
 
 - `f11ecd1 Complete ref safety and linked replay parity`
@@ -14,6 +14,8 @@ Latest implementation commits:
 - `57eb773 Match frozen verbose log paths`
 - `08eef18 Harden libsvn callback boundaries`
 - `32dd27a Match frozen log trailing blank lines`
+- `cf90c68 Support frozen non-recursive log mode`
+- `d42efb3 Harden dcommit recovery intent`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -118,6 +120,8 @@ compatibility workflow has not yet had its first successful run.
   follow the frozen omission behavior, and golden normalization no longer hides
   an erroneous SVN path prefix. Repeated trailing blank message lines collapse
   with frozen line-count framing.
+- Log supports frozen `--non-recursive`; default invocation carries Git's `-r`
+  recursive-diff flag and the option removes it explicitly.
 - Rebase accepts both frozen `-m`/`-M` merge forms and passes merge/strategy
   arguments to Git in the frozen order.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
@@ -134,6 +138,11 @@ compatibility workflow has not yet had its first successful run.
   multiple active journals, and completed-ledger overlap fail closed.
 - `--adopt-revision` resumes an unknown-outcome local file/svn submission only
   after exact imported-tree verification.
+- Recovery fingerprints include explicit commit-URL override intent under a
+  versioned v2 encoding. A non-advancing sink revision remains durably in-flight
+  and ambiguous, so retry cannot resubmit it.
+- Authenticated svnserve preflight failure is verified to leave neither an SVN
+  revision nor a dcommit journal.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
   options consistently.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
@@ -157,7 +166,8 @@ Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
-- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (57/57)
+- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (58/58)
+- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (45/45)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (35/35)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
@@ -206,6 +216,9 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
 - `08eef18`: fail-closed libsvn callback inputs, lifecycle, allocation, property,
   panic, and owned-error boundaries.
 - `32dd27a`: frozen trailing-blank collapse and message line counts.
+- `cf90c68`: frozen recursive/non-recursive Git log argument contract.
+- `d42efb3`: commit-URL recovery intent, versioned fingerprints, non-advancing
+  submission ambiguity, and authenticated no-write preflight evidence.
 
 ## Next Steps
 
