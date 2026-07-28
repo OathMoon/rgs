@@ -2,11 +2,12 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `fa5f81f Fail closed on unvalidated SVN protocols`
+Committed HEAD at audit: `9f4b223 Harden readonly log and rebase compatibility`
 Latest implementation commits:
 
 - `f11ecd1 Complete ref safety and linked replay parity`
 - `fa5f81f Fail closed on unvalidated SVN protocols`
+- `9f4b223 Harden readonly log and rebase compatibility`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -38,7 +39,7 @@ compatibility workflow has not yet had its first successful run.
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
 | 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, CLI and linked delta replay, raw binary properties | full FFI callback audit and remote transport validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
-| 6 readonly | `in-progress` | scoped find-rev/info/log/reset/gc/rebase | full Log.pm modes and merge/strategy exactness |
+| 6 readonly | `in-progress` | scoped find-rev/info/log/reset/gc/rebase; tree-ish/revision anchors and merge strategy contract | remaining Log.pm formatting modes |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, local file/svn exact write comparisons | remote write-back and broader recovery faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 40/40 locally; Linux workflow defined | first hosted execution |
 
@@ -93,6 +94,12 @@ compatibility workflow has not yet had its first successful run.
   recoverable `reset`, and current-parent selective `rebase` are implemented.
 - Log preserves author/date/message framing, numeric direction, oneline revision
   width, and record-safe stat/raw/patch passthrough for covered cases.
+- Log resolves an explicit pre-pathspec tree-ish to its own tracking identity,
+  anchors exact revisions through that identity's rev_map, counts only showable
+  SVN records for `--limit`, suppresses adjacent duplicate revisions, and emits
+  the frozen separator for an empty normal result.
+- Rebase accepts both frozen `-m`/`-M` merge forms and passes merge/strategy
+  arguments to Git in the frozen order.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
   fail closed while reset/import recovery is pending.
 
@@ -130,6 +137,7 @@ Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
+- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (55/55)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (34/34)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
@@ -171,6 +179,8 @@ the immediate focused rerun passed, and the subsequent full linked-core run pass
   binary properties, release gates, and README refresh.
 - `fa5f81f`: remote URL profiles, early fail-closed fetch/dcommit, and uniform
   non-interactive SVN writes.
+- `9f4b223`: tree-ish/rev_map-scoped Log.pm selection and framing plus the frozen
+  rebase merge/strategy command contract.
 
 ## Next Steps
 
