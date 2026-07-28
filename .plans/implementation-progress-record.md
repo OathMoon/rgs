@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `d42efb3 Harden dcommit recovery intent`
+Committed HEAD at audit: `a820e13 Reject mock commit URL overrides`
 Latest implementation commits:
 
 - `f11ecd1 Complete ref safety and linked replay parity`
@@ -16,6 +16,11 @@ Latest implementation commits:
 - `32dd27a Match frozen log trailing blank lines`
 - `cf90c68 Support frozen non-recursive log mode`
 - `d42efb3 Harden dcommit recovery intent`
+- `ea77681 Support local-only rebase mode`
+- `1f87814 Reject inert global output options`
+- `dbf6dc8 Fix sparse reset parent selection`
+- `29d2545 Reject ambiguous fetch scope early`
+- `a820e13 Reject mock commit URL overrides`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -42,12 +47,12 @@ compatibility workflow has not yet had its first successful run.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
-| 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported commands | inert options and global verbosity exactness |
+| 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, reversible ref sanitization | remaining option/layout edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
 | 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, audited fail-closed FFI callbacks, CLI/linked delta replay, invalid UTF-8 properties E2E | remote transport validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
-| 6 readonly | `in-progress` | scoped find-rev/info/log/reset/gc/rebase; tree-ish/revision anchors and merge strategy contract | remaining Log.pm formatting modes |
+| 6 readonly | `in-progress` | scoped find-rev/info/log/reset/gc/rebase; local-only rebase and sparse parent reset | remaining Log.pm/rebase topology modes |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, local file/svn exact write comparisons | remote write-back and broader recovery faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 40/40 locally; Linux workflow defined | first hosted execution |
 
@@ -59,6 +64,8 @@ compatibility workflow has not yet had its first successful run.
   compatibility shim.
 - Typed command surface, explicit v1 exclusions, config serialization, mapping
   globs, authors, filters, URL helpers, and metadata option conflict checks.
+- Global `-q`/`--quiet` and `-v`/`--verbose` fail explicitly instead of being
+  parsed and silently ignored.
 - SHA-1/SHA-256 rev_maps support zero records, non-creating reads, append ordering,
   OS locks, fsync, reset, gitfiles, and commondir.
 - Legacy rev_db/v0-v2/mixed layouts and multi-UUID ambiguity fail closed without
@@ -98,6 +105,8 @@ compatibility workflow has not yet had its first successful run.
   the covered frozen Perl artifacts.
 - HTTP(S) and `svn+ssh` fetch are explicitly deferred and fail before SVN metadata
   creation or import recovery. mock/file/svn remain the accepted profiles.
+- Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
+  combinations fail before metadata or recovery side effects.
 
 ### Readonly and maintenance
 
@@ -124,6 +133,10 @@ compatibility workflow has not yet had its first successful run.
   recursive-diff flag and the option removes it explicitly.
 - Rebase accepts both frozen `-m`/`-M` merge forms and passes merge/strategy
   arguments to Git in the frozen order.
+- Rebase supports frozen `-l`/`--local`, skipping remote fetch while retaining
+  resolver, clean-worktree, and tracking-branch checks.
+- Reset `--parent` selects the nearest earlier nonzero rev_map record, including
+  sparse histories, while exact reset remains exact.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
   fail closed while reset/import recovery is pending.
 
@@ -147,6 +160,8 @@ compatibility workflow has not yet had its first successful run.
   options consistently.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
   before journal discovery/lock or write preparation. Dry-run remains descriptive.
+- Mock write-back rejects `--commit-url` before journal, lock, or remote mutation
+  because the mock sink cannot honor a URL override.
 
 ### Golden and release evidence
 
@@ -166,8 +181,8 @@ Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
-- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (58/58)
-- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (45/45)
+- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (60/60)
+- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (46/46)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (35/35)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
@@ -188,11 +203,12 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
 
 ### P1
 
-- Complete the remaining frozen Log.pm modes and rebase merge/strategy semantics.
+- Complete the remaining frozen Log.pm modes and rebase topology semantics.
 - Validate HTTP(S) DAV/SSL and `svn+ssh` with dedicated fixtures before enabling
   either read profile.
 - Extend dcommit recovery fault injection and commit-URL/auth intent coverage.
-- Review remaining inert CLI options and either implement or reject them explicitly.
+- Decide whether an explicit `--placeholder-filename` without
+  `--preserve-empty-dirs` should fail rather than remain a low-risk no-op.
 
 ## Important Commit Anchors
 
@@ -219,6 +235,9 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
 - `cf90c68`: frozen recursive/non-recursive Git log argument contract.
 - `d42efb3`: commit-URL recovery intent, versioned fingerprints, non-advancing
   submission ambiguity, and authenticated no-write preflight evidence.
+- `ea77681`, `dbf6dc8`: local-only rebase and sparse rev_map parent reset.
+- `1f87814`, `29d2545`, `a820e13`: early rejection of inert global output
+  options, ambiguous fetch scope, and unsupported mock commit-URL overrides.
 
 ## Next Steps
 
