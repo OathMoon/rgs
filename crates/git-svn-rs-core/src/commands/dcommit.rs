@@ -62,6 +62,11 @@ pub fn run_in_work_tree(
         .map(|record| record.revision)
         .unwrap_or(0);
     let target_url = args.commit_url.as_deref().unwrap_or(&tracked.config.url);
+    if !args.dry_run && args.commit_url.is_some() && tracked.config.url.starts_with("mock://") {
+        return Err(
+            "--commit-url is not supported for mock:// dcommit write-back in v1".to_string(),
+        );
+    }
     if !args.dry_run {
         crate::path_url::validate_dcommit_write_urls(target_url, &tracked.config.url)?;
     }

@@ -79,6 +79,39 @@ fn dcommit_mock_write_back_registers_linear_commit() {
 }
 
 #[test]
+fn dcommit_mock_rejects_commit_url_before_journal_or_write() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    make_commit(&work, "local.txt", "local\n", "local change");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--commit-url",
+            "mock://repo/trunk",
+            "--no-rebase",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--commit-url is not supported for mock://",
+        ));
+
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/git-svn/dcommit-journal")
+            .exists()
+    );
+}
+
+#[test]
 fn dcommit_mock_executes_typed_rename_and_copy_plan() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
