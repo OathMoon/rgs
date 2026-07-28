@@ -103,6 +103,41 @@ impl JournalPersistence for StorePersistence {
     }
 }
 
+struct SubmittedAckLossPersistence {
+    store: JournalStore,
+    _lock: JournalLock,
+    failed: bool,
+}
+
+impl SubmittedAckLossPersistence {
+    fn acquire(store: JournalStore) -> Self {
+        let lock = store.acquire_lock().unwrap();
+        Self {
+            store,
+            _lock: lock,
+            failed: false,
+        }
+    }
+}
+
+impl JournalPersistence for SubmittedAckLossPersistence {
+    fn persist(&mut self, journal: &DcommitJournal) -> Result<(), String> {
+        self.store
+            .save(&self._lock, journal)
+            .map_err(|error| error.to_string())?;
+        if !self.failed
+            && journal
+                .entries
+                .iter()
+                .any(|entry| matches!(entry.state, EntryState::Submitted { .. }))
+        {
+            self.failed = true;
+            return Err("injected submitted-save acknowledgement loss".to_owned());
+        }
+        Ok(())
+    }
+}
+
 fn oid(character: char) -> String {
     character.to_string().repeat(40)
 }
@@ -222,6 +257,64 @@ fn restart_from_submitted_snapshot_fetches_without_resubmitting() {
         .load()
         .unwrap()
         .unwrap();
+    assert_eq!(completed.batch_state, BatchState::Complete);
+    assert!(matches!(
+        completed.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision: 41,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn submitted_save_acknowledgement_loss_reloads_and_fetches_without_resubmitting() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("dcommit-journal");
+    let sink_state = Rc::new(RefCell::new(SinkState::default()));
+    let post_state = Rc::new(RefCell::new(PostState::default()));
+    let mut first_process = prepared(journal(EntryState::Queued, BatchState::Submitting, true));
+    let mut first_coordinator = Coordinator::new(
+        sink(
+            &sink_state,
+            [RemoteHead {
+                revision: 40,
+                tracking_oid: oid('a'),
+            }],
+            [41],
+        ),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        SubmittedAckLossPersistence::acquire(JournalStore::new(&directory)),
+    );
+
+    assert!(matches!(
+        first_coordinator.run(&mut first_process),
+        Err(CoordinatorError::AmbiguousSubmission {
+            svn_revision: Some(41),
+            ..
+        })
+    ));
+    drop(first_coordinator);
+    drop(first_process);
+    let persisted = load(&JournalStore::new(&directory));
+    assert!(matches!(
+        persisted.entries[0].state,
+        EntryState::Submitted { svn_revision: 41 }
+    ));
+
+    let mut second_process = prepared(persisted);
+    let mut second_coordinator = Coordinator::new(
+        sink(&sink_state, [], []),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), None),
+    );
+    second_coordinator.run(&mut second_process).unwrap();
+    drop(second_coordinator);
+
+    assert_eq!(sink_state.borrow().remote_checks, 1);
+    assert_eq!(sink_state.borrow().submissions, 1);
+    assert_eq!(post_state.borrow().fetches, vec![41]);
+    let completed = load(&JournalStore::new(&directory));
     assert_eq!(completed.batch_state, BatchState::Complete);
     assert!(matches!(
         completed.entries[0].state,
