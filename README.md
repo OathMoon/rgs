@@ -51,17 +51,19 @@ The strict golden suite passes 40/40 covered scenarios against the frozen Perl
 - dirty-index rejection with no SVN write or Rust recovery journal.
 
 This is a `behavior-pass` for those scenarios, not a blanket compatibility claim.
-General HTTP(S) support has not reached a validated profile, `svn+ssh://` remains
-unvalidated/deferred, and remote write-back beyond the covered local `file://` and
-local `svn://` fixtures is not claimed.
+Plain HTTP reads have a loopback Apache DAV fixture and are enabled separately
+from HTTPS. HTTPS trust/authentication, real OpenSSH key/host-trust behavior, and
+remote write-back beyond the covered local `file://` and local `svn://` fixtures
+are not claimed. Configured `svn+ssh://` external-tunnel reads are covered without
+implying `svn+ssh` dcommit support.
 
 ## `svn-libsvn` feature status
 
 The `svn-libsvn` Cargo feature enables the native Subversion backend and probes for
 the platform's libsvn development libraries at build time. Default builds do not
-require libsvn. Linked libsvn read/update behavior has local `file://` and `svn://`
-fixture coverage; this does not imply general remote-protocol or native write-back
-support.
+require libsvn. Linked libsvn read/update behavior has `file://`, local `svn://`,
+configured `svn+ssh://` tunnel, and loopback HTTP DAV fixture coverage; this does
+not imply HTTPS, general OpenSSH authentication, or native write-back support.
 
 On Ubuntu or Debian, install the system development packages with:
 

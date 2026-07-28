@@ -21,8 +21,9 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes \
-            build-essential gettext libcurl4-openssl-dev libexpat1-dev \
-            libssl-dev libsvn-dev libsvn-perl pkg-config subversion zlib1g-dev
+            apache2 apache2-utils build-essential gettext libapache2-mod-svn \
+            libcurl4-openssl-dev libexpat1-dev libssl-dev libsvn-dev \
+            libsvn-perl pkg-config subversion zlib1g-dev
 
       - name: Build frozen Git v2.54.0
         env:
@@ -44,6 +45,9 @@ jobs:
           git svn --version
           svn --version --quiet
           pkg-config --modversion libsvn_client
+          test -x /usr/sbin/apache2
+          test -x /usr/bin/htpasswd
+          test -f /usr/lib/apache2/modules/mod_dav_svn.so
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

@@ -45,6 +45,22 @@ pub fn require_svnserve() -> Result<(), SvnToolPolicy> {
     }
 }
 
+#[cfg(unix)]
+#[allow(dead_code)]
+pub fn require_http_dav() -> Result<(), SvnToolPolicy> {
+    if http_dav_tools().is_some() {
+        Ok(())
+    } else if strict_compat() {
+        Err(SvnToolPolicy::Fail(
+            "apache2/httpd, htpasswd, and mod_dav_svn are required".to_string(),
+        ))
+    } else {
+        Err(SvnToolPolicy::Skip(
+            "skipping: apache2/httpd, htpasswd, and mod_dav_svn are required".to_string(),
+        ))
+    }
+}
+
 pub struct StandardSvnFixture {
     _tmp: TempDir,
     repo: PathBuf,
@@ -439,12 +455,199 @@ impl Drop for SvnServe {
     }
 }
 
+#[cfg(unix)]
+#[allow(dead_code)]
+pub struct HttpDav {
+    child: Child,
+    _runtime: TempDir,
+    port: u16,
+}
+
+#[cfg(unix)]
+static HTTP_DAV_START_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(unix)]
+#[allow(dead_code)]
+impl HttpDav {
+    pub fn start_basic(
+        repository_root: &Path,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, String> {
+        let (apache, module_dir) =
+            http_dav_tools().ok_or_else(|| "Apache DAV SVN tools are unavailable".to_string())?;
+        let _start_guard = HTTP_DAV_START_LOCK
+            .lock()
+            .map_err(|_| "HTTP DAV start lock is poisoned".to_string())?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        drop(listener);
+
+        let runtime = tempfile::Builder::new()
+            .prefix("git-svn-rs-http-dav-")
+            .tempdir()
+            .map_err(|e| e.to_string())?;
+        let runtime_path = apache_path(runtime.path())?;
+        let repository_root = apache_path(repository_root)?;
+        let password_file = runtime.path().join("htpasswd");
+        let password_output = Command::new("htpasswd")
+            .args(["-bcB"])
+            .arg(&password_file)
+            .arg(username)
+            .arg(password)
+            .output()
+            .map_err(|e| format!("htpasswd failed to start: {e}"))?;
+        if !password_output.status.success() {
+            return Err("htpasswd failed to create the HTTP DAV credential file".to_string());
+        }
+        let password_file = apache_path(&password_file)?;
+        let module_dir = apache_path(&module_dir)?;
+        let config_path = runtime.path().join("httpd.conf");
+        let config = format!(
+            concat!(
+                "ServerRoot \"{runtime_path}\"\n",
+                "DefaultRuntimeDir \"{runtime_path}\"\n",
+                "PidFile \"{runtime_path}/httpd.pid\"\n",
+                "Listen 127.0.0.1:{port}\n",
+                "ServerName 127.0.0.1\n",
+                "LoadModule mpm_event_module \"{module_dir}/mod_mpm_event.so\"\n",
+                "LoadModule authn_core_module \"{module_dir}/mod_authn_core.so\"\n",
+                "LoadModule authn_file_module \"{module_dir}/mod_authn_file.so\"\n",
+                "LoadModule authz_core_module \"{module_dir}/mod_authz_core.so\"\n",
+                "LoadModule authz_user_module \"{module_dir}/mod_authz_user.so\"\n",
+                "LoadModule auth_basic_module \"{module_dir}/mod_auth_basic.so\"\n",
+                "LoadModule dav_module \"{module_dir}/mod_dav.so\"\n",
+                "LoadModule dav_svn_module \"{module_dir}/mod_dav_svn.so\"\n",
+                "LoadModule authz_svn_module \"{module_dir}/mod_authz_svn.so\"\n",
+                "ErrorLog \"{runtime_path}/error.log\"\n",
+                "LogLevel warn\n",
+                "<Location /svn>\n",
+                "  DAV svn\n",
+                "  SVNParentPath \"{repository_root}\"\n",
+                "  SVNListParentPath On\n",
+                "  AuthType Basic\n",
+                "  AuthName \"git-svn-rs fixture\"\n",
+                "  AuthUserFile \"{password_file}\"\n",
+                "  Require valid-user\n",
+                "</Location>\n",
+            ),
+            runtime_path = runtime_path,
+            port = port,
+            module_dir = module_dir,
+            repository_root = repository_root,
+            password_file = password_file,
+        );
+        std::fs::write(&config_path, config).map_err(|e| e.to_string())?;
+
+        let child = Command::new(apache)
+            .args(["-f", path_arg(&config_path)?, "-X"])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| format!("{apache} failed to start: {e}"))?;
+        let mut server = Self {
+            child,
+            _runtime: runtime,
+            port,
+        };
+        server.wait_until_ready(username, password)?;
+        Ok(server)
+    }
+
+    pub fn repo_url(&self) -> String {
+        format!("http://127.0.0.1:{}/svn/repo", self.port)
+    }
+
+    fn wait_until_ready(&mut self, username: &str, password: &str) -> Result<(), String> {
+        for _ in 0..50 {
+            let ready = Command::new("svn")
+                .args([
+                    "info",
+                    "--non-interactive",
+                    "--no-auth-cache",
+                    "--username",
+                    username,
+                    "--password",
+                    password,
+                    self.repo_url().as_str(),
+                ])
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false);
+            if ready {
+                return Ok(());
+            }
+            if self.child.try_wait().map_err(|e| e.to_string())?.is_some() {
+                let error_log = std::fs::read_to_string(self._runtime.path().join("error.log"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "Apache DAV exited before accepting SVN requests: {}",
+                    error_log.trim()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Err("Apache DAV did not become ready for SVN requests".to_string())
+    }
+}
+
+#[cfg(unix)]
+impl Drop for HttpDav {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
 fn command_succeeds(program: &str, args: &[&str]) -> bool {
     Command::new(program)
         .args(args)
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn http_dav_tools() -> Option<(&'static str, PathBuf)> {
+    let apache = ["apache2", "httpd"]
+        .into_iter()
+        .find(|program| Command::new(program).arg("-v").output().is_ok())?;
+    Command::new("htpasswd").arg("-h").output().ok()?;
+    let required_modules = [
+        "mod_mpm_event.so",
+        "mod_authn_core.so",
+        "mod_authn_file.so",
+        "mod_authz_core.so",
+        "mod_authz_user.so",
+        "mod_auth_basic.so",
+        "mod_dav.so",
+        "mod_dav_svn.so",
+        "mod_authz_svn.so",
+    ];
+    [
+        Path::new("/usr/lib/apache2/modules"),
+        Path::new("/usr/lib64/httpd/modules"),
+        Path::new("/usr/lib/httpd/modules"),
+    ]
+    .into_iter()
+    .find(|directory| {
+        required_modules
+            .iter()
+            .all(|module| directory.join(module).is_file())
+    })
+    .map(|directory| (apache, directory.to_path_buf()))
+}
+
+#[cfg(unix)]
+fn apache_path(path: &Path) -> Result<String, String> {
+    let path = path_arg(path)?;
+    if path.contains(['"', '\n', '\r']) {
+        return Err(format!(
+            "path cannot be represented in Apache config: {path}"
+        ));
+    }
+    Ok(path.to_string())
 }
 
 fn strict_compat() -> bool {

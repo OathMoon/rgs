@@ -65,6 +65,7 @@ pub enum SvnUrlProfile {
     File,
     Svn,
     Http,
+    Https,
     SvnSsh,
     Unsupported,
 }
@@ -77,7 +78,8 @@ pub fn svn_url_profile(url: &str) -> SvnUrlProfile {
         "mock" => SvnUrlProfile::Mock,
         "file" => SvnUrlProfile::File,
         "svn" => SvnUrlProfile::Svn,
-        "http" | "https" => SvnUrlProfile::Http,
+        "http" => SvnUrlProfile::Http,
+        "https" => SvnUrlProfile::Https,
         "svn+ssh" => SvnUrlProfile::SvnSsh,
         _ => SvnUrlProfile::Unsupported,
     }
@@ -85,11 +87,13 @@ pub fn svn_url_profile(url: &str) -> SvnUrlProfile {
 
 pub fn validate_fetch_url(url: &str) -> Result<(), String> {
     match svn_url_profile(url) {
-        SvnUrlProfile::Mock | SvnUrlProfile::File | SvnUrlProfile::Svn | SvnUrlProfile::SvnSsh => {
-            Ok(())
-        }
-        SvnUrlProfile::Http => Err(format!(
-            "HTTP(S) SVN fetch is deferred until the remote protocol profile is validated: {url}"
+        SvnUrlProfile::Mock
+        | SvnUrlProfile::File
+        | SvnUrlProfile::Svn
+        | SvnUrlProfile::Http
+        | SvnUrlProfile::SvnSsh => Ok(()),
+        SvnUrlProfile::Https => Err(format!(
+            "HTTPS SVN fetch is deferred until TLS trust and authentication are validated: {url}"
         )),
         SvnUrlProfile::Unsupported => Err(format!("unsupported SVN URL scheme: {url}")),
     }
@@ -107,7 +111,7 @@ pub fn validate_dcommit_write_urls(target_url: &str, tracked_url: &str) -> Resul
         return Ok(());
     }
     match target {
-        SvnUrlProfile::Http => Err(format!(
+        SvnUrlProfile::Http | SvnUrlProfile::Https => Err(format!(
             "HTTP(S) SVN dcommit write-back is not implemented; refusing before recovery or write setup: {target_url}"
         )),
         SvnUrlProfile::SvnSsh => Err(format!(
@@ -117,7 +121,7 @@ pub fn validate_dcommit_write_urls(target_url: &str, tracked_url: &str) -> Resul
             Err(format!("unsupported SVN dcommit URL scheme: {target_url}"))
         }
         _ => match tracked {
-            SvnUrlProfile::Http => Err(format!(
+            SvnUrlProfile::Http | SvnUrlProfile::Https => Err(format!(
                 "the tracked HTTP(S) SVN profile is unvalidated for dcommit recovery: {tracked_url}"
             )),
             SvnUrlProfile::SvnSsh => Err(format!(

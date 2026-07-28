@@ -134,7 +134,7 @@ fn fetch_uses_existing_mock_remote_config() {
 }
 
 #[test]
-fn fetch_rejects_unvalidated_remote_profiles_before_metadata_mutation() {
+fn fetch_rejects_unvalidated_https_before_metadata_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");
 
@@ -151,12 +151,12 @@ fn fetch_rejects_unvalidated_remote_profiles_before_metadata_mutation() {
         .arg("fetch")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("HTTP(S) SVN fetch"))
+        .stderr(predicate::str::contains("HTTPS SVN fetch"))
         .stderr(predicate::str::contains("deferred"));
 
     assert!(
         !work.join(".git/svn").exists(),
-        "unvalidated remote profiles must fail before creating SVN metadata"
+        "unvalidated HTTPS must fail before creating SVN metadata"
     );
 }
 

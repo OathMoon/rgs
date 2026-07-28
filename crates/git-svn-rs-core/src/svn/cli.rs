@@ -230,6 +230,7 @@ fn is_svn_cli_supported_url(url: &str) -> bool {
         crate::path_url::SvnUrlProfile::File
             | crate::path_url::SvnUrlProfile::Svn
             | crate::path_url::SvnUrlProfile::Http
+            | crate::path_url::SvnUrlProfile::Https
             | crate::path_url::SvnUrlProfile::SvnSsh
     )
 }

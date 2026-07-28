@@ -1,10 +1,14 @@
 use assert_cmd::Command;
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
+#[cfg(unix)]
+use predicates::prelude::PredicateBooleanExt;
 
 #[allow(dead_code)]
 #[path = "../../git-svn-rs-core/tests/support/svn_fixture.rs"]
 mod svn_fixture;
 
+#[cfg(unix)]
+use svn_fixture::{HttpDav, require_http_dav};
 use svn_fixture::{
     StandardSvnFixture, SvnServe, SvnToolPolicy, require_svn_tools, require_svnserve,
 };
@@ -538,6 +542,92 @@ fn clone_stdlayout_svn_url_imports_trunk_history() {
         git.run_for_test(["show", "refs/remotes/origin/trunk:src/lib.rs"])
             .unwrap(),
         "pub fn answer() -> u8 { 42 }\n".to_string()
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn clone_and_incremental_fetch_use_authenticated_http_dav() {
+    match require_svn_tools().and_then(|()| require_http_dav()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let server = HttpDav::start_basic(fixture.root(), "alice", "secret").unwrap();
+    let denied_work = temp.path().join("denied");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &server.repo_url(), "denied", "--stdlayout"])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("secret").not());
+    assert!(!denied_work.join(".git/svn").exists());
+
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+    let before = git
+        .run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+        .unwrap();
+
+    fixture
+        .modify_run_script_content("#!/bin/sh\necho http\n")
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "fetch",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+
+    let after = git
+        .run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert_ne!(after, before);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:run.sh"])
+            .unwrap(),
+        "#!/bin/sh\necho http\n"
+    );
+    assert!(
+        git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/origin/trunk"])
+            .unwrap()
+            .contains(&format!("git-svn-id: {}/trunk@5 ", server.repo_url()))
     );
 }
 
