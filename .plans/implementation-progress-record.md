@@ -2,10 +2,9 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `5dd0ede Add strict HTTP DAV read profile`
+Committed HEAD at audit: `b7d1a9e Verify explicit dcommit target mappings`
 Latest implementation commits:
 
-- `ea77681 Support local-only rebase mode`
 - `1f87814 Reject inert global output options`
 - `dbf6dc8 Fix sparse reset parent selection`
 - `29d2545 Reject ambiguous fetch scope early`
@@ -19,6 +18,8 @@ Latest implementation commits:
 - `d270051 Validate svn+ssh clone and fetch transport`
 - `0f5ac1e Harden svn+ssh tunnel fixture boundaries`
 - `5dd0ede Add strict HTTP DAV read profile`
+- `7531835 Record HTTP DAV profile progress`
+- `b7d1a9e Verify explicit dcommit target mappings`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -54,7 +55,7 @@ workflow has not yet had its first successful run.
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, byte properties, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered non-interactive profiles | scoped queries/log/reset/gc plus option-complete rebase | TTY pager and successful stderr stream fidelity |
-| 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, local file/svn exact write comparisons | remote write-back and broader recovery faults |
+| 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 40/40 locally; Linux workflow defined | first hosted execution |
 
 ## Validated Capabilities
@@ -175,6 +176,9 @@ workflow has not yet had its first successful run.
 - Recovery fingerprints include explicit commit-URL override intent under a
   versioned v2 encoding. A non-advancing sink revision remains durably in-flight
   and ambiguous, so retry cannot resubmit it.
+- Explicit commit URLs must resolve to one tracked mapping before write. The
+  journal binds that ref/rev_map, verifies the imported footer/tree/OID, and a
+  submitted-state restart re-verifies without creating another SVN revision.
 - Authenticated svnserve preflight failure is verified to leave neither an SVN
   revision nor a dcommit journal.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
@@ -211,10 +215,6 @@ Verified on 2026-07-28:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `git diff --check`
 
-One earlier linked-core run saw a transient authenticated-svnserve connection
-refusal; the immediate focused rerun passed. The callback audit's subsequent
-strict linked-core run passed 140/140 unit tests and all integration suites.
-
 ## Remaining Work
 
 ### P0
@@ -229,7 +229,7 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
   streaming for release-level output fidelity.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
-- Extend dcommit recovery fault injection and commit-URL/auth intent coverage.
+- Extend dcommit recovery fault injection and non-secret auth intent coverage.
 - Decide whether an explicit `--placeholder-filename` without
   `--preserve-empty-dirs` should fail rather than remain a low-risk no-op.
 
@@ -271,6 +271,8 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
   external-tunnel clone/fetch evidence without widening dcommit.
 - `5dd0ede`: HTTP/HTTPS profile split, fail-closed HTTPS, and strict authenticated
   Apache DAV clone/fetch fixture plus CI dependencies.
+- `b7d1a9e`: mapped explicit commit-URL identity, exact post-fetch verification,
+  and no-resubmit recovery evidence.
 
 ## Next Steps
 
