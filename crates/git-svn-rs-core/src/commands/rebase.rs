@@ -21,12 +21,14 @@ pub fn run_in_work_tree(
         return Err("rebase requires a clean index and work tree".to_string());
     }
 
-    fetch::run_for_tracking_identity(
-        work_tree.clone(),
-        tracked.config,
-        &tracked.refname,
-        &args.shared,
-    )?;
+    if !args.local {
+        fetch::run_for_tracking_identity(
+            work_tree.clone(),
+            tracked.config,
+            &tracked.refname,
+            &args.shared,
+        )?;
+    }
     let tracked = resolve_tracked_svn(work_tree)?;
     tracked
         .git

@@ -12,6 +12,15 @@ fn parses_rebase_uppercase_merge_alias_and_strategy() {
 }
 
 #[test]
+fn parses_rebase_local_alias() {
+    let cli = Cli::parse_from(["git-svn-rs", "rebase", "-l"]);
+    let Command::Rebase(args) = cli.command else {
+        panic!("expected rebase");
+    };
+    assert!(args.local);
+}
+
+#[test]
 fn parses_clone_with_standard_layout() {
     let cli = Cli::parse_from([
         "git-svn-rs",

@@ -135,6 +135,8 @@ pub struct FetchArgs {
 pub struct RebaseArgs {
     #[arg(short = 'n', long = "dry-run")]
     pub dry_run: bool,
+    #[arg(short = 'l', long)]
+    pub local: bool,
     #[arg(short = 'm', short_alias = 'M', long = "merge")]
     pub merge: bool,
     #[arg(short = 's', long = "strategy")]

@@ -570,6 +570,7 @@ impl PostSubmit for FileSvnPostSubmit<'_> {
             self.git.work_tree().to_path_buf(),
             crate::cli::RebaseArgs {
                 dry_run: false,
+                local: false,
                 merge: false,
                 strategy: None,
                 shared: self.rebase_shared.clone(),

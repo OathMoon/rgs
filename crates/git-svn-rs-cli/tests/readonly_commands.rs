@@ -1674,6 +1674,36 @@ fn rebase_rejects_dirty_work_tree_before_fetch_mutates_tracking_state() {
 }
 
 #[test]
+fn rebase_local_skips_remote_fetch() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let missing_repository = temp.path().join("missing-svn-repository");
+    let url = format!("file://{}/trunk", missing_repository.display());
+    init_git_svn_work_tree_with_remote(&work, &url, ":refs/remotes/git-svn");
+    let tracked = commit_file(
+        &work,
+        "tracked.txt",
+        "tracked\n",
+        &format!("tracked\n\ngit-svn-id: {url}@1 mock-uuid"),
+    );
+    write_rev_map(&work, &[&tracked]);
+    git(&work, ["update-ref", "refs/remotes/git-svn", &tracked]);
+    git(&work, ["checkout", "-b", "topic"]);
+    let topic = commit_file(&work, "topic.txt", "topic\n", "topic");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["rebase", "--local"])
+        .assert()
+        .success();
+
+    assert_eq!(git_output(&work, ["rev-parse", "HEAD"]).trim(), topic);
+    assert!(!missing_repository.exists());
+}
+
+#[test]
 fn rebase_fetches_and_runs_git_rebase_against_tracked_ref() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
