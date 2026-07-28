@@ -2,12 +2,10 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `9ad34d8 Run explicit log pager under TTY`
+Committed HEAD at audit: `49c12da Fix partial layout mapping semantics`
 Latest implementation commits:
 
-- `77e0c0c Lock placeholder no-op compatibility`
-- `b7d84b7 Stream successful rebase progress`
-- `9ad34d8 Run explicit log pager under TTY`
+- `49c12da Fix partial layout mapping semantics`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -104,6 +102,8 @@ hosted compatibility workflow has not yet had its first successful run.
   `svn+ssh` dcommit remain rejected before write preparation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
+- Partial layout arguments match frozen mapping selection: branch/tag-only
+  layouts do not invent trunk, while stdlayout overrides retain other defaults.
 - A placeholder filename without empty-directory preservation remains a frozen
   clone-compatible no-op and cannot change the effective import configuration.
 
@@ -210,8 +210,8 @@ Verified on 2026-07-28:
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (65/65)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
-- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (37/37; HTTP DAV skipped without Apache)
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (37/37; HTTP DAV skipped without Apache)
+- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (38/38; HTTP DAV skipped without Apache)
+- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (38/38; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `git diff --check`
@@ -277,6 +277,7 @@ Verified on 2026-07-28:
 - `77e0c0c`: frozen placeholder-without-preserve no-op semantics.
 - `b7d84b7`: inherited successful Git rebase stderr/progress streaming.
 - `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
+- `49c12da`: frozen partial custom/stdlayout mapping selection.
 
 ## Next Steps
 
