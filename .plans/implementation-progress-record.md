@@ -2,11 +2,11 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `3573d2f Cover post-rebase tombstone recovery`
+Committed HEAD at audit: `77e0c0c Lock placeholder no-op compatibility`
 Latest implementation commits:
 
-- `7968d5e Cover multi-entry dcommit restart boundaries`
 - `3573d2f Cover post-rebase tombstone recovery`
+- `77e0c0c Lock placeholder no-op compatibility`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -104,6 +104,8 @@ workflow has not yet had its first successful run.
   `svn+ssh` dcommit remain rejected before write preparation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
+- A placeholder filename without empty-directory preservation remains a frozen
+  clone-compatible no-op and cannot change the effective import configuration.
 
 ### Readonly and maintenance
 
@@ -202,7 +204,7 @@ workflow has not yet had its first successful run.
 Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
-- `cargo test --workspace` (core unit suite 116/116)
+- `cargo test --workspace`; `cargo test -p git-svn-rs-core --lib` (117/117)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (63/63)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
@@ -226,9 +228,6 @@ Verified on 2026-07-28:
   streaming for release-level output fidelity.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
-- Decide whether an explicit `--placeholder-filename` without
-  `--preserve-empty-dirs` should fail rather than remain a low-risk no-op.
-
 ## Important Commit Anchors
 
 - `7f531ee`, `ab52ef1`: CLI, workspace, config/mapping foundations.
@@ -276,6 +275,7 @@ Verified on 2026-07-28:
 - `23bf393`: real unknown-outcome, Submitted-save, and two-entry recovery evidence.
 - `afe3fb4`, `7968d5e`, `3573d2f`: Submitted acknowledgement-loss, multi-entry,
   and post-rebase durable restart boundaries.
+- `77e0c0c`: frozen placeholder-without-preserve no-op semantics.
 
 ## Next Steps
 
