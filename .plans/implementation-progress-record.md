@@ -2,12 +2,14 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `9f4b223 Harden readonly log and rebase compatibility`
+Committed HEAD at audit: `97735da Align Log.pm timezone and revision selection`
 Latest implementation commits:
 
 - `f11ecd1 Complete ref safety and linked replay parity`
 - `fa5f81f Fail closed on unvalidated SVN protocols`
 - `9f4b223 Harden readonly log and rebase compatibility`
+- `b7d6855 Verify binary SVN properties end to end`
+- `97735da Align Log.pm timezone and revision selection`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -37,7 +39,7 @@ compatibility workflow has not yet had its first successful run.
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported commands | inert options and global verbosity exactness |
 | 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, reversible ref sanitization | remaining option/layout edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
-| 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, CLI and linked delta replay, raw binary properties | full FFI callback audit and remote transport validation |
+| 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, CLI and linked delta replay, raw binary properties including invalid UTF-8 E2E | full FFI callback audit and remote transport validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `in-progress` | scoped find-rev/info/log/reset/gc/rebase; tree-ish/revision anchors and merge strategy contract | remaining Log.pm formatting modes |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, local file/svn exact write comparisons | remote write-back and broader recovery faults |
@@ -74,7 +76,8 @@ compatibility workflow has not yet had its first successful run.
   error conversion.
 - CLI base64 properties and libsvn `svn_string_t.data/len` retain arbitrary bytes.
   Unknown property values are stored byte-exactly and URI-encoded in
-  `unhandled.log`.
+  `unhandled.log`; a real `file://` fixture verifies invalid UTF-8 bytes end to
+  end through filtered replay.
 - Imports preserve SVN timestamps and identities, including authors mappings,
   localtime, metadata rewrite, and noMetadata one-shot behavior.
 - Multi-mapping publication stages commits and atomically journals ref, rev_map,
@@ -98,6 +101,9 @@ compatibility workflow has not yet had its first successful run.
   anchors exact revisions through that identity's rev_map, counts only showable
   SVN records for `--limit`, suppresses adjacent duplicate revisions, and emits
   the frozen separator for an empty normal result.
+- Log uses Git's configured abbreviated object name, preserves the author's
+  recorded timezone, and excludes forged footer revisions absent from the
+  selected rev_map for exact and range queries.
 - Rebase accepts both frozen `-m`/`-M` merge forms and passes merge/strategy
   arguments to Git in the frozen order.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
@@ -137,9 +143,9 @@ Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
-- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (55/55)
+- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (56/56)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (34/34)
+- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (35/35)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `git diff --check`
@@ -159,8 +165,6 @@ the immediate focused rerun passed, and the subsequent full linked-core run pass
 ### P1
 
 - Complete the remaining frozen Log.pm modes and rebase merge/strategy semantics.
-- Add a real SVN fixture carrying invalid-UTF-8 binary properties end to end; unit
-  coverage already proves transport decoding and exact persistence.
 - Audit every production libsvn callback for panic/error ownership before a broad
   native safety claim.
 - Validate HTTP(S) DAV/SSL and `svn+ssh` with dedicated fixtures before enabling
@@ -181,14 +185,17 @@ the immediate focused rerun passed, and the subsequent full linked-core run pass
   non-interactive SVN writes.
 - `9f4b223`: tree-ish/rev_map-scoped Log.pm selection and framing plus the frozen
   rebase merge/strategy command contract.
+- `b7d6855`: real invalid-UTF-8 SVN property replay and filtered-editor byte
+  callback forwarding.
+- `97735da`: rev_map-bounded Log.pm ranges, author timezone preservation, and
+  configured object abbreviation.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
 1. Phase 6: close the highest-value missing Log.pm/rebase compatibility slice.
-2. Phase 4: add a real binary-property SVN integration fixture and finish the
-   production callback audit.
+2. Phase 4: finish the production callback audit.
 3. Phase 7: broaden recovery fault injection and commit-URL intent validation.
 4. Phase 8: run hosted CI when credentials/external execution are available.
 
