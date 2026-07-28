@@ -225,9 +225,13 @@ fn versioned_url(repos_root: &str, path: &str, revision: u32) -> String {
 }
 
 fn is_svn_cli_supported_url(url: &str) -> bool {
-    ["file://", "http://", "https://", "svn://", "svn+ssh://"]
-        .iter()
-        .any(|prefix| url.starts_with(prefix))
+    matches!(
+        crate::path_url::svn_url_profile(url),
+        crate::path_url::SvnUrlProfile::File
+            | crate::path_url::SvnUrlProfile::Svn
+            | crate::path_url::SvnUrlProfile::Http
+            | crate::path_url::SvnUrlProfile::SvnSsh
+    )
 }
 
 impl SvnBackend for SvnCliBackend {
@@ -801,6 +805,7 @@ mod tests {
             "https://svn.example/repo",
             "svn://svn.example/repo",
             "svn+ssh://svn.example/repo",
+            "SVN+SSH://svn.example/repo",
         ] {
             SvnCliBackend::new(url).unwrap();
         }

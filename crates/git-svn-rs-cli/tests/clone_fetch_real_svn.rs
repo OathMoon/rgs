@@ -558,23 +558,43 @@ fn clone_and_incremental_fetch_use_real_svn_ssh_tunnel() {
     let temp = tempfile::tempdir().unwrap();
     let fixture = StandardSvnFixture::create().unwrap();
     let wrapper = temp.path().join("svn-ssh");
+    let tunnel_log = temp.path().join("svn-ssh.args");
     std::fs::write(
         &wrapper,
-        "#!/bin/sh\nexec svnserve -t -r \"$GIT_SVN_RS_SVN_ROOT\"\n",
+        concat!(
+            "#!/bin/sh\n",
+            "printf '%s\\n' \"$@\" >> \"$GIT_SVN_RS_SSH_ARG_LOG\"\n",
+            "[ \"$#\" -eq 3 ] && [ \"$1\" = fixture ] && ",
+            "[ \"$2\" = svnserve ] && [ \"$3\" = -t ] || exit 64\n",
+            "exec svnserve -t --tunnel-user=fixture -r \"$GIT_SVN_RS_SVN_ROOT\"\n",
+        ),
     )
     .unwrap();
     let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
     permissions.set_mode(0o755);
     std::fs::set_permissions(&wrapper, permissions).unwrap();
+    let config_dir = temp.path().join("svn-config");
+    std::fs::create_dir(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config"),
+        format!("[tunnels]\nssh = {}\n", wrapper.display()),
+    )
+    .unwrap();
 
     let work = temp.path().join("work");
     let url = "svn+ssh://fixture/repo/trunk";
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(temp.path())
-        .env("SVN_SSH", &wrapper)
         .env("GIT_SVN_RS_SVN_ROOT", fixture.root())
-        .args(["clone", url, "work"])
+        .env("GIT_SVN_RS_SSH_ARG_LOG", &tunnel_log)
+        .args([
+            "clone",
+            url,
+            "work",
+            "--config-dir",
+            config_dir.to_str().unwrap(),
+        ])
         .assert()
         .success();
 
@@ -594,8 +614,8 @@ fn clone_and_incremental_fetch_use_real_svn_ssh_tunnel() {
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
-        .env("SVN_SSH", &wrapper)
         .env("GIT_SVN_RS_SVN_ROOT", fixture.root())
+        .env("GIT_SVN_RS_SSH_ARG_LOG", &tunnel_log)
         .arg("fetch")
         .assert()
         .success();
@@ -613,6 +633,14 @@ fn clone_and_incremental_fetch_use_real_svn_ssh_tunnel() {
         git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/git-svn"])
             .unwrap()
             .contains("git-svn-id: svn+ssh://fixture/repo/trunk@5 ")
+    );
+    let tunnel_args = std::fs::read_to_string(tunnel_log).unwrap();
+    let lines = tunnel_args.lines().collect::<Vec<_>>();
+    assert!(!lines.is_empty());
+    assert!(
+        lines
+            .chunks_exact(3)
+            .all(|args| args == ["fixture", "svnserve", "-t"])
     );
 }
 
