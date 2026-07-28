@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `2a68582 Support log authors file overrides`
+Committed HEAD at audit: `32dd27a Match frozen log trailing blank lines`
 Latest implementation commits:
 
 - `f11ecd1 Complete ref safety and linked replay parity`
@@ -11,6 +11,9 @@ Latest implementation commits:
 - `b7d6855 Verify binary SVN properties end to end`
 - `97735da Align Log.pm timezone and revision selection`
 - `2a68582 Support log authors file overrides`
+- `57eb773 Match frozen verbose log paths`
+- `08eef18 Harden libsvn callback boundaries`
+- `32dd27a Match frozen log trailing blank lines`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -40,7 +43,7 @@ compatibility workflow has not yet had its first successful run.
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported commands | inert options and global verbosity exactness |
 | 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, reversible ref sanitization | remaining option/layout edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
-| 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, CLI and linked delta replay, raw binary properties including invalid UTF-8 E2E | full FFI callback audit and remote transport validation |
+| 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, audited fail-closed FFI callbacks, CLI/linked delta replay, invalid UTF-8 properties E2E | remote transport validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `in-progress` | scoped find-rev/info/log/reset/gc/rebase; tree-ish/revision anchors and merge strategy contract | remaining Log.pm formatting modes |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, local file/svn exact write comparisons | remote write-back and broader recovery faults |
@@ -75,6 +78,10 @@ compatibility workflow has not yet had its first successful run.
 - Native update/switch handles initial and incremental text deltas, copy-only
   files, directory/file properties, checksums, absent nodes, deletes, and callback
   error conversion.
+- Production libsvn callbacks validate required baton/output/pool and
+  string-data/length pairs, return owned errors on invalid lifecycle state, catch
+  log receiver panics, and avoid panic-based error construction. Non-null dangling
+  pointers remain an unavoidable libsvn ABI responsibility.
 - CLI base64 properties and libsvn `svn_string_t.data/len` retain arbitrary bytes.
   Unknown property values are stored byte-exactly and URI-encoded in
   `unhandled.log`; a real `file://` fixture verifies invalid UTF-8 bytes end to
@@ -107,6 +114,10 @@ compatibility workflow has not yet had its first successful run.
   selected rev_map for exact and range queries.
 - Log accepts the frozen `-A`/`--authors-file` display mapping and gives the
   command-line file precedence over the persisted remote configuration.
+- Verbose Log.pm paths remain repository-relative, scored rename/copy records
+  follow the frozen omission behavior, and golden normalization no longer hides
+  an erroneous SVN path prefix. Repeated trailing blank message lines collapse
+  with frozen line-count framing.
 - Rebase accepts both frozen `-m`/`-M` merge forms and passes merge/strategy
   arguments to Git in the frozen order.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
@@ -153,9 +164,9 @@ Verified on 2026-07-28:
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `git diff --check`
 
-One full linked-core run saw a transient authenticated-svnserve connection refusal;
-the immediate focused rerun passed, and the subsequent full linked-core run passed
-134/134 unit tests and continued successfully through the integration suites.
+One earlier linked-core run saw a transient authenticated-svnserve connection
+refusal; the immediate focused rerun passed. The callback audit's subsequent
+strict linked-core run passed 140/140 unit tests and all integration suites.
 
 ## Remaining Work
 
@@ -168,8 +179,6 @@ the immediate focused rerun passed, and the subsequent full linked-core run pass
 ### P1
 
 - Complete the remaining frozen Log.pm modes and rebase merge/strategy semantics.
-- Audit every production libsvn callback for panic/error ownership before a broad
-  native safety claim.
 - Validate HTTP(S) DAV/SSL and `svn+ssh` with dedicated fixtures before enabling
   either read profile.
 - Extend dcommit recovery fault injection and commit-URL/auth intent coverage.
@@ -193,13 +202,17 @@ the immediate focused rerun passed, and the subsequent full linked-core run pass
 - `97735da`: rev_map-bounded Log.pm ranges, author timezone preservation, and
   configured object abbreviation.
 - `2a68582`: runtime Log.pm authors-file override with CLI and output coverage.
+- `57eb773`: frozen repository-relative verbose paths and unmasked golden checks.
+- `08eef18`: fail-closed libsvn callback inputs, lifecycle, allocation, property,
+  panic, and owned-error boundaries.
+- `32dd27a`: frozen trailing-blank collapse and message line counts.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
 1. Phase 6: close the highest-value missing Log.pm/rebase compatibility slice.
-2. Phase 4: finish the production callback audit.
+2. Phase 4: validate deferred remote transports with dedicated fixtures.
 3. Phase 7: broaden recovery fault injection and commit-URL intent validation.
 4. Phase 8: run hosted CI when credentials/external execution are available.
 
