@@ -27,28 +27,20 @@ pub fn run_in_work_tree(
     reset_transaction::recover_pending(&git)?;
     let tracked = resolve_tracked_svn(work_tree)?;
     let revision = parse_revision(&args.revision)?;
-    let target_revision = if args.parent {
-        revision
-            .checked_sub(1)
-            .ok_or_else(|| "cannot reset to parent of revision 0".to_string())?
+    let records = tracked.records()?;
+    let record = if args.parent {
+        records
+            .into_iter()
+            .filter(|record| record.revision < revision && !record.has_zero_object_id())
+            .max_by_key(|record| record.revision)
+            .ok_or_else(|| format!("no Git commit found before SVN revision r{revision}"))?
     } else {
-        revision
+        records
+            .into_iter()
+            .find(|record| record.revision == revision && !record.has_zero_object_id())
+            .ok_or_else(|| format!("no Git commit found for SVN revision r{revision}"))?
     };
-
-    let Some(record) = tracked
-        .records()?
-        .into_iter()
-        .find(|record| record.revision == target_revision)
-    else {
-        return Err(format!(
-            "no Git commit found for SVN revision r{target_revision}"
-        ));
-    };
-    if record.object_id_hex.chars().all(|c| c == '0') {
-        return Err(format!(
-            "no Git commit found for SVN revision r{target_revision}"
-        ));
-    }
+    let target_revision = record.revision;
 
     reset_transaction::execute(
         &tracked.git,

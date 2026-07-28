@@ -1576,6 +1576,36 @@ fn reset_missing_revision_fails_without_moving_tracked_ref() {
 }
 
 #[test]
+fn reset_parent_uses_the_nearest_earlier_nonzero_rev_map_record() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(work, "one.txt", "one\n", "r1");
+    let rev4 = commit_file(work, "four.txt", "four\n", "r4");
+    write_rev_map_for_short_ref(work, "git-svn", &[(1, &rev1), (4, &rev4)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev4]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["reset", "--revision", "4", "--parent"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+        rev1
+    );
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", "r4"])
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
 fn rebase_dry_run_is_silent_like_frozen_git_svn() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
