@@ -2,13 +2,9 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `f16c366 Handle frozen non-interactive log pager mode`
+Committed HEAD at audit: `0f5ac1e Harden svn+ssh tunnel fixture boundaries`
 Latest implementation commits:
 
-- `57eb773 Match frozen verbose log paths`
-- `08eef18 Harden libsvn callback boundaries`
-- `32dd27a Match frozen log trailing blank lines`
-- `cf90c68 Support frozen non-recursive log mode`
 - `d42efb3 Harden dcommit recovery intent`
 - `ea77681 Support local-only rebase mode`
 - `1f87814 Reject inert global output options`
@@ -20,6 +16,9 @@ Latest implementation commits:
 - `3bded4a Match frozen rebase dry-run identity`
 - `fc2c420 Complete scoped rebase orchestration options`
 - `f16c366 Handle frozen non-interactive log pager mode`
+- `9cdd6ec Advance readonly phase to covered behavior pass`
+- `d270051 Validate svn+ssh clone and fetch transport`
+- `0f5ac1e Harden svn+ssh tunnel fixture boundaries`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -38,18 +37,20 @@ produce `release-pass`.
 
 ## Current Overall State
 
-The repository now provides an initially complete local core workflow for the
-covered `file://`, local authenticated `svn://`, and mock profiles. It remains a
-preview rather than a general `git svn` replacement: HTTP(S) and `svn+ssh` are
-fail-closed, interactive TTY paging/output streaming remains incomplete, and the
-required hosted compatibility workflow has not yet had its first successful run.
+The repository now provides an initially complete core workflow for the covered
+`file://`, local authenticated `svn://`, configured external `svn+ssh` tunnel,
+and mock profiles. It remains a preview rather than a general `git svn`
+replacement: HTTP(S), real OpenSSH authentication/trust, and remote dcommit are
+not validated; interactive TTY paging/output streaming remains incomplete; and
+the required hosted compatibility workflow has not yet had its first successful
+run.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, reversible ref sanitization | remaining option/layout edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
-| 4 SVN adapters | `behavior-pass` for covered local profiles | common editor contract, audited fail-closed FFI callbacks, CLI/linked delta replay, invalid UTF-8 properties E2E | remote transport validation |
+| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles | common editor contract, audited fail-closed FFI callbacks, CLI/linked delta replay, invalid UTF-8 properties and external svn+ssh tunnel E2E | HTTP(S) and real OpenSSH validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered non-interactive profiles | scoped queries/log/reset/gc plus option-complete rebase | TTY pager and successful stderr stream fidelity |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, durable recovery, local file/svn exact write comparisons | remote write-back and broader recovery faults |
@@ -77,9 +78,10 @@ required hosted compatibility workflow has not yet had its first successful run.
 
 ### Import, clone, and fetch
 
-- Local `file://`, authenticated local `svn://`, and mock fixtures cover direct
-  `/trunk`, standard layout, branches/tags, copies/deletes, modes, symlinks,
-  authors, filters, rewrite metadata, revision ranges, and checkout/no-checkout.
+- Local `file://`, authenticated local `svn://`, configured `svn+ssh` tunnel, and
+  mock fixtures cover direct `/trunk`, standard layout, branches/tags,
+  copies/deletes, modes, symlinks, authors, filters, rewrite metadata, revision
+  ranges, and checkout/no-checkout.
 - CLI and linked libsvn use the common `RaSession`/`FetchEditor` coordinator.
   Linked stdlayout copy replay and direct subdirectory sessions pass the same
   34-case CLI suite as the default backend.
@@ -102,8 +104,11 @@ required hosted compatibility workflow has not yet had its first successful run.
   backfill, auxiliary `branch@rev` refs, ancestor directory copies, wildcard
   discovery high-water, ignore-refs scope, and trailing-zero scan markers match
   the covered frozen Perl artifacts.
-- HTTP(S) and `svn+ssh` fetch are explicitly deferred and fail before SVN metadata
-  creation or import recovery. mock/file/svn remain the accepted profiles.
+- `svn+ssh` read paths accept case-insensitive schemes. A persisted temporary SVN
+  tunnel config drives real `svnserve -t`, validates its exact invocation, and
+  covers direct clone plus incremental fetch in default and linked modes.
+- HTTP(S) fetch remains deferred and fails before SVN metadata creation or import
+  recovery. `svn+ssh` dcommit remains rejected before write preparation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
 
@@ -195,7 +200,8 @@ Verified on 2026-07-28:
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (63/63)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (46/46)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (35/35)
+- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (36/36)
+- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (36/36)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `git diff --check`
@@ -216,8 +222,8 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
 
 - Add real TTY pager execution and preserve successful Git rebase stderr/progress
   streaming for release-level output fidelity.
-- Validate HTTP(S) DAV/SSL and `svn+ssh` with dedicated fixtures before enabling
-  either read profile.
+- Validate HTTP(S) DAV/SSL and real OpenSSH key/host-trust behavior with dedicated
+  fixtures; the configured external-tunnel protocol path is already covered.
 - Extend dcommit recovery fault injection and commit-URL/auth intent coverage.
 - Decide whether an explicit `--placeholder-filename` without
   `--preserve-empty-dirs` should fail rather than remain a low-risk no-op.
@@ -256,12 +262,14 @@ strict linked-core run passed 140/140 unit tests and all integration suites.
 - `fc2c420`: scoped fetch-all, command-local verbose, and fixed upstream identity
   across rebase orchestration.
 - `f16c366`: frozen non-TTY pager no-op with an explicit interactive boundary.
+- `d270051`, `0f5ac1e`: case-insensitive `svn+ssh` read routing and hardened
+  external-tunnel clone/fetch evidence without widening dcommit.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 4: validate deferred remote transports with dedicated fixtures.
+1. Phase 4: add HTTP DAV and real OpenSSH authentication/trust fixtures.
 2. Phase 7: broaden recovery fault injection and commit-URL intent validation.
 3. Phase 6 release gap: add PTY pager and successful stderr stream evidence.
 4. Phase 8: run hosted CI when credentials/external execution are available.
@@ -270,8 +278,9 @@ Continue in this order unless new verification changes priority:
 
 - Preserve pre-existing untracked `.codex/`, `.zcode/`, `CLAUDE.md`, `docs/`, and
   generated `golden-stdlayout-*`/`svn-fixture-*` directories.
-- Do not infer general remote support from the SVN CLI's underlying scheme support;
-  the public command path intentionally gates unvalidated HTTP(S)/svn+ssh profiles.
+- Configured `svn+ssh` external-tunnel reads are covered, but this does not imply
+  validated OpenSSH authentication/host trust or `svn+ssh` dcommit. HTTP(S) remains
+  gated.
 - The linked backend is a read/import backend. Dcommit still uses the SVN CLI
   working-copy sink for the covered local write profiles.
 - Migration remains inspection/rejection rather than automatic conversion.
