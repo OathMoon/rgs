@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-28
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `97735da Align Log.pm timezone and revision selection`
+Committed HEAD at audit: `2a68582 Support log authors file overrides`
 Latest implementation commits:
 
 - `f11ecd1 Complete ref safety and linked replay parity`
@@ -10,6 +10,7 @@ Latest implementation commits:
 - `9f4b223 Harden readonly log and rebase compatibility`
 - `b7d6855 Verify binary SVN properties end to end`
 - `97735da Align Log.pm timezone and revision selection`
+- `2a68582 Support log authors file overrides`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -104,6 +105,8 @@ compatibility workflow has not yet had its first successful run.
 - Log uses Git's configured abbreviated object name, preserves the author's
   recorded timezone, and excludes forged footer revisions absent from the
   selected rev_map for exact and range queries.
+- Log accepts the frozen `-A`/`--authors-file` display mapping and gives the
+  command-line file precedence over the persisted remote configuration.
 - Rebase accepts both frozen `-m`/`-M` merge forms and passes merge/strategy
   arguments to Git in the frozen order.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
@@ -143,7 +146,7 @@ Verified on 2026-07-28:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`
-- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (56/56)
+- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (57/57)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (35/35)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
@@ -189,6 +192,7 @@ the immediate focused rerun passed, and the subsequent full linked-core run pass
   callback forwarding.
 - `97735da`: rev_map-bounded Log.pm ranges, author timezone preservation, and
   configured object abbreviation.
+- `2a68582`: runtime Log.pm authors-file override with CLI and output coverage.
 
 ## Next Steps
 
