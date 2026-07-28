@@ -2,7 +2,8 @@ use chrono::{Local, TimeZone};
 
 use crate::authors::{AuthorResolver, parse_authors_file};
 use crate::cli::LogArgs;
-use crate::commands::resolver::resolve_tracked_svn;
+use crate::commands::resolver::{resolve_tracked_svn, resolve_tracked_svn_at};
+use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::log_formatter::{GitSvnLogEntry, GitSvnLogFormatter};
 
@@ -14,7 +15,13 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: LogArgs,
 ) -> Result<String, String> {
-    let tracked = resolve_tracked_svn(work_tree)?;
+    let work_tree = work_tree.into();
+    let git = GitCli::new(&work_tree);
+    let (treeish, git_log_args) = select_log_treeish(&git, &args.git_log_args);
+    let tracked = match treeish.as_deref() {
+        Some(treeish) => resolve_tracked_svn_at(&work_tree, treeish)?,
+        None => resolve_tracked_svn(&work_tree)?,
+    };
     if tracked.config.no_metadata {
         return Err("log is unavailable for --no-metadata imports".to_string());
     }
@@ -23,14 +30,25 @@ pub fn run_in_work_tree(
         .as_deref()
         .map(parse_revision_filter)
         .transpose()?;
-    let git_limit = if revision_filter.is_some() {
-        None
+    let exact_revision = revision_filter
+        .as_ref()
+        .and_then(RevisionFilter::exact_revision);
+    let log_target = if let Some(revision) = exact_revision {
+        tracked.records()?.into_iter().find_map(|record| {
+            (record.revision == revision && !record.has_zero_object_id())
+                .then_some(record.object_id_hex)
+        })
     } else {
-        args.limit
+        Some(tracked.refname.clone())
     };
-    let raw = tracked
-        .git
-        .log_records(&tracked.refname, git_limit, &args.git_log_args)?;
+    let raw = match log_target {
+        Some(log_target) => {
+            tracked
+                .git
+                .log_records(&log_target, exact_revision.map(|_| 1), &git_log_args)?
+        }
+        None => String::new(),
+    };
     let formatter = GitSvnLogFormatter::with_incremental(
         args.oneline,
         args.show_commit,
@@ -40,6 +58,7 @@ pub fn run_in_work_tree(
     let verbose_path_prefix = verbose_path_prefix(&tracked.svn_path, &tracked.config.url);
     let authors = load_authors(&tracked)?;
     let mut entries = Vec::new();
+    let mut last_revision = None;
     for record in raw.split('\x1e') {
         let record = record.trim_start_matches(['\r', '\n']);
         if record.is_empty() {
@@ -53,6 +72,10 @@ pub fn run_in_work_tree(
         let Some((id, message)) = split_git_svn_footer(fields[4]) else {
             continue;
         };
+        if last_revision == Some(id.revision) {
+            continue;
+        }
+        last_revision = Some(id.revision);
         if revision_filter
             .as_ref()
             .is_some_and(|filter| !filter.contains(id.revision))
@@ -102,10 +125,27 @@ pub fn run_in_work_tree(
     for (entry, git_output) in &entries {
         out.push_str(&formatter.format_entry_with_git_output(entry, revision_width, git_output));
     }
-    if !entries.is_empty() && !args.oneline && !args.incremental {
+    if !args.oneline && !args.incremental {
         out.push_str("------------------------------------------------------------------------\n");
     }
     Ok(out)
+}
+
+fn select_log_treeish(git: &GitCli, args: &[String]) -> (Option<String>, Vec<String>) {
+    let mut treeish = None;
+    let mut passthrough = Vec::new();
+    let mut saw_files = false;
+    for arg in args {
+        if arg == "--" || saw_files {
+            saw_files = true;
+            passthrough.push(arg.clone());
+        } else if !arg.starts_with('-') && git.rev_parse(&format!("{arg}^0")).is_ok() {
+            treeish = Some(arg.clone());
+        } else {
+            passthrough.push(arg.clone());
+        }
+    }
+    (treeish, passthrough)
 }
 
 fn digits(revision: u32) -> usize {
@@ -222,6 +262,10 @@ impl RevisionFilter {
     fn contains(&self, revision: u32) -> bool {
         self.start.is_none_or(|start| revision >= start)
             && self.end.is_none_or(|end| revision <= end)
+    }
+
+    fn exact_revision(&self) -> Option<u32> {
+        (self.start == self.end).then_some(self.start).flatten()
     }
 }
 

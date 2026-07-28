@@ -465,16 +465,7 @@ impl GitCli {
         merge: bool,
         strategy: Option<&str>,
     ) -> Result<String, String> {
-        let mut args = vec!["rebase".to_string()];
-        if merge {
-            args.push("--merge".to_string());
-        }
-        if let Some(strategy) = strategy {
-            args.push("--strategy".to_string());
-            args.push(strategy.to_string());
-        }
-        args.push(upstream.to_string());
-        self.run_args(args)
+        self.run_args(rebase_args(upstream, merge, strategy))
     }
 
     pub fn run_for_test<const N: usize>(&self, args: [&str; N]) -> Result<String, String> {
@@ -514,6 +505,18 @@ impl GitCli {
             Err(stderr_or_status(output))
         }
     }
+}
+
+fn rebase_args(upstream: &str, merge: bool, strategy: Option<&str>) -> Vec<String> {
+    let mut args = vec!["rebase".to_string()];
+    if merge {
+        args.push("--merge".to_string());
+    }
+    if let Some(strategy) = strategy {
+        args.push(format!("--strategy={strategy}"));
+    }
+    args.push(upstream.to_string());
+    args
 }
 
 impl GitBackend for GitCli {
@@ -771,7 +774,32 @@ fn parse_ls_tree_files(raw: &[u8]) -> Result<Vec<(String, String)>, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GitCli, GitRawDiffEntry, GitRawDiffStatus, parse_raw_diff};
+    use super::{GitCli, GitRawDiffEntry, GitRawDiffStatus, parse_raw_diff, rebase_args};
+
+    #[test]
+    fn rebase_arguments_match_frozen_git_svn_order() {
+        assert_eq!(
+            rebase_args("refs/remotes/git-svn", false, None),
+            ["rebase", "refs/remotes/git-svn"]
+        );
+        assert_eq!(
+            rebase_args("refs/remotes/git-svn", true, None),
+            ["rebase", "--merge", "refs/remotes/git-svn"]
+        );
+        assert_eq!(
+            rebase_args("refs/remotes/git-svn", false, Some("ort")),
+            ["rebase", "--strategy=ort", "refs/remotes/git-svn"]
+        );
+        assert_eq!(
+            rebase_args("refs/remotes/git-svn", true, Some("ort")),
+            [
+                "rebase",
+                "--merge",
+                "--strategy=ort",
+                "refs/remotes/git-svn"
+            ]
+        );
+    }
 
     #[test]
     fn parses_raw_diff_add_modify_type_change_and_delete_records() {

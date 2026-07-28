@@ -2,6 +2,16 @@ use clap::Parser;
 use git_svn_rs_core::cli::{Cli, Command};
 
 #[test]
+fn parses_rebase_uppercase_merge_alias_and_strategy() {
+    let cli = Cli::parse_from(["git-svn-rs", "rebase", "-M", "-s", "ort"]);
+    let Command::Rebase(args) = cli.command else {
+        panic!("expected rebase");
+    };
+    assert!(args.merge);
+    assert_eq!(args.strategy.as_deref(), Some("ort"));
+}
+
+#[test]
 fn parses_clone_with_standard_layout() {
     let cli = Cli::parse_from([
         "git-svn-rs",

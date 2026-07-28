@@ -18,7 +18,7 @@ fn find_rev_maps_svn_revision_to_git_commit() {
 fn resolver_rejects_multiple_rev_maps_without_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
-    let metadata = work.join(".git/svn/git-svn");
+    let metadata = canonical_git_svn_metadata(&work);
     let original = metadata.join(".rev_map.mock-uuid");
     let ambiguous = metadata.join(".rev_map.other-uuid");
     let original_bytes = std::fs::read(&original).unwrap();
@@ -82,11 +82,7 @@ fn find_rev_supports_sha256_rev_maps_bidirectionally() {
     );
     git(work, ["update-ref", "refs/remotes/git-svn", &commit]);
 
-    let rev_map_path = work
-        .join(".git")
-        .join("svn")
-        .join("git-svn")
-        .join(".rev_map.mock-uuid");
+    let rev_map_path = work.join(".git/svn/git-svn/.rev_map.mock-uuid");
     let mut rev_map = git_svn_rs_core::rev_map::RevMap::open(
         rev_map_path,
         git_svn_rs_core::rev_map::ObjectFormat::Sha256,
@@ -280,11 +276,7 @@ fn no_metadata_import_rejects_followup_operations_without_mutating_tracking_stat
         .success();
 
     let tracked_before = git_output(&work, ["rev-parse", "refs/remotes/git-svn"]);
-    let rev_map_path = work
-        .join(".git")
-        .join("svn")
-        .join("git-svn")
-        .join(".rev_map.mock-uuid");
+    let rev_map_path = canonical_git_svn_metadata(&work).join(".rev_map.mock-uuid");
     let rev_map_before = std::fs::read(&rev_map_path).unwrap();
 
     Command::cargo_bin("git-svn-rs")
@@ -599,6 +591,46 @@ fn log_prints_svn_revisions_from_git_history() {
 }
 
 #[test]
+fn log_treeish_selects_its_tracking_identity_instead_of_head() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/origin/trunk");
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            "branches/main:refs/remotes/origin/main",
+        ],
+    );
+    let trunk = commit_file(
+        work,
+        "trunk.txt",
+        "trunk\n",
+        "trunk\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/trunk", &trunk]);
+    write_rev_map_for_short_ref(work, "origin.trunk", &[(1, &trunk)]);
+    let branch = commit_file(
+        work,
+        "branch.txt",
+        "branch\n",
+        "branch\n\ngit-svn-id: mock://repo/branches/main@2 mock-uuid",
+    );
+    git(work, ["update-ref", "refs/remotes/origin/main", &branch]);
+    write_rev_map_for_short_ref(work, "origin.main", &[(2, &branch)]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--oneline", "refs/remotes/origin/trunk"])
+        .assert()
+        .success()
+        .stdout("r1 | trunk\n");
+}
+
+#[test]
 fn log_uses_only_final_nonempty_git_svn_id_line_as_footer() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
@@ -654,7 +686,7 @@ fn log_skips_commit_when_final_nonempty_line_is_not_git_svn_id_footer() {
         .arg("log")
         .assert()
         .success()
-        .stdout("");
+        .stdout("------------------------------------------------------------------------\n");
 }
 
 #[test]
@@ -815,6 +847,117 @@ fn log_revision_filters_to_requested_svn_revision() {
         .unwrap()
         .current_dir(&work)
         .args(["log", "--revision", "1", "--oneline"])
+        .assert()
+        .success()
+        .stdout("");
+}
+
+#[test]
+fn log_empty_default_result_prints_frozen_separator() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["log", "--revision", "1"])
+        .assert()
+        .success()
+        .stdout("------------------------------------------------------------------------\n");
+}
+
+#[test]
+fn log_suppresses_adjacent_duplicate_svn_revisions_before_limit() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    let duplicate = commit_file(
+        work,
+        "duplicate.txt",
+        "duplicate\n",
+        "duplicate\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "two.txt",
+        "two\n",
+        "second\n\ngit-svn-id: mock://repo@2 mock-uuid",
+    );
+    write_rev_map_for_short_ref(work, "git-svn", &[(1, &rev1), (2, &rev2)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+    assert_ne!(duplicate, rev1);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--limit", "2", "--oneline"])
+        .assert()
+        .success()
+        .stdout("r2 | second\nr1 | duplicate\n");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--revision", "1", "--oneline", "--show-commit"])
+        .assert()
+        .success()
+        .stdout(format!("r1 | {} | first\n", &rev1[..7]));
+}
+
+#[test]
+fn log_limit_counts_showable_svn_revisions_not_raw_git_commits() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    let local = commit_file(work, "local.txt", "local\n", "no svn footer");
+    write_rev_map_for_short_ref(work, "git-svn", &[(1, &rev1)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &local]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--limit", "1", "--oneline"])
+        .assert()
+        .success()
+        .stdout("r1 | first\n");
+}
+
+#[test]
+fn log_exact_revision_ignores_footer_not_present_in_rev_map() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo@1 mock-uuid",
+    );
+    let forged = commit_file(
+        work,
+        "forged.txt",
+        "forged\n",
+        "forged\n\ngit-svn-id: mock://repo@99 mock-uuid",
+    );
+    write_rev_map_for_short_ref(work, "git-svn", &[(1, &rev1)]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &forged]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--revision", "99", "--oneline"])
         .assert()
         .success()
         .stdout("");
@@ -1204,7 +1347,7 @@ fn log_passthrough_patch_and_raw_output_are_preserved() {
 fn gc_preserves_unverifiable_legacy_rev_map_lock_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
-    let lock = work.join(".git/svn/git-svn/.rev_map.mock-uuid.lock");
+    let lock = canonical_git_svn_metadata(&work).join(".rev_map.mock-uuid.lock");
     std::fs::write(&lock, []).unwrap();
 
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
@@ -1242,7 +1385,7 @@ fn gc_rejects_mixed_legacy_metadata_without_mutation() {
 fn gc_compresses_unhandled_log_and_removes_index_files() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
-    let svn_dir = work.join(".git/svn/git-svn");
+    let svn_dir = canonical_git_svn_metadata(&work);
     let unhandled = svn_dir.join("unhandled.log");
     let compressed = svn_dir.join("unhandled.log.gz");
     let index = svn_dir.join("index");
@@ -1262,7 +1405,7 @@ fn gc_preserves_metadata_while_import_publication_is_pending() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
     let svn_root = work.join(".git/svn");
-    let svn_dir = svn_root.join("git-svn");
+    let svn_dir = canonical_git_svn_metadata(&work);
     let journal = svn_root.join("import-journal");
     let unhandled = svn_dir.join("unhandled.log");
     let compressed = svn_dir.join("unhandled.log.gz");
@@ -1446,7 +1589,10 @@ fn rebase_fetches_and_runs_git_rebase_against_tracked_ref() {
     let topic = commit_file(work, "topic.txt", "topic\n", "topic");
 
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
-    cmd.current_dir(work).arg("rebase").assert().success();
+    cmd.current_dir(work)
+        .args(["rebase", "-M", "--strategy=ort"])
+        .assert()
+        .success();
 
     let head = git_output(work, ["rev-parse", "HEAD"]);
     let merge_base = git_output(work, ["merge-base", "HEAD", "refs/remotes/git-svn"]);
@@ -1464,6 +1610,10 @@ fn clone_mock_repo(parent: &std::path::Path) -> std::path::PathBuf {
         .assert()
         .success();
     work
+}
+
+fn canonical_git_svn_metadata(work: &std::path::Path) -> std::path::PathBuf {
+    work.join(".git/svn/refs/remotes/git-svn")
 }
 
 fn init_git_svn_work_tree(work: &std::path::Path) {
