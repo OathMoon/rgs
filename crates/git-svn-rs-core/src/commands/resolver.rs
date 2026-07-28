@@ -49,6 +49,39 @@ pub fn resolve_tracked_svn_at(
     resolve_tracked_svn_impl(work_tree.into(), treeish, true, false)
 }
 
+pub(crate) fn resolve_tracked_svn_path(
+    tracked: &TrackedSvn,
+    svn_path: &str,
+) -> Result<TrackedSvn, String> {
+    let mut candidates = tracked_candidate_mappings(&tracked.git, &tracked.config)?
+        .into_iter()
+        .filter(|mapping| mapping.svn_path == svn_path)
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.git_ref.cmp(&right.git_ref));
+    candidates.dedup_by(|left, right| left.git_ref == right.git_ref);
+    let mapping = match candidates.len() {
+        0 => {
+            return Err(format!(
+                "commit URL path {svn_path:?} does not match a tracked SVN mapping"
+            ));
+        }
+        1 => candidates.pop().expect("one commit URL mapping"),
+        _ => {
+            return Err(format!(
+                "commit URL path {svn_path:?} matches multiple SVN mappings"
+            ));
+        }
+    };
+    let git_dir = tracked.git.git_dir()?;
+    let metadata_root = tracked.git.work_tree().join(git_dir);
+    let metadata_dir = svn_metadata_dir(&metadata_root, &mapping.git_ref)?;
+    let resolved = tracked_from_mapping(&tracked.git, &tracked.config, &mapping, &metadata_dir)?;
+    if resolved.uuid != tracked.uuid {
+        return Err("commit URL mapping repository UUID does not match the tracked target".into());
+    }
+    Ok(resolved)
+}
+
 fn resolve_tracked_svn_impl(
     work_tree: PathBuf,
     treeish: &str,

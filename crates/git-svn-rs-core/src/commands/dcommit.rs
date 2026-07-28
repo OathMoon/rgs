@@ -1,5 +1,7 @@
 use crate::cli::DcommitArgs;
-use crate::commands::resolver::{resolve_tracked_svn, resolve_tracked_svn_allow_import_batch};
+use crate::commands::resolver::{
+    resolve_tracked_svn, resolve_tracked_svn_allow_import_batch, resolve_tracked_svn_path,
+};
 use crate::commands::{fetch, rebase};
 use crate::dcommit::coordinator::{CommitSink, Coordinator, PostSubmit, RemoteHead};
 use crate::dcommit::journal::{
@@ -160,8 +162,7 @@ pub fn run_in_work_tree(
         if is_svn_cli_write_back_url(target_url) && is_svn_cli_write_back_url(&tracked.config.url) {
             if args.adopt_revision.is_some() && args.commit_url.is_some() {
                 return Err(
-                    "--adopt-revision cannot be combined with --commit-url because exact imported-tree verification is unavailable"
-                        .to_string(),
+                    "--adopt-revision with --commit-url is not implemented in v1".to_string(),
                 );
             }
             let commit_svn_path = if args.commit_url.is_some() {
@@ -169,6 +170,25 @@ pub fn run_in_work_tree(
             } else {
                 &tracked.svn_path
             };
+            let commit_mapping = if args.commit_url.is_some() {
+                let svn_path = commit_url_path(&tracked.config.url, target_url)?;
+                Some(resolve_tracked_svn_path(&tracked, &svn_path)?)
+            } else {
+                None
+            };
+            let mapping_ref = commit_mapping
+                .as_ref()
+                .map_or(tracked.refname.as_str(), |mapping| mapping.refname.as_str());
+            let mapping_svn_path = commit_mapping
+                .as_ref()
+                .map_or(tracked.svn_path.as_str(), |mapping| {
+                    mapping.svn_path.as_str()
+                });
+            let mapping_rev_map_path = commit_mapping
+                .as_ref()
+                .map_or(tracked.rev_map_path.as_path(), |mapping| {
+                    mapping.rev_map_path.as_path()
+                });
             let mut svn_options = dcommit_svn_options(
                 tracked.config.username.as_deref(),
                 tracked.config.config_dir.as_deref(),
@@ -186,21 +206,22 @@ pub fn run_in_work_tree(
                     svn_root_url: target_url,
                     svn_path: commit_svn_path,
                     uuid: &tracked.uuid,
-                    refname: &tracked.refname,
+                    source_refname: &tracked.refname,
+                    mapping_ref,
                     base_revision: revision,
                     no_rebase: args.no_rebase,
                     mergeinfo: args.mergeinfo.as_deref(),
                     svn_options,
                     post_commit_fetch_shared: args.shared.clone(),
                     remote_id: &tracked.config.name,
-                    rev_map_path: &tracked.rev_map_path,
+                    rev_map_path: mapping_rev_map_path,
                     expected_footer_url: svn_checkout_url(
                         tracked
                             .config
                             .rewrite_root
                             .as_deref()
                             .unwrap_or(&tracked.config.url),
-                        &tracked.svn_path,
+                        mapping_svn_path,
                     ),
                     expected_footer_uuid: tracked
                         .config
@@ -255,12 +276,29 @@ fn dcommit_message(message: &str) -> String {
     message.trim_end_matches(['\r', '\n']).to_string()
 }
 
+fn commit_url_path(remote_url: &str, commit_url: &str) -> Result<String, String> {
+    let remote_url = crate::path_url::canonicalize_url(remote_url);
+    let commit_url = crate::path_url::canonicalize_url(commit_url);
+    if commit_url == remote_url {
+        return Ok(String::new());
+    }
+    commit_url
+        .strip_prefix(&format!("{remote_url}/"))
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            format!(
+                "commit URL {commit_url} is outside the configured SVN remote {remote_url}; refusing before write setup"
+            )
+        })
+}
+
 struct FileSvnDcommit<'a> {
     git: &'a GitCli,
     svn_root_url: &'a str,
     svn_path: &'a str,
     uuid: &'a str,
-    refname: &'a str,
+    source_refname: &'a str,
+    mapping_ref: &'a str,
     base_revision: u32,
     no_rebase: bool,
     mergeinfo: Option<&'a str>,
@@ -289,7 +327,7 @@ fn dcommit_file_svn(
         remote_id: ctx.remote_id.to_string(),
         repository_root_url: ctx.svn_root_url.to_string(),
         repository_uuid: ctx.uuid.to_string(),
-        mapping_ref: ctx.refname.to_string(),
+        mapping_ref: ctx.mapping_ref.to_string(),
         rev_map_path: ctx.rev_map_path.to_string_lossy().into_owned(),
         commit_url: target_url.clone(),
     };
@@ -304,10 +342,14 @@ fn dcommit_file_svn(
             .journal
             .entries
             .iter()
-            .map(|entry| (entry.base_oid.clone(), entry.git_oid.clone()))
-            .collect::<Vec<_>>()
+            .map(|entry| {
+                ctx.git
+                    .rev_parse(&format!("{}^", entry.git_oid))
+                    .map(|base| (base.trim().to_string(), entry.git_oid.clone()))
+            })
+            .collect::<Result<Vec<_>, _>>()?
     } else {
-        let mut base = ctx.refname.to_string();
+        let mut base = ctx.source_refname.to_string();
         commits
             .iter()
             .map(|commit| {
@@ -326,7 +368,7 @@ fn dcommit_file_svn(
     };
     let original_base_oid = match &active {
         Some(located) => located.journal.original_base_oid.clone(),
-        None => ctx.git.rev_parse(ctx.refname)?.trim().to_string(),
+        None => ctx.git.rev_parse(ctx.mapping_ref)?.trim().to_string(),
     };
     let original_head = match &active {
         Some(located) => located.journal.original_head.clone(),
@@ -387,8 +429,6 @@ fn dcommit_file_svn(
         plans: prepared.plans.clone(),
         rebase_shared: ctx.post_commit_fetch_shared.clone(),
         fetch_shared: ctx.post_commit_fetch_shared,
-        svn_options: ctx.svn_options.clone(),
-        commit_url_override: ctx.commit_url_override,
         expected_footer_url: ctx.expected_footer_url,
         expected_footer_uuid: ctx.expected_footer_uuid,
     };
@@ -450,7 +490,7 @@ fn build_file_svn_plans(
                         url: target_url.to_string(),
                         repository_root: ctx.svn_root_url.to_string(),
                         repository_uuid: ctx.uuid.to_string(),
-                        git_ref: ctx.refname.to_string(),
+                        git_ref: ctx.mapping_ref.to_string(),
                     },
                     base_revision,
                     git_commit: git_commit.clone(),
@@ -516,8 +556,6 @@ struct FileSvnPostSubmit<'a> {
     plans: Vec<DcommitPlan>,
     fetch_shared: crate::cli::SharedFetchArgs,
     rebase_shared: crate::cli::SharedFetchArgs,
-    svn_options: DcommitSvnOptions,
-    commit_url_override: bool,
     expected_footer_url: String,
     expected_footer_uuid: String,
 }
@@ -535,18 +573,6 @@ impl PostSubmit for FileSvnPostSubmit<'_> {
             self.git.work_tree().to_path_buf(),
             fetch_args_for_revision(self.fetch_shared.clone(), revision),
         )?;
-        if self.commit_url_override {
-            let actual = svn_last_changed_revision(&target.commit_url, &self.svn_options)?;
-            if actual != svn_revision {
-                return Err(format!(
-                    "commit URL reports r{actual} after submitting r{svn_revision}"
-                ));
-            }
-            return self
-                .git
-                .rev_parse(&target.mapping_ref)
-                .map(|oid| oid.trim().to_string());
-        }
         let expected_tree = projected_tree_for_entry(
             self.git,
             &self.original_base_oid,

@@ -2,6 +2,7 @@ use assert_cmd::Command;
 use git_svn_rs_core::dcommit::journal::{
     BatchState, DcommitJournal, DcommitTargetIdentity, EntryState, JournalEntry, JournalStore,
 };
+use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
 use predicates::prelude::*;
 
 #[allow(dead_code)]
@@ -907,6 +908,28 @@ fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
         ],
     );
 
+    let revision_before = fixture.latest_revision();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--commit-url",
+            &format!("{}/branches/untracked", fixture.url()),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "does not match a tracked SVN mapping",
+        ));
+    assert_eq!(fixture.latest_revision(), revision_before);
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/origin/trunk/dcommit-journal")
+            .exists()
+    );
+
     let branch_url = format!("{}/branches/main", fixture.url());
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -927,10 +950,67 @@ fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
         svn_stdout(&["cat", &format!("{}/trunk/src/lib.rs", fixture.url())]),
         "pub fn answer() -> u8 { 42 }\n"
     );
+
+    let store = JournalStore::new(find_dcommit_journal(&work));
+    let journal = store.load().unwrap().expect("completed dcommit journal");
+    let (revision, imported_oid) = match &journal.entries[0].state {
+        EntryState::FetchedVerified {
+            svn_revision,
+            imported_oid,
+        } => (*svn_revision, imported_oid.clone()),
+        state => panic!("explicit commit URL was not verified: {state:?}"),
+    };
+    assert_eq!(journal.target.mapping_ref, "refs/remotes/origin/main");
+    let branch_oid = git_stdout(&work, &["rev-parse", "refs/remotes/origin/main"]);
+    let trunk_oid = git_stdout(&work, &["rev-parse", "refs/remotes/origin/trunk"]);
+    assert_eq!(imported_oid, branch_oid);
+    assert_ne!(imported_oid, trunk_oid);
+    let rev_map_path = std::path::PathBuf::from(&journal.target.rev_map_path);
+    let rev_map_path = if rev_map_path.is_absolute() {
+        rev_map_path
+    } else {
+        work.join(rev_map_path)
+    };
+    assert_eq!(
+        RevMap::open_existing(rev_map_path, ObjectFormat::Sha1)
+            .unwrap()
+            .get(u32::try_from(revision).unwrap())
+            .unwrap()
+            .as_deref(),
+        Some(branch_oid.as_str())
+    );
+    assert!(
+        git_stdout(
+            &work,
+            &["show", "-s", "--format=%B", "refs/remotes/origin/main"]
+        )
+        .contains(&format!("{branch_url}@{revision} "))
+    );
+
+    let mut interrupted = journal;
+    interrupted.batch_state = BatchState::Submitting;
+    interrupted.entries[0].state = EntryState::Submitted {
+        svn_revision: revision,
+    };
+    {
+        let lock = store.acquire_lock().unwrap();
+        store.save(&lock, &interrupted).unwrap();
+    }
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase", "--commit-url", &branch_url])
+        .assert()
+        .success();
+    assert_eq!(
+        fixture.latest_revision(),
+        u32::try_from(revision).unwrap(),
+        "resuming explicit commit URL verification must not resubmit"
+    );
 }
 
 #[test]
-fn dcommit_rejects_commit_url_from_another_repository_before_write() {
+fn dcommit_rejects_commit_url_outside_configured_remote_before_write() {
     match require_svn_tools() {
         Ok(()) => {}
         Err(SvnToolPolicy::Skip(message)) => {
@@ -978,7 +1058,7 @@ fn dcommit_rejects_commit_url_from_another_repository_before_write() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "dcommit target repository UUID mismatch",
+            "outside the configured SVN remote",
         ));
 
     assert_eq!(
