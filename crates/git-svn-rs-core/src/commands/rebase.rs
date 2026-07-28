@@ -1,5 +1,6 @@
 use crate::cli::RebaseArgs;
 use crate::commands::{fetch, resolver::resolve_tracked_svn};
+use crate::path_url::add_path_to_url;
 
 pub fn run(args: RebaseArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
@@ -15,7 +16,16 @@ pub fn run_in_work_tree(
         return Err("fetch is unavailable after a --no-metadata one-shot import".to_string());
     }
     if args.dry_run {
-        return Ok(String::new());
+        let root = tracked
+            .config
+            .rewrite_root
+            .as_ref()
+            .unwrap_or(&tracked.config.url);
+        let url = add_path_to_url(root, &tracked.svn_path);
+        return Ok(format!(
+            "Remote Branch: {}\nSVN URL: {url}\n",
+            tracked.refname
+        ));
     }
     if !tracked.git.is_work_tree_clean()? {
         return Err("rebase requires a clean index and work tree".to_string());

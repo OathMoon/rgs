@@ -2689,15 +2689,8 @@ fn normalize_rebase_dry_run(output: &str) -> String {
         .lines()
         .filter_map(|line| {
             let line = line.trim();
-            if line.is_empty() {
-                None
-            } else if line.contains("fetch") {
-                Some("would fetch".to_string())
-            } else if line.contains("rebase") {
-                Some("would rebase <ref>".to_string())
-            } else {
-                None
-            }
+            (line.starts_with("Remote Branch: ") || line.starts_with("SVN URL: "))
+                .then(|| line.to_string())
         })
         .collect::<Vec<_>>()
         .join("\n")

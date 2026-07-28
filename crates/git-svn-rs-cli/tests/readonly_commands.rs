@@ -1643,7 +1643,7 @@ fn reset_parent_uses_the_nearest_earlier_nonzero_rev_map_record() {
 }
 
 #[test]
-fn rebase_dry_run_is_silent_like_frozen_git_svn() {
+fn rebase_dry_run_prints_the_frozen_tracking_identity() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
@@ -1661,7 +1661,7 @@ fn rebase_dry_run_is_silent_like_frozen_git_svn() {
         .args(["rebase", "--dry-run"])
         .assert()
         .success()
-        .stdout("");
+        .stdout("Remote Branch: refs/remotes/git-svn\nSVN URL: mock://repo/trunk\n");
 }
 
 #[test]
@@ -1703,7 +1703,7 @@ fn rebase_dry_run_accepts_current_first_parent_tracking_identity() {
         .args(["rebase", "--dry-run"])
         .assert()
         .success()
-        .stdout("");
+        .stdout("Remote Branch: refs/remotes/origin/main\nSVN URL: mock://repo/branches/main\n");
 }
 
 #[test]
