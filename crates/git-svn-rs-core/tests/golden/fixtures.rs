@@ -2268,7 +2268,9 @@ fn supported_rebase_dry_run(work_tree: &Path, tool: GoldenTool) -> Result<String
             work_tree,
             RebaseArgs {
                 dry_run: true,
+                verbose: false,
                 local: false,
+                fetch_all: false,
                 merge: false,
                 rebase_merges: false,
                 strategy: None,

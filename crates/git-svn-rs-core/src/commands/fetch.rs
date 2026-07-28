@@ -76,6 +76,20 @@ pub(crate) fn run_for_tracking_identity(
     fetch_config(&git, config, shared, Some(refname))
 }
 
+pub(crate) fn run_for_tracking_remote(
+    work_tree: impl Into<std::path::PathBuf>,
+    config: SvnRemoteConfig,
+    shared: &SharedFetchArgs,
+) -> Result<(), String> {
+    let work_tree = work_tree.into();
+    crate::path_url::validate_fetch_url(&config.url)?;
+    crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
+    let git = GitCli::new(work_tree);
+    verify_remote_fetch_ref_sanity(&git)?;
+    crate::import_transaction::recover_pending(&git)?;
+    fetch_config(&git, config, shared, None)
+}
+
 fn fetch_config(
     git: &GitCli,
     config: SvnRemoteConfig,

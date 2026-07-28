@@ -32,16 +32,20 @@ pub fn run_in_work_tree(
     }
 
     if !args.local {
-        fetch::run_for_tracking_identity(
-            work_tree.clone(),
-            tracked.config,
-            &tracked.refname,
-            &args.shared,
-        )?;
+        if args.fetch_all {
+            fetch::run_for_tracking_remote(work_tree, tracked.config.clone(), &args.shared)?;
+        } else {
+            fetch::run_for_tracking_identity(
+                work_tree,
+                tracked.config.clone(),
+                &tracked.refname,
+                &args.shared,
+            )?;
+        }
     }
-    let tracked = resolve_tracked_svn(work_tree)?;
     tracked.git.rebase(
         &tracked.refname,
+        args.verbose,
         args.merge,
         args.strategy.as_deref(),
         args.rebase_merges,

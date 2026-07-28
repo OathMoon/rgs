@@ -471,11 +471,18 @@ impl GitCli {
     pub fn rebase(
         &self,
         upstream: &str,
+        verbose: bool,
         merge: bool,
         strategy: Option<&str>,
         rebase_merges: bool,
     ) -> Result<String, String> {
-        self.run_args(rebase_args(upstream, merge, strategy, rebase_merges))
+        self.run_args(rebase_args(
+            upstream,
+            verbose,
+            merge,
+            strategy,
+            rebase_merges,
+        ))
     }
 
     pub fn run_for_test<const N: usize>(&self, args: [&str; N]) -> Result<String, String> {
@@ -544,11 +551,15 @@ fn log_record_args(
 
 fn rebase_args(
     upstream: &str,
+    verbose: bool,
     merge: bool,
     strategy: Option<&str>,
     rebase_merges: bool,
 ) -> Vec<String> {
     let mut args = vec!["rebase".to_string()];
+    if verbose {
+        args.push("-v".to_string());
+    }
     if merge {
         args.push("--merge".to_string());
     }
@@ -842,21 +853,22 @@ mod tests {
     #[test]
     fn rebase_arguments_match_frozen_git_svn_order() {
         assert_eq!(
-            rebase_args("refs/remotes/git-svn", false, None, false),
+            rebase_args("refs/remotes/git-svn", false, false, None, false),
             ["rebase", "refs/remotes/git-svn"]
         );
         assert_eq!(
-            rebase_args("refs/remotes/git-svn", true, None, false),
+            rebase_args("refs/remotes/git-svn", false, true, None, false),
             ["rebase", "--merge", "refs/remotes/git-svn"]
         );
         assert_eq!(
-            rebase_args("refs/remotes/git-svn", false, Some("ort"), false),
+            rebase_args("refs/remotes/git-svn", false, false, Some("ort"), false),
             ["rebase", "--strategy=ort", "refs/remotes/git-svn"]
         );
         assert_eq!(
-            rebase_args("refs/remotes/git-svn", true, Some("ort"), true),
+            rebase_args("refs/remotes/git-svn", true, true, Some("ort"), true),
             [
                 "rebase",
+                "-v",
                 "--merge",
                 "--strategy=ort",
                 "--rebase-merges",

@@ -575,7 +575,9 @@ impl PostSubmit for FileSvnPostSubmit<'_> {
             self.git.work_tree().to_path_buf(),
             crate::cli::RebaseArgs {
                 dry_run: false,
+                verbose: false,
                 local: false,
+                fetch_all: false,
                 merge: false,
                 rebase_merges: false,
                 strategy: None,
@@ -952,7 +954,7 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
     if ctx.no_rebase {
         out.push_str("Skipped rebase (--no-rebase).\n");
     } else {
-        let rebase_output = ctx.git.rebase(ctx.refname, false, None, false)?;
+        let rebase_output = ctx.git.rebase(ctx.refname, false, false, None, false)?;
         if rebase_output.is_empty() {
             out.push_str("Rebased onto tracked SVN ref.\n");
         } else {

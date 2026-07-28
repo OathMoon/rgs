@@ -135,8 +135,12 @@ pub struct FetchArgs {
 pub struct RebaseArgs {
     #[arg(short = 'n', long = "dry-run")]
     pub dry_run: bool,
+    #[arg(short = 'v', long)]
+    pub verbose: bool,
     #[arg(short = 'l', long)]
     pub local: bool,
+    #[arg(long = "fetch-all", alias = "all")]
+    pub fetch_all: bool,
     #[arg(short = 'm', short_alias = 'M', long = "merge")]
     pub merge: bool,
     #[arg(short = 'p', long = "rebase-merges")]

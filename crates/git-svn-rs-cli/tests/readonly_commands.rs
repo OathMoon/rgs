@@ -1658,7 +1658,7 @@ fn rebase_dry_run_prints_the_frozen_tracking_identity() {
 
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
     cmd.current_dir(work)
-        .args(["rebase", "--dry-run"])
+        .args(["rebase", "--dry-run", "-v", "--fetch-all"])
         .assert()
         .success()
         .stdout("Remote Branch: refs/remotes/git-svn\nSVN URL: mock://repo/trunk\n");
@@ -1762,7 +1762,7 @@ fn rebase_local_skips_remote_fetch() {
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
-        .args(["rebase", "--local"])
+        .args(["rebase", "--local", "--fetch-all"])
         .assert()
         .success();
 
@@ -1843,20 +1843,58 @@ fn rebase_fetches_and_runs_git_rebase_against_tracked_ref() {
     let upstream = commit_file(work, "upstream.txt", "upstream\n", "upstream");
     write_rev_map(work, &[&base, &upstream]);
     git(work, ["update-ref", "refs/remotes/git-svn", &upstream]);
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            ":refs/remotes/sibling",
+        ],
+    );
+    git(
+        work,
+        [
+            "config",
+            "svn-remote.other.url",
+            "https://unvalidated.invalid/svn",
+        ],
+    );
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.other.fetch",
+            ":refs/remotes/other",
+        ],
+    );
     git(work, ["checkout", "-b", "topic", &base]);
     let topic = commit_file(work, "topic.txt", "topic\n", "topic");
 
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
     cmd.current_dir(work)
-        .args(["rebase", "-M", "--strategy=ort"])
+        .args(["rebase", "-v", "--fetch-all", "-M", "--strategy=ort"])
         .assert()
-        .success();
+        .success()
+        .stdout(predicate::str::contains("Changes from"));
 
     let head = git_output(work, ["rev-parse", "HEAD"]);
     let merge_base = git_output(work, ["merge-base", "HEAD", "refs/remotes/git-svn"]);
     let tracked = git_output(work, ["rev-parse", "refs/remotes/git-svn"]);
     assert_ne!(head.trim(), topic);
     assert_eq!(merge_base.trim(), tracked.trim());
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/sibling"])
+            .trim()
+            .len(),
+        40
+    );
+    assert!(
+        work.join(".git/svn/refs/remotes/sibling/.rev_map.mock-uuid")
+            .is_file()
+    );
+    assert!(!work.join(".git/svn/refs/remotes/other").exists());
 }
 
 fn clone_mock_repo(parent: &std::path::Path) -> std::path::PathBuf {

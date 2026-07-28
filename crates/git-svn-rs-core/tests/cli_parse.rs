@@ -3,11 +3,13 @@ use git_svn_rs_core::cli::{Cli, Command};
 
 #[test]
 fn parses_rebase_uppercase_merge_alias_and_strategy() {
-    let cli = Cli::parse_from(["git-svn-rs", "rebase", "-M", "-s", "ort"]);
+    let cli = Cli::parse_from(["git-svn-rs", "rebase", "-v", "--all", "-M", "-s", "ort"]);
     let Command::Rebase(args) = cli.command else {
         panic!("expected rebase");
     };
     assert!(args.merge);
+    assert!(args.verbose);
+    assert!(args.fetch_all);
     assert_eq!(args.strategy.as_deref(), Some("ort"));
 }
 
