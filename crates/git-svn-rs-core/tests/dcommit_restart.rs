@@ -702,3 +702,57 @@ fn restart_from_rebase_pending_retries_without_sink_calls() {
         BatchState::Complete
     );
 }
+
+#[test]
+fn restart_after_rebase_complete_save_failure_retries_without_sink_calls() {
+    let temp = tempfile::tempdir().unwrap();
+    let directory = temp.path().join("dcommit-journal");
+    save_initial(
+        &JournalStore::new(&directory),
+        &journal(
+            EntryState::FetchedVerified {
+                svn_revision: 41,
+                imported_oid: imported_oid(),
+            },
+            BatchState::RebasePending,
+            false,
+        ),
+    );
+
+    let sink_state = Rc::new(RefCell::new(SinkState::default()));
+    let post_state = Rc::new(RefCell::new(PostState::default()));
+    let mut first_process = prepared(load(&JournalStore::new(&directory)));
+    let mut first_coordinator = Coordinator::new(
+        sink(&sink_state, [], []),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), Some(2)),
+    );
+    assert!(matches!(
+        first_coordinator.run(&mut first_process),
+        Err(CoordinatorError::Persistence(message)) if message == "injected save failure 2"
+    ));
+    drop(first_coordinator);
+    drop(first_process);
+
+    assert_eq!(
+        load(&JournalStore::new(&directory)).batch_state,
+        BatchState::RebasePending
+    );
+    let mut second_process = prepared(load(&JournalStore::new(&directory)));
+    let mut second_coordinator = Coordinator::new(
+        sink(&sink_state, [], []),
+        RecordingPostSubmit(Rc::clone(&post_state)),
+        StorePersistence::acquire(JournalStore::new(&directory), None),
+    );
+    second_coordinator.run(&mut second_process).unwrap();
+    drop(second_coordinator);
+
+    assert_eq!(sink_state.borrow().remote_checks, 0);
+    assert_eq!(sink_state.borrow().submissions, 0);
+    assert!(post_state.borrow().fetches.is_empty());
+    assert_eq!(post_state.borrow().rebases, 2);
+    assert_eq!(
+        load(&JournalStore::new(&directory)).batch_state,
+        BatchState::Complete
+    );
+}
