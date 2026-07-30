@@ -87,6 +87,52 @@ fn config_get_all_preserves_multi_value_entries() {
 }
 
 #[test]
+fn config_get_bool_uses_git_boolean_spellings_and_rejects_invalid_values() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+
+    assert_eq!(git.config_get_bool("test.boolean").unwrap(), None);
+    for (value, expected) in [
+        ("true", true),
+        ("yes", true),
+        ("on", true),
+        ("1", true),
+        ("TRUE", true),
+        ("false", false),
+        ("no", false),
+        ("off", false),
+        ("0", false),
+        ("FALSE", false),
+    ] {
+        git.config_set("test.boolean", value).unwrap();
+        assert_eq!(
+            git.config_get_bool("test.boolean").unwrap(),
+            Some(expected),
+            "Git boolean spelling {value}"
+        );
+    }
+
+    git.config_set("test.boolean", "maybe").unwrap();
+    let error = git.config_get_bool("test.boolean").unwrap_err();
+    assert!(error.contains("bad boolean config value"));
+    assert!(error.contains("test.boolean"));
+}
+
+#[test]
+fn config_get_bool_rejects_multiple_values() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    git.config_add("test.boolean", "yes").unwrap();
+    git.config_add("test.boolean", "off").unwrap();
+
+    let error = git.config_get_bool("test.boolean").unwrap_err();
+    assert!(error.contains("multiple values for test.boolean"));
+    assert!(error.contains("found 2"));
+}
+
+#[test]
 fn git_svn_metadata_round_trips_without_polluting_repository_config() {
     let dir = tempdir().unwrap();
     let git = GitCli::new(dir.path());

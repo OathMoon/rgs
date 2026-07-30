@@ -158,3 +158,66 @@ fn rejects_duplicate_single_value_remote_config() {
     let authors_error = read_svn_remote_config(&git, "svn").unwrap_err();
     assert!(authors_error.contains("multiple values for svn-remote.svn.authors-file"));
 }
+
+#[test]
+fn remote_boolean_config_uses_git_compatible_spellings() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = GitCli::new(temp.path());
+    git.init().unwrap();
+    git.config_set("svn-remote.svn.url", "mock://repo").unwrap();
+    git.config_set("svn-remote.svn.localtime", "yes").unwrap();
+    git.config_set("svn-remote.svn.no-auth-cache", "on")
+        .unwrap();
+    git.config_set("svn-remote.svn.noMetadata", "1").unwrap();
+    git.config_set("svn-remote.svn.preserve-empty-dirs", "TRUE")
+        .unwrap();
+
+    let enabled = read_svn_remote_config(&git, "svn").unwrap();
+    assert!(enabled.localtime);
+    assert!(enabled.no_auth_cache);
+    assert!(enabled.no_metadata);
+    assert!(enabled.preserve_empty_dirs);
+
+    git.config_set("svn-remote.svn.localtime", "no").unwrap();
+    git.config_set("svn-remote.svn.no-auth-cache", "off")
+        .unwrap();
+    git.config_set("svn-remote.svn.noMetadata", "0").unwrap();
+    git.config_set("svn-remote.svn.preserve-empty-dirs", "FALSE")
+        .unwrap();
+
+    let disabled = read_svn_remote_config(&git, "svn").unwrap();
+    assert!(!disabled.localtime);
+    assert!(!disabled.no_auth_cache);
+    assert!(!disabled.no_metadata);
+    assert!(!disabled.preserve_empty_dirs);
+}
+
+#[test]
+fn remote_boolean_config_rejects_invalid_and_duplicate_values() {
+    for key in [
+        "localtime",
+        "no-auth-cache",
+        "noMetadata",
+        "preserve-empty-dirs",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        git.config_set("svn-remote.svn.url", "mock://repo").unwrap();
+        let full_key = format!("svn-remote.svn.{key}");
+        git.config_set(&full_key, "maybe").unwrap();
+
+        let error = read_svn_remote_config(&git, "svn").unwrap_err();
+        assert!(error.contains("bad boolean config value"));
+        assert!(error.contains(&full_key.to_ascii_lowercase()));
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let git = GitCli::new(temp.path());
+    git.init().unwrap();
+    git.config_set("svn-remote.svn.url", "mock://repo").unwrap();
+    git.config_add("svn-remote.svn.localtime", "yes").unwrap();
+    git.config_add("svn-remote.svn.localtime", "off").unwrap();
+    let error = read_svn_remote_config(&git, "svn").unwrap_err();
+    assert!(error.contains("multiple values for svn-remote.svn.localtime"));
+}

@@ -9,6 +9,7 @@ pub trait GitBackend {
     fn config_add(&self, key: &str, value: &str) -> Result<(), String>;
     fn config_get(&self, key: &str) -> Result<Option<String>, String>;
     fn config_get_all(&self, key: &str) -> Result<Vec<String>, String>;
+    fn config_get_bool(&self, key: &str) -> Result<Option<bool>, String>;
     fn fast_import(&self, input: &[u8]) -> Result<(), String>;
 }
 
@@ -119,6 +120,10 @@ impl GitCli {
 
     pub fn config_get_all(&self, key: &str) -> Result<Vec<String>, String> {
         <Self as GitBackend>::config_get_all(self, key)
+    }
+
+    pub fn config_get_bool(&self, key: &str) -> Result<Option<bool>, String> {
+        <Self as GitBackend>::config_get_bool(self, key)
     }
 
     pub fn config_color_bool(&self, key: &str, stdout_is_terminal: bool) -> Result<bool, String> {
@@ -660,6 +665,38 @@ impl GitBackend for GitCli {
                 .collect())
         } else if output.status.code() == Some(1) {
             Ok(Vec::new())
+        } else {
+            Err(stderr_or_status(output))
+        }
+    }
+
+    fn config_get_bool(&self, key: &str) -> Result<Option<bool>, String> {
+        let output = Command::new("git")
+            .current_dir(&self.work_tree)
+            .args(["config", "--bool", "--get-all", key])
+            .output()
+            .map_err(|error| error.to_string())?;
+        if output.status.success() {
+            let values = String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(|value| match value {
+                    "true" => Ok(true),
+                    "false" => Ok(false),
+                    _ => Err(format!(
+                        "git config returned an invalid normalized boolean for {key}: {value}"
+                    )),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            match values.as_slice() {
+                [] => Ok(None),
+                [value] => Ok(Some(*value)),
+                _ => Err(format!(
+                    "multiple values for {key}: expected one, found {}",
+                    values.len()
+                )),
+            }
+        } else if output.status.code() == Some(1) {
+            Ok(None)
         } else {
             Err(stderr_or_status(output))
         }

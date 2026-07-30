@@ -226,6 +226,7 @@ pub fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
 pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
     let prefix = format!("svn-remote.{remote}");
     let read = |key: &str| read_single_config(git, &format!("{prefix}.{key}"));
+    let read_bool = |key: &str| git.config_get_bool(&format!("{prefix}.{key}"));
     let url = read("url")?.ok_or_else(|| format!("missing {prefix}.url"))?;
     let mappings = read_mappings(git, &prefix, "fetch", MappingKind::Fetch)?;
     let branch_mappings = read_mappings(git, &prefix, "branches", MappingKind::Branches)?;
@@ -249,14 +250,14 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
                     .map_err(|_| format!("invalid {prefix}.log-window-size: {value}"))
             })
             .transpose()?,
-        localtime: read("localtime")?.is_some_and(|value| value == "true"),
+        localtime: read_bool("localtime")?.unwrap_or(false),
         username: read("username")?,
         config_dir: read("config-dir")?,
-        no_auth_cache: read("no-auth-cache")?.is_some_and(|value| value == "true"),
-        no_metadata: read("noMetadata")?.is_some_and(|value| value == "true"),
+        no_auth_cache: read_bool("no-auth-cache")?.unwrap_or(false),
+        no_metadata: read_bool("noMetadata")?.unwrap_or(false),
         rewrite_root: read("rewriteRoot")?,
         rewrite_uuid: read("rewriteUUID")?,
-        preserve_empty_dirs: read("preserve-empty-dirs")?.is_some_and(|value| value == "true"),
+        preserve_empty_dirs: read_bool("preserve-empty-dirs")?.unwrap_or(false),
         placeholder_filename: read("placeholder-filename")?
             .unwrap_or_else(|| ".gitignore".to_string()),
     })
