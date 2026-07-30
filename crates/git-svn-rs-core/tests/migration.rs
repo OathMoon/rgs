@@ -124,3 +124,29 @@ fn detects_empty_svn_remote_section_without_rewriting_config() {
     assert!(ensure_supported_git_svn_metadata(dir.path()).is_err());
     assert_eq!(std::fs::read(config).unwrap(), original);
 }
+
+#[cfg(unix)]
+#[test]
+fn ignores_rev_db_reached_only_through_a_symlink() {
+    use std::os::unix::fs::symlink;
+
+    let dir = tempdir().unwrap();
+    let svn = dir.path().join(".git/svn");
+    let current = svn.join("refs/remotes/git-svn");
+    let external = dir.path().join("external");
+    std::fs::create_dir_all(&current).unwrap();
+    std::fs::create_dir_all(&external).unwrap();
+    std::fs::write(current.join(".rev_map.uuid"), []).unwrap();
+    std::fs::write(external.join(".rev_db.uuid"), b"external").unwrap();
+    symlink(&external, svn.join("external-link")).unwrap();
+    symlink(&svn, svn.join("cycle")).unwrap();
+
+    assert_eq!(
+        inspect_git_svn_metadata(dir.path()).unwrap(),
+        MigrationAction::AlreadyV5
+    );
+    assert_eq!(
+        std::fs::read(external.join(".rev_db.uuid")).unwrap(),
+        b"external"
+    );
+}

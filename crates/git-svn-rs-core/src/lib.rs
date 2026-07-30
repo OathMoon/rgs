@@ -7,6 +7,7 @@ pub mod diagnostics;
 pub mod error;
 pub mod fast_import;
 pub mod fetch_editor;
+mod filesystem;
 pub mod filters;
 pub mod git;
 pub mod git_svn_id;

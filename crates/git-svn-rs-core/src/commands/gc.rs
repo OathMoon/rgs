@@ -30,13 +30,7 @@ pub fn run_in_work_tree(work_tree: impl Into<std::path::PathBuf>) -> Result<(), 
 }
 
 fn clean_svn_metadata(path: &Path) -> Result<(), String> {
-    for entry in std::fs::read_dir(path).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.is_dir() {
-            clean_svn_metadata(&path)?;
-            continue;
-        }
-
+    for path in crate::filesystem::walk_files_no_symlinks(path)? {
         let name = path.file_name().and_then(|name| name.to_str());
         if name == Some("unhandled.log") {
             compress_unhandled_log(&path)?;
@@ -172,5 +166,32 @@ mod tests {
             contents,
             "r1\n  +empty_dir: first\nr2\n  +empty_dir: second\n"
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn skips_symlinked_directories_and_cycles_without_touching_external_files() {
+        use std::os::unix::fs::symlink;
+
+        let temp = tempfile::tempdir().unwrap();
+        let svn = temp.path().join("svn");
+        let external = temp.path().join("external");
+        std::fs::create_dir_all(&svn).unwrap();
+        std::fs::create_dir_all(&external).unwrap();
+        let index = external.join("index");
+        let unhandled = external.join("unhandled.log");
+        std::fs::write(&index, b"external index\n").unwrap();
+        std::fs::write(&unhandled, b"external log\n").unwrap();
+        symlink(&external, svn.join("external-link")).unwrap();
+        symlink(&svn, svn.join("cycle")).unwrap();
+
+        clean_svn_metadata(&svn).unwrap();
+        let root_link = temp.path().join("svn-root-link");
+        symlink(&external, &root_link).unwrap();
+        clean_svn_metadata(&root_link).unwrap();
+
+        assert_eq!(std::fs::read(index).unwrap(), b"external index\n");
+        assert_eq!(std::fs::read(unhandled).unwrap(), b"external log\n");
+        assert!(!external.join("unhandled.log.gz").exists());
     }
 }

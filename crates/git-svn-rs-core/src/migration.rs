@@ -59,7 +59,7 @@ pub fn inspect_git_svn_metadata(repo: &Path) -> Result<MigrationAction, String> 
 
     let mut saw_rev_db = false;
     let mut saw_rev_map = false;
-    for path in walk(&svn)? {
+    for path in crate::filesystem::walk_files_no_symlinks(&svn)? {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         saw_rev_map |= name.starts_with(".rev_map.");
         saw_rev_db |= name.starts_with(".rev_db.");
@@ -108,14 +108,16 @@ fn has_empty_svn_remote(config: &Path) -> Result<bool, String> {
 }
 
 fn has_legacy_svn_info_url(svn: &Path) -> Result<bool, String> {
-    Ok(walk(svn)?.iter().any(|path| {
-        path.file_name().and_then(|name| name.to_str()) == Some("url")
-            && path
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|name| name.to_str())
-                == Some("info")
-    }))
+    Ok(crate::filesystem::walk_files_no_symlinks(svn)?
+        .iter()
+        .any(|path| {
+            path.file_name().and_then(|name| name.to_str()) == Some("url")
+                && path
+                    .parent()
+                    .and_then(Path::file_name)
+                    .and_then(|name| name.to_str())
+                    == Some("info")
+        }))
 }
 
 fn resolve_git_dir(repo: &Path) -> Result<PathBuf, String> {
@@ -149,17 +151,4 @@ fn resolve_git_dir(repo: &Path) -> Result<PathBuf, String> {
     }
 
     Ok(gitdir)
-}
-
-fn walk(root: &Path) -> Result<Vec<PathBuf>, String> {
-    let mut out = Vec::new();
-    for entry in std::fs::read_dir(root).map_err(|e| e.to_string())? {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        if path.is_dir() {
-            out.extend(walk(&path)?);
-        } else {
-            out.push(path);
-        }
-    }
-    Ok(out)
 }
