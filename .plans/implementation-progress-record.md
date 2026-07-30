@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `6e8b595 Handle peg-sensitive SVN targets end to end`
+Committed HEAD at audit: `91042ca Support configured svn+ssh dcommit tunnels`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -22,7 +22,7 @@ produce `release-pass`.
 
 The repository provides an initially complete core workflow for covered `file://`,
 local `svn://`, configured `svn+ssh`, mock, and plain HTTP reads. It remains a
-preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validation.
+preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await validation.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
@@ -32,7 +32,7 @@ preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validati
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, askpass, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
-| 7 dcommit | `behavior-pass` for covered local profiles | typed plans, v4 recovery, stale-target preflight, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
+| 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/configured-tunnel exact writes | HTTP(S)/real-SSH write-back and broader faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; Linux workflow defined | first hosted execution |
 
 ## Validated Capabilities
@@ -85,13 +85,12 @@ preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validati
   the covered frozen Perl artifacts.
 - Production auth resolves `GIT_ASKPASS` then `SSH_ASKPASS` without Git persistence.
   Authenticated svnserve covers full-URL init, clone, and fetch in default/linked;
-  a configured `svn+ssh` tunnel separately validates exact `svnserve -t` invocation.
+  a configured `svn+ssh` tunnel validates exact `svnserve -t` read/write invocation.
 - Plain HTTP reads are separated from HTTPS and enabled through the common
   adapters. A loopback Apache DAV Basic-auth fixture covers denied no-credential
   clone, secret-safe errors, authenticated clone, and incremental fetch; strict CI
   installs and requires Apache, while this machine skips because it lacks Apache.
-- HTTPS fetch remains deferred until TLS trust/auth validation. HTTP(S) and
-  `svn+ssh` dcommit remain rejected before write preparation.
+- HTTPS fetch and HTTP(S) dcommit remain deferred pending TLS/DAV validation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
 - Readonly/write commands and `fetch --parent` resolve named remotes by nearest
@@ -183,8 +182,8 @@ preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validati
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
   options consistently. Dcommit uses secret-safe askpass for authenticated
   svnserve write and post-fetch without persisting credentials.
-- Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
-  before journal discovery/lock or write preparation. Dry-run remains descriptive.
+- Configured `svn+ssh` dcommit completes preflight/write/post-fetch through the
+  tracked remote; missing tunnel config and HTTP(S)/incompatible profiles fail early.
 - Mock write-back rejects `--commit-url` before journal, lock, or remote mutation
   because the mock sink cannot honor a URL override.
 
@@ -205,8 +204,8 @@ preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validati
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace` (521 passed); core lib 119/119; readonly 69/69
-- dcommit linear 53/53; dcommit restart 8/8; strict linked core 401 passed
+- `cargo test --workspace` (524 passed); core lib 119/119; readonly 69/69
+- dcommit linear 56/56; dcommit restart 8/8; strict linked core 401 passed
 - real SVN default/linked 41/41 each (HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
@@ -274,6 +273,7 @@ Verified on 2026-07-30:
 - `87e1446`: mapped commit-URL unknown-outcome adoption without resubmission.
 - `22c71e9`, `6e8b595`: stale-target preflight and peg-sensitive read/write E2E.
 - `f97b1b7`, `fc34c11`: dcommit askpass and fail-closed named-remote resolution.
+- `53d08a8`, `91042ca`: tracked-remote post-fetch and configured tunnel dcommit.
 
 ## Next Steps
 
@@ -287,10 +287,9 @@ Continue in this order unless new verification changes priority:
 
 - Preserve pre-existing untracked `.codex/`, `.zcode/`, `CLAUDE.md`, `docs/`, and
   generated `golden-stdlayout-*`/`svn-fixture-*` directories.
-- Configured `svn+ssh` external-tunnel reads are covered, but this does not imply
-  validated OpenSSH authentication/host trust or `svn+ssh` dcommit. HTTP(S) remains
-  write-gated; HTTPS reads remain gated, and HTTP awaits its first equipped strict
-  fixture run.
+- Configured `svn+ssh` tunnel reads/writes do not imply validated OpenSSH key or
+  host trust. HTTP(S) writes and HTTPS reads remain gated; strict DAV awaits an
+  equipped run.
 - The linked backend is a read/import backend. Dcommit still uses the SVN CLI
   working-copy sink for the covered local write profiles.
 - Migration remains inspection/rejection rather than automatic conversion.
