@@ -1171,56 +1171,40 @@ fn dcommit_adopts_commit_url_revision_after_svn_commit_success_response_is_lost(
 }
 
 #[test]
-fn dcommit_revision_option_does_not_limit_post_commit_fetch_when_tools_exist() {
-    match require_svn_tools() {
-        Ok(()) => {}
-        Err(SvnToolPolicy::Skip(message)) => {
-            eprintln!("{message}");
-            return;
-        }
-        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
-    }
-
+fn dcommit_rejects_revision_override_before_recovery_or_mutation() {
     let temp = tempfile::tempdir().unwrap();
-    let fixture = StandardSvnFixture::create().unwrap();
-    let work = temp.path().join("work");
-
-    Command::cargo_bin("git-svn-rs")
-        .unwrap()
-        .current_dir(temp.path())
-        .args(["clone", &fixture.url(), "work", "--stdlayout"])
-        .assert()
-        .success();
-    run_git(
-        &work,
-        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
-    );
-
-    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 44 }\n").unwrap();
-    run_git(
-        &work,
-        &[
-            "-c",
-            "user.name=Test User",
-            "-c",
-            "user.email=test@example.com",
-            "commit",
-            "-am",
-            "revision-limited dcommit answer",
-        ],
-    );
+    let work = clone_mock_repo(temp.path());
+    make_commit(&work, "local.txt", "local\n", "local change");
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    let head_before = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
-        .args(["dcommit", "--no-rebase", "--revision", "1"])
+        .args(["dcommit", "--revision", "999"])
         .assert()
-        .success()
-        .stdout(predicate::str::contains("revision-limited dcommit answer"));
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "dcommit --revision is not supported in v1",
+        ));
 
     assert_eq!(
-        git_stdout(&work, &["show", "refs/remotes/origin/trunk:src/lib.rs"]),
-        "pub fn answer() -> u8 { 44 }"
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/git-svn/dcommit-journal")
+            .exists()
     );
 }
 

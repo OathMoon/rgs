@@ -38,6 +38,12 @@ pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: DcommitArgs,
 ) -> Result<String, String> {
+    if args.shared.revision.is_some() {
+        return Err(
+            "dcommit --revision is not supported in v1; refusing to ignore an SVN editor base override"
+                .to_string(),
+        );
+    }
     let work_tree = work_tree.into();
     let git = GitCli::new(&work_tree);
     if crate::import_transaction::has_pending_batch(&git)? {
