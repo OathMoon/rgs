@@ -113,11 +113,7 @@ fn resolve_tracked_svn_impl(
     let mut hard_errors = Vec::new();
 
     for config in &configs {
-        let mappings = crate::tracking_state::validate_candidate_mappings(
-            &git,
-            config,
-            tracked_candidate_mappings(&git, config)?,
-        )?;
+        let mappings = tracked_candidate_mappings(&git, config)?;
         if mappings.is_empty() {
             errors.push((
                 config.name.clone(),
@@ -280,23 +276,14 @@ fn tracked_from_mapping(
     let svn_path = mapping.svn_path.clone();
     let (uuid, rev_map_path) = find_rev_map(metadata_dir)?;
 
-    let tracked = TrackedSvn {
+    Ok(TrackedSvn {
         git: git.clone(),
         config: config.clone(),
         refname,
         svn_path,
         uuid,
         rev_map_path,
-    };
-    crate::tracking_state::validate_existing_tracking_state(
-        &tracked.git,
-        &tracked.config,
-        &tracked.refname,
-        &tracked.svn_path,
-        &tracked.uuid,
-        &tracked.rev_map_path,
-    )?;
-    Ok(tracked)
+    })
 }
 
 fn rev_map_first_parent_identity(

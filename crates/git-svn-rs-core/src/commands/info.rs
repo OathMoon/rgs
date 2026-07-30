@@ -16,6 +16,14 @@ pub fn run_in_work_tree(
     if args.url {
         return Ok(format!("{url}\n"));
     }
+    crate::tracking_state::validate_existing_tracking_state(
+        &tracked.git,
+        &tracked.config,
+        &tracked.refname,
+        &tracked.svn_path,
+        &tracked.uuid,
+        &tracked.rev_map_path,
+    )?;
     let records = tracked.records()?;
     let first_parent_history = tracked.git.first_parent_history("HEAD")?;
     let revision = revision_for_first_parent(&records, &first_parent_history)

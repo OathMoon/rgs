@@ -2411,8 +2411,18 @@ fn rebase_fetches_and_runs_git_rebase_against_tracked_ref() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
-    let base = commit_file(work, "base.txt", "base\n", "base");
-    let upstream = commit_file(work, "upstream.txt", "upstream\n", "upstream");
+    let base = commit_file(
+        work,
+        "base.txt",
+        "base\n",
+        "base\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let upstream = commit_file(
+        work,
+        "upstream.txt",
+        "upstream\n",
+        "upstream\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
     write_rev_map(work, &[&base, &upstream]);
     git(work, ["update-ref", "refs/remotes/git-svn", &upstream]);
     git(

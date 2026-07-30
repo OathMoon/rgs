@@ -92,6 +92,14 @@ pub fn run_in_work_tree(
         }
         crate::path_url::validate_dcommit_write_urls(target_url, &tracked.config.url)?;
     }
+    crate::tracking_state::validate_existing_tracking_state(
+        &tracked.git,
+        &tracked.config,
+        &tracked.refname,
+        &tracked.svn_path,
+        &tracked.uuid,
+        &tracked.rev_map_path,
+    )?;
     let commits = if tracked.git.rev_parse("HEAD").is_ok() {
         tracked
             .git

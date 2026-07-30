@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
-use crate::mapping::RefMapping;
+use crate::mapping::{RefMapping, desanitize_refname, sanitize_refname};
 use crate::metadata::svn_metadata_dir;
 use crate::rev_map::{RevMap, RevMapRecord};
 
@@ -84,6 +84,17 @@ pub(crate) fn validate_candidate_mappings(
         match matches.len() {
             1 => validated.push(matches.pop().expect("one matching mapping")),
             0 => {
+                if is_importer_auxiliary_ref(
+                    git,
+                    config,
+                    &metadata_root,
+                    &refname,
+                    &uuid,
+                    record,
+                    state.identity.as_ref(),
+                )? {
+                    continue;
+                }
                 let paths = candidates
                     .iter()
                     .map(|mapping| mapping.svn_path.as_str())
@@ -108,6 +119,89 @@ pub(crate) fn validate_candidate_mappings(
         }
     }
     Ok(validated)
+}
+
+fn is_importer_auxiliary_ref(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    metadata_root: &Path,
+    refname: &str,
+    uuid: &str,
+    record: &RevMapRecord,
+    identity: Option<&GitSvnId>,
+) -> Result<bool, String> {
+    let Some(identity) = identity else {
+        return Ok(false);
+    };
+    if identity.revision != record.revision
+        || identity.uuid != config.rewrite_uuid.as_deref().unwrap_or(uuid)
+    {
+        return Ok(false);
+    }
+    let Some(base_ref) = auxiliary_base_ref(refname, record.revision) else {
+        return Ok(false);
+    };
+    if !configured_ref_matches(config, base_ref)? {
+        return Ok(false);
+    }
+
+    let base_metadata_dir = svn_metadata_dir(metadata_root, base_ref)?;
+    let Some((base_uuid, base_rev_map_path)) = find_existing_rev_map(&base_metadata_dir)? else {
+        return Ok(false);
+    };
+    if base_uuid != uuid {
+        return Ok(false);
+    }
+    let base_records = RevMap::open_existing(base_rev_map_path, git.object_format()?)?.records()?;
+    for base_record in base_records
+        .iter()
+        .filter(|base_record| !base_record.has_zero_object_id())
+    {
+        let history = git.first_parent_history(&base_record.object_id_hex)?;
+        if history
+            .get(1)
+            .is_some_and(|parent| parent == &record.object_id_hex)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn auxiliary_base_ref(refname: &str, revision: u32) -> Option<&str> {
+    let marker = format!("@{revision}");
+    let marker_start = refname.rfind(&marker)?;
+    let suffix = &refname[marker_start + marker.len()..];
+    if suffix.bytes().all(|byte| byte == b'-') {
+        Some(&refname[..marker_start])
+    } else {
+        None
+    }
+}
+
+fn configured_ref_matches(config: &SvnRemoteConfig, refname: &str) -> Result<bool, String> {
+    let raw_refname = desanitize_refname(refname);
+    for mapping in config
+        .fetch
+        .iter()
+        .chain(config.branches.iter())
+        .chain(config.tags.iter())
+    {
+        let Some((prefix, suffix)) = mapping.git_ref.split_once('*') else {
+            if sanitize_refname(&mapping.git_ref)? == refname {
+                return Ok(true);
+            }
+            continue;
+        };
+        if raw_refname
+            .strip_prefix(prefix)
+            .and_then(|wildcard| wildcard.strip_suffix(suffix))
+            .is_some_and(|wildcard| !wildcard.is_empty())
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 struct ExistingTrackingState {
@@ -297,10 +391,10 @@ fn corrupt_error(refname: &str, rev_map_path: &Path, detail: impl std::fmt::Disp
 
 #[cfg(test)]
 mod tests {
-    use super::validate_existing_tracking_state;
+    use super::{validate_candidate_mappings, validate_existing_tracking_state};
     use crate::config::SvnRemoteConfig;
     use crate::git::GitCli;
-    use crate::mapping::build_single_path;
+    use crate::mapping::{LayoutMappings, MappingKind, RefMapping, build_single_path};
     use crate::rev_map::{ObjectFormat, RevMap};
 
     const REFNAME: &str = "refs/remotes/git-svn";
@@ -425,5 +519,139 @@ mod tests {
         rev_map.append(1, &fixture.oid).unwrap();
 
         validate(&fixture, "repo-uuid").unwrap();
+    }
+
+    #[test]
+    fn candidate_validation_skips_importer_auxiliary_refs() {
+        let (_temp, git, config, candidates) =
+            auxiliary_candidate_fixture("git-svn-id: file:///repo/legacy@1 repo-uuid");
+
+        assert!(
+            validate_candidate_mappings(&git, &config, candidates)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn auxiliary_detection_does_not_hide_revision_or_uuid_corruption() {
+        for footer in [
+            "git-svn-id: file:///repo/legacy@2 repo-uuid",
+            "git-svn-id: file:///repo/legacy@1 other-uuid",
+        ] {
+            let (_temp, git, config, candidates) = auxiliary_candidate_fixture(footer);
+            let error = validate_candidate_mappings(&git, &config, candidates).unwrap_err();
+            assert!(
+                error.contains("git-svn-id does not match any configured SVN path"),
+                "{error}"
+            );
+        }
+    }
+
+    fn auxiliary_candidate_fixture(
+        footer: &str,
+    ) -> (tempfile::TempDir, GitCli, SvnRemoteConfig, Vec<RefMapping>) {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        git.run_for_test(["config", "user.name", "Test"]).unwrap();
+        git.run_for_test(["config", "user.email", "test@example.com"])
+            .unwrap();
+        git.run_for_test([
+            "commit",
+            "--allow-empty",
+            "-m",
+            &format!("source\n\n{footer}"),
+        ])
+        .unwrap();
+        let auxiliary_oid = git.rev_parse("HEAD").unwrap().trim().to_string();
+        let auxiliary_ref = "refs/remotes/origin/topic@1";
+        git.update_ref(auxiliary_ref, &auxiliary_oid).unwrap();
+        git.run_for_test([
+            "commit",
+            "--allow-empty",
+            "-m",
+            "branch\n\ngit-svn-id: file:///repo/branches/topic@2 repo-uuid",
+        ])
+        .unwrap();
+        let branch_oid = git.rev_parse("HEAD").unwrap().trim().to_string();
+        let branch_ref = "refs/remotes/origin/topic";
+        git.update_ref(branch_ref, &branch_oid).unwrap();
+
+        for (refname, revision, oid) in [
+            (auxiliary_ref, 1, auxiliary_oid.as_str()),
+            (branch_ref, 2, branch_oid.as_str()),
+        ] {
+            let path = temp
+                .path()
+                .join(".git/svn")
+                .join(refname)
+                .join(".rev_map.repo-uuid");
+            RevMap::open(path, ObjectFormat::Sha1)
+                .unwrap()
+                .append(revision, oid)
+                .unwrap();
+        }
+        let candidates = vec![RefMapping {
+            kind: MappingKind::Branches,
+            svn_path: "branches/topic@1".to_string(),
+            git_ref: auxiliary_ref.to_string(),
+        }];
+        (temp, git, wildcard_config(), candidates)
+    }
+
+    #[test]
+    fn candidate_validation_keeps_real_branch_names_ending_in_at_revision() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        git.run_for_test(["config", "user.name", "Test"]).unwrap();
+        git.run_for_test(["config", "user.email", "test@example.com"])
+            .unwrap();
+        git.run_for_test([
+            "commit",
+            "--allow-empty",
+            "-m",
+            "real branch\n\ngit-svn-id: file:///repo/branches/topic@1@1 repo-uuid",
+        ])
+        .unwrap();
+        let oid = git.rev_parse("HEAD").unwrap().trim().to_string();
+        let refname = "refs/remotes/origin/topic@1";
+        git.update_ref(refname, &oid).unwrap();
+        let path = temp
+            .path()
+            .join(".git/svn")
+            .join(refname)
+            .join(".rev_map.repo-uuid");
+        RevMap::open(path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(1, &oid)
+            .unwrap();
+        let mapping = RefMapping {
+            kind: MappingKind::Branches,
+            svn_path: "branches/topic@1".to_string(),
+            git_ref: refname.to_string(),
+        };
+
+        assert_eq!(
+            validate_candidate_mappings(&git, &wildcard_config(), vec![mapping.clone()]).unwrap(),
+            vec![mapping]
+        );
+    }
+
+    fn wildcard_config() -> SvnRemoteConfig {
+        SvnRemoteConfig::new(
+            "svn",
+            "file:///repo",
+            LayoutMappings {
+                fetch: Vec::new(),
+                branches: vec![RefMapping {
+                    kind: MappingKind::Branches,
+                    svn_path: "branches/*".to_string(),
+                    git_ref: "refs/remotes/origin/*".to_string(),
+                }],
+                tags: Vec::new(),
+            },
+        )
     }
 }
