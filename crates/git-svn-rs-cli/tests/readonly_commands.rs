@@ -15,6 +15,44 @@ fn find_rev_maps_svn_revision_to_git_commit() {
 }
 
 #[test]
+fn readonly_command_rejects_non_monotonic_rev_map_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let rev_map_path = canonical_git_svn_metadata(&work).join(".rev_map.mock-uuid");
+    let latest_record = std::fs::read(&rev_map_path).unwrap();
+    assert_eq!(latest_record.len(), 24);
+    assert_eq!(&latest_record[..4], &2_u32.to_be_bytes());
+    let mut corrupt_rev_map = latest_record.clone();
+    let mut older_record = latest_record;
+    older_record[..4].copy_from_slice(&1_u32.to_be_bytes());
+    corrupt_rev_map.extend_from_slice(&older_record);
+    std::fs::write(&rev_map_path, &corrupt_rev_map).unwrap();
+    let tracked_before = git_output(&work, ["rev-parse", "refs/remotes/git-svn"]);
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "--url"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("corrupt .rev_map")
+                .and(predicate::str::contains("not strictly increasing")),
+        );
+
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), corrupt_rev_map);
+    assert_eq!(
+        git_output(&work, ["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+}
+
+#[test]
 fn named_svn_remote_drives_readonly_commands_and_ignores_unrelated_missing_metadata() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();

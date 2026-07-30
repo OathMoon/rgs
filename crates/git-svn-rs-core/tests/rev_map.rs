@@ -195,8 +195,62 @@ fn detects_two_trailing_zero_records_as_inconsistent() {
     assert!(
         map.max_record(true)
             .unwrap_err()
-            .contains("inconsistent .rev_map")
+            .contains("corrupt .rev_map")
     );
+}
+
+#[test]
+fn rejects_non_monotonic_existing_map_before_reads_or_writes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".rev_map.uuid");
+    let mut map = RevMap::open(&path, ObjectFormat::Sha1).unwrap();
+    let oid1 = "1111111111111111111111111111111111111111";
+    let oid2 = "2222222222222222222222222222222222222222";
+    map.append(1, oid1).unwrap();
+    map.append(2, oid2).unwrap();
+    let mut corrupt = std::fs::read(&path).unwrap();
+    corrupt.rotate_left(24);
+    std::fs::write(&path, &corrupt).unwrap();
+
+    assert_corrupt_map_is_read_only(&mut map, &path, "not strictly increasing");
+}
+
+#[test]
+fn rejects_non_trailing_zero_existing_map_before_reads_or_writes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join(".rev_map.uuid");
+    let mut map = RevMap::open(&path, ObjectFormat::Sha1).unwrap();
+    map.append(1, "1111111111111111111111111111111111111111")
+        .unwrap();
+    map.append(2, "0000000000000000000000000000000000000000")
+        .unwrap();
+    let mut corrupt = std::fs::read(&path).unwrap();
+    corrupt.extend_from_slice(&3_u32.to_be_bytes());
+    corrupt.extend_from_slice(&[3_u8; 20]);
+    std::fs::write(&path, &corrupt).unwrap();
+
+    assert_corrupt_map_is_read_only(&mut map, &path, "is not the final record");
+}
+
+fn assert_corrupt_map_is_read_only(map: &mut RevMap, path: &std::path::Path, detail: &str) {
+    let before = std::fs::read(path).unwrap();
+    let expected_error = |error: String| {
+        assert!(error.contains("corrupt .rev_map"), "{error}");
+        assert!(error.contains(detail), "{error}");
+    };
+
+    expected_error(map.records().unwrap_err());
+    expected_error(map.get(1).unwrap_err());
+    expected_error(map.max_record(false).unwrap_err());
+    expected_error(
+        map.append(3, "3333333333333333333333333333333333333333")
+            .unwrap_err(),
+    );
+    expected_error(
+        map.reset_to(1, "1111111111111111111111111111111111111111")
+            .unwrap_err(),
+    );
+    assert_eq!(std::fs::read(path).unwrap(), before);
 }
 
 #[test]

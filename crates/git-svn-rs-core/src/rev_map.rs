@@ -115,25 +115,11 @@ impl RevMap {
 
     pub fn get(&self, revision: u32) -> Result<Option<String>, String> {
         let mut file = File::open(&self.path).map_err(|e| e.to_string())?;
-        let size = self.validated_size(&file)?;
-        let record_size = self.format.record_size();
-        let mut low = 0_i64;
-        let mut high = (size / record_size) as i64 - 1;
-
-        while low <= high {
-            let mid = (low + high) / 2;
-            file.seek(SeekFrom::Start(mid as u64 * record_size))
-                .map_err(|e| e.to_string())?;
-            let record = self.read_record(&mut file)?;
-            match record.revision.cmp(&revision) {
-                std::cmp::Ordering::Less => low = mid + 1,
-                std::cmp::Ordering::Greater => high = mid - 1,
-                std::cmp::Ordering::Equal => {
-                    if record.has_zero_object_id() {
-                        return Ok(None);
-                    }
-                    return Ok(Some(record.object_id_hex));
-                }
+        let records = self.validated_records(&mut file)?;
+        if let Ok(index) = records.binary_search_by_key(&revision, |record| record.revision) {
+            let record = &records[index];
+            if !record.has_zero_object_id() {
+                return Ok(Some(record.object_id_hex.clone()));
             }
         }
         Ok(None)
@@ -141,12 +127,7 @@ impl RevMap {
 
     pub fn records(&self) -> Result<Vec<RevMapRecord>, String> {
         let mut file = File::open(&self.path).map_err(|e| e.to_string())?;
-        let size = self.validated_size(&file)?;
-        let mut records = Vec::new();
-        for index in 0..(size / self.format.record_size()) {
-            records.push(self.read_record_at(&mut file, index)?);
-        }
-        Ok(records)
+        self.validated_records(&mut file)
     }
 
     pub fn max_revision(&self, require_commit: bool) -> Result<Option<u32>, String> {
@@ -157,26 +138,18 @@ impl RevMap {
 
     pub fn max_record(&self, want_commit: bool) -> Result<Option<RevMapRecord>, String> {
         let mut file = File::open(&self.path).map_err(|e| e.to_string())?;
-        let size = self.validated_size(&file)?;
-        let record_size = self.format.record_size();
-        if size == 0 {
+        let records = self.validated_records(&mut file)?;
+        let Some(last) = records.last() else {
             return Ok(None);
-        }
-
-        let last_index = size / record_size - 1;
-        let last = self.read_record_at(&mut file, last_index)?;
+        };
         if !want_commit || !last.has_zero_object_id() {
-            return Ok(Some(last));
+            return Ok(Some(last.clone()));
         }
-        if last_index == 0 {
-            return Ok(None);
-        }
-
-        let penultimate = self.read_record_at(&mut file, last_index - 1)?;
-        if penultimate.has_zero_object_id() {
-            return Err("inconsistent .rev_map: multiple trailing all-zero records".to_string());
-        }
-        Ok(Some(penultimate))
+        Ok(records
+            .len()
+            .checked_sub(2)
+            .and_then(|index| records.get(index))
+            .cloned())
     }
 
     pub fn reset_to(&mut self, revision: u32, object_id_hex: &str) -> Result<(), String> {
@@ -206,11 +179,10 @@ impl RevMap {
 
     fn find_record_position(&self, revision: u32) -> Result<(u64, Option<RevMapRecord>), String> {
         let mut file = File::open(&self.path).map_err(|e| e.to_string())?;
-        let size = self.validated_size(&file)?;
-        for index in 0..(size / self.format.record_size()) {
-            let record = self.read_record_at(&mut file, index)?;
+        let records = self.validated_records(&mut file)?;
+        for (index, record) in records.into_iter().enumerate() {
             if record.revision == revision {
-                return Ok((index, Some(record)));
+                return Ok((index as u64, Some(record)));
             }
         }
         Ok((0, None))
@@ -237,10 +209,47 @@ impl RevMap {
         let size = file.metadata().map_err(|e| e.to_string())?.len();
         let record_size = self.format.record_size();
         if size % record_size != 0 {
-            Err(format!("inconsistent .rev_map size: {size}"))
+            Err(self.corrupt_error(format!(
+                "size {size} is not a multiple of record size {record_size}"
+            )))
         } else {
             Ok(size)
         }
+    }
+
+    fn validated_records(&self, file: &mut File) -> Result<Vec<RevMapRecord>, String> {
+        let size = self.validated_size(file)?;
+        let record_count = size / self.format.record_size();
+        let mut records: Vec<RevMapRecord> = Vec::with_capacity(record_count as usize);
+
+        for index in 0..record_count {
+            let record = self
+                .read_record_at(file, index)
+                .map_err(|error| self.corrupt_error(error))?;
+            if let Some(previous) = records.last()
+                && record.revision <= previous.revision
+            {
+                return Err(self.corrupt_error(format!(
+                    "revisions are not strictly increasing at record {}: r{} follows r{}",
+                    index + 1,
+                    record.revision,
+                    previous.revision
+                )));
+            }
+            if record.has_zero_object_id() && index + 1 != record_count {
+                return Err(self.corrupt_error(format!(
+                    "zero object id at record {} is not the final record",
+                    index + 1
+                )));
+            }
+            records.push(record);
+        }
+
+        Ok(records)
+    }
+
+    fn corrupt_error(&self, detail: impl std::fmt::Display) -> String {
+        format!("corrupt .rev_map {}: {detail}", self.path.display())
     }
 }
 
