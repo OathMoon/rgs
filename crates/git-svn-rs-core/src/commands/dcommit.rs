@@ -199,27 +199,7 @@ pub fn run_in_work_tree(
                 .map_or(tracked.rev_map_path.as_path(), |mapping| {
                     mapping.rev_map_path.as_path()
                 });
-            let mut svn_options = dcommit_svn_options(
-                tracked.config.username.as_deref(),
-                tracked.config.config_dir.as_deref(),
-                tracked.config.no_auth_cache,
-                None,
-                &args.shared,
-            );
-            if svn_options.password.is_none()
-                && crate::path_url::svn_url_profile(target_url)
-                    == crate::path_url::SvnUrlProfile::Svn
-            {
-                svn_options.password = askpass_password(
-                    target_url,
-                    svn_options.username.as_deref(),
-                    svn_options.no_auth_cache,
-                )?;
-            }
-            if target_url.starts_with("file://") {
-                svn_options.username = None;
-                svn_options.password = None;
-            }
+            let svn_options = resolved_dcommit_svn_options(&tracked, &args, target_url)?;
             let post_commit_fetch_config =
                 fetch::effective_fetch_config(tracked.config.clone(), &args.shared, revision)?;
             return dcommit_file_svn(
@@ -319,8 +299,21 @@ fn dcommit_dry_run(
     commits: &[GitCommitSummary],
 ) -> Result<String, String> {
     let target = resolve_dry_run_target(tracked, args.commit_url.as_deref())?;
-    let (base_revision, _) =
-        validate_tracking_base(&tracked.git, &target.mapping_ref, &target.rev_map_path)?;
+    let (base_revision, _) = if is_svn_cli_write_back_url(&target.commit_url)
+        && is_svn_cli_write_back_url(&tracked.config.url)
+    {
+        let svn_options = resolved_dcommit_svn_options(tracked, args, &target.commit_url)?;
+        validate_svn_repository_uuid(&target.commit_url, &tracked.uuid, &svn_options)?;
+        validate_new_dcommit_base(
+            &tracked.git,
+            &target.mapping_ref,
+            &target.rev_map_path,
+            &target.commit_url,
+            &svn_options,
+        )?
+    } else {
+        validate_tracking_base(&tracked.git, &target.mapping_ref, &target.rev_map_path)?
+    };
     let chain = new_plan_chain(&tracked.refname, commits);
     let plans = build_dcommit_plans(
         &DcommitPlanningContext {
@@ -1136,6 +1129,34 @@ fn dcommit_svn_options(
             .or_else(|| persisted_password.map(|value| value.to_string())),
         no_auth_cache: persisted_no_auth_cache || shared.no_auth_cache,
     }
+}
+
+fn resolved_dcommit_svn_options(
+    tracked: &crate::commands::resolver::TrackedSvn,
+    args: &DcommitArgs,
+    target_url: &str,
+) -> Result<DcommitSvnOptions, String> {
+    let mut options = dcommit_svn_options(
+        tracked.config.username.as_deref(),
+        tracked.config.config_dir.as_deref(),
+        tracked.config.no_auth_cache,
+        None,
+        &args.shared,
+    );
+    if options.password.is_none()
+        && crate::path_url::svn_url_profile(target_url) == crate::path_url::SvnUrlProfile::Svn
+    {
+        options.password = askpass_password(
+            target_url,
+            options.username.as_deref(),
+            options.no_auth_cache,
+        )?;
+    }
+    if target_url.starts_with("file://") {
+        options.username = None;
+        options.password = None;
+    }
+    Ok(options)
 }
 
 fn run_svn(cwd: Option<&Path>, options: &DcommitSvnOptions, args: &[String]) -> Result<(), String> {

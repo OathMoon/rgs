@@ -2531,6 +2531,108 @@ fn dcommit_rejects_stale_explicit_target_before_journal_or_svn_write() {
 }
 
 #[test]
+fn dcommit_dry_run_rejects_an_advanced_file_svn_target_without_local_mutation() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = clone_standard_svn_repo(temp.path(), &fixture);
+    make_commit(
+        &work,
+        "src/lib.rs",
+        "pub fn answer() -> u8 { 100 }\n",
+        "local stale dry-run commit",
+    );
+
+    let upstream = temp.path().join("upstream");
+    let trunk_url = format!("{}/trunk", fixture.url());
+    svn_command(
+        temp.path(),
+        &["checkout", "--non-interactive", &trunk_url, "upstream"],
+    );
+    std::fs::write(upstream.join("upstream.txt"), "advanced elsewhere\n").unwrap();
+    svn_command(&upstream, &["add", "--non-interactive", "upstream.txt"]);
+    svn_command(
+        &upstream,
+        &[
+            "commit",
+            "--non-interactive",
+            "-m",
+            "advance trunk externally",
+        ],
+    );
+
+    let advanced_revision = fixture.latest_revision();
+    let local_before =
+        DcommitReadOnlySnapshot::capture(&work, "refs/remotes/origin/trunk", "src/lib.rs");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("SVN remote advanced"))
+        .stderr(predicate::str::contains("refusing to submit"));
+
+    assert_eq!(fixture.latest_revision(), advanced_revision);
+    local_before.assert_unchanged(&work);
+}
+
+#[test]
+fn dcommit_dry_run_rejects_a_file_svn_uuid_mismatch_without_local_mutation() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let other = StandardSvnFixture::create().unwrap();
+    let work = clone_standard_svn_repo(temp.path(), &fixture);
+    run_git(&work, &["config", "svn-remote.svn.url", &other.url()]);
+    run_git(
+        &work,
+        &["config", "svn-remote.svn.rewriteRoot", &fixture.url()],
+    );
+    make_commit(
+        &work,
+        "src/lib.rs",
+        "pub fn answer() -> u8 { 101 }\n",
+        "local UUID mismatch dry-run commit",
+    );
+
+    let other_revision = other.latest_revision();
+    let local_before =
+        DcommitReadOnlySnapshot::capture(&work, "refs/remotes/origin/trunk", "src/lib.rs");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "dcommit target repository UUID mismatch",
+        ))
+        .stderr(predicate::str::contains("refusing to write"));
+
+    assert_eq!(other.latest_revision(), other_revision);
+    local_before.assert_unchanged(&work);
+}
+
+#[test]
 fn dcommit_rejects_commit_url_outside_configured_remote_before_write() {
     match require_svn_tools() {
         Ok(()) => {}
@@ -4410,6 +4512,70 @@ fn make_gitlink_commit(work: &std::path::Path, oid: &str, message: &str) {
             message,
         ],
     );
+}
+
+struct DcommitReadOnlySnapshot {
+    head: String,
+    refs: String,
+    rev_map_path: std::path::PathBuf,
+    rev_map: Vec<u8>,
+    config: Vec<u8>,
+    metadata: BTreeMap<std::path::PathBuf, Vec<u8>>,
+    status: String,
+    working_file_path: std::path::PathBuf,
+    working_file: Vec<u8>,
+    journal_directory: std::path::PathBuf,
+    repository_lock: std::path::PathBuf,
+}
+
+impl DcommitReadOnlySnapshot {
+    fn capture(work: &std::path::Path, tracking_ref: &str, working_file: &str) -> Self {
+        let (rev_map_path, rev_map) = tracking_rev_map_snapshot(work, tracking_ref);
+        let journal_directory = dcommit_journal_path(work, tracking_ref);
+        let repository_lock = work.join(".git/svn/dcommit.lock");
+        assert!(!journal_directory.exists());
+        assert!(!repository_lock.exists());
+        Self {
+            head: git_stdout(work, &["rev-parse", "HEAD"]),
+            refs: git_stdout(work, &["for-each-ref", "--format=%(refname) %(objectname)"]),
+            rev_map_path,
+            rev_map,
+            config: std::fs::read(work.join(".git/config")).unwrap(),
+            metadata: directory_file_snapshot(&work.join(".git/svn")),
+            status: git_stdout(work, &["status", "--porcelain=v1", "--untracked-files=all"]),
+            working_file_path: work.join(working_file),
+            working_file: std::fs::read(work.join(working_file)).unwrap(),
+            journal_directory,
+            repository_lock,
+        }
+    }
+
+    fn assert_unchanged(&self, work: &std::path::Path) {
+        assert_eq!(git_stdout(work, &["rev-parse", "HEAD"]), self.head);
+        assert_eq!(
+            git_stdout(work, &["for-each-ref", "--format=%(refname) %(objectname)"]),
+            self.refs
+        );
+        assert_eq!(std::fs::read(&self.rev_map_path).unwrap(), self.rev_map);
+        assert_eq!(
+            std::fs::read(work.join(".git/config")).unwrap(),
+            self.config
+        );
+        assert_eq!(
+            directory_file_snapshot(&work.join(".git/svn")),
+            self.metadata
+        );
+        assert_eq!(
+            git_stdout(work, &["status", "--porcelain=v1", "--untracked-files=all"]),
+            self.status
+        );
+        assert_eq!(
+            std::fs::read(&self.working_file_path).unwrap(),
+            self.working_file
+        );
+        assert!(!self.journal_directory.exists());
+        assert!(!self.repository_lock.exists());
+    }
 }
 
 fn directory_file_snapshot(root: &std::path::Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
