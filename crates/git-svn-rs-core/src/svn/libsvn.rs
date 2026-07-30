@@ -268,7 +268,9 @@ impl LibSvnBackend {
             .url
             .as_deref()
             .ok_or_else(|| "libsvn backend requires an SVN repository URL".to_string())?;
-        let url = CString::new(url).map_err(|_| "SVN repository URL contains NUL".to_string())?;
+        let canonical_url = canonical_libsvn_url(url);
+        let url = CString::new(canonical_url)
+            .map_err(|_| "SVN repository URL contains NUL".to_string())?;
         AprRuntime::initialize()?;
         let apr = AprRuntime;
         let pool = apr.create_pool()?;
@@ -2150,6 +2152,8 @@ fn url_path_in_repository(
 ) -> Result<String, String> {
     let repository_url = repository_url
         .ok_or_else(|| "libsvn backend requires an SVN repository URL".to_string())?;
+    let repository_url = canonical_libsvn_url(repository_url);
+    let url = canonical_libsvn_url(url);
     let repository_url = repository_url.trim_end_matches('/');
     let url = url.trim_end_matches('/');
     let is_same_repository = url == repository_url
@@ -2168,6 +2172,11 @@ fn url_path_in_repository(
             "{url_label} is outside repository root: {url} (root: {repository_url})"
         ))
     }
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+fn canonical_libsvn_url(url: &str) -> String {
+    url.replace("%40", "@")
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]

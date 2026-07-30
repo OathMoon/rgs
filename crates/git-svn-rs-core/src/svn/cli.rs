@@ -77,8 +77,9 @@ impl SvnCliBackend {
     }
 
     pub fn repository_root(&self) -> Result<String, String> {
+        let target = crate::svn::target_without_peg_revision(&self.url);
         Ok(self
-            .run_text(&["info", "--show-item", "repos-root-url", &self.url])?
+            .run_text(&["info", "--show-item", "repos-root-url", &target])?
             .trim()
             .to_string())
     }
@@ -216,12 +217,12 @@ impl SvnCliBackend {
 }
 
 fn versioned_url(repos_root: &str, path: &str, revision: u32) -> String {
-    format!(
-        "{}/{}@{}",
+    let target = format!(
+        "{}/{}",
         repos_root.trim_end_matches('/'),
-        path.trim_start_matches('/'),
-        revision
-    )
+        path.trim_start_matches('/')
+    );
+    crate::svn::target_at_revision(&target, revision)
 }
 
 fn is_svn_cli_supported_url(url: &str) -> bool {
@@ -237,14 +238,16 @@ fn is_svn_cli_supported_url(url: &str) -> bool {
 
 impl SvnBackend for SvnCliBackend {
     fn uuid(&self) -> Result<String, String> {
+        let target = crate::svn::target_without_peg_revision(&self.url);
         Ok(self
-            .run_text(&["info", "--show-item", "repos-uuid", &self.url])?
+            .run_text(&["info", "--show-item", "repos-uuid", &target])?
             .trim()
             .to_string())
     }
 
     fn latest_revnum(&self) -> Result<u32, String> {
-        self.run_text(&["info", "--show-item", "revision", &self.url])?
+        let target = crate::svn::target_without_peg_revision(&self.url);
+        self.run_text(&["info", "--show-item", "revision", &target])?
             .trim()
             .parse()
             .map_err(|e: ParseIntError| e.to_string())
@@ -252,10 +255,11 @@ impl SvnBackend for SvnCliBackend {
 
     fn log(&self, start: u32, end: u32) -> Result<Vec<RevisionEvent>, String> {
         let range = format!("{start}:{end}");
-        let xml = self.run_text(&["log", "--xml", "-v", "-r", &range, &self.url])?;
+        let target = crate::svn::target_without_peg_revision(&self.url);
+        let xml = self.run_text(&["log", "--xml", "-v", "-r", &range, &target])?;
         let repos_root = self.repository_root()?;
         let session_path = self
-            .run_text(&["info", "--show-item", "relative-url", &self.url])?
+            .run_text(&["info", "--show-item", "relative-url", &target])?
             .trim()
             .strip_prefix("^/")
             .unwrap_or_default()

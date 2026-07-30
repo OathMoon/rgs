@@ -284,6 +284,66 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_writes_peg_sensitive_url_and_file_targets_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.create_peg_sensitive_trunk().unwrap();
+    let url = format!("{}/trunk%40main", fixture.url());
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &url, "work"])
+        .assert()
+        .success();
+    run_git(&work, &["checkout", "-b", "topic", "refs/remotes/git-svn"]);
+
+    std::fs::write(work.join("note@draft.txt"), "peg-sensitive\n").unwrap();
+    run_git(&work, &["add", "note@draft.txt"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "add peg-sensitive file",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 1 local Git commit(s)"));
+
+    assert_eq!(
+        svn_stdout(&[
+            "cat",
+            &format!("{}/trunk%40main/note%40draft.txt@", fixture.url())
+        ]),
+        "peg-sensitive\n"
+    );
+    assert_eq!(
+        git_stdout(&work, &["show", "refs/remotes/git-svn:note@draft.txt"]),
+        "peg-sensitive"
+    );
+}
+
+#[test]
 fn dcommit_rejects_dirty_work_tree_before_file_svn_write() {
     match require_svn_tools() {
         Ok(()) => {}

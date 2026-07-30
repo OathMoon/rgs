@@ -478,7 +478,7 @@ fn dcommit_file_svn(
         &[
             "checkout".to_string(),
             "--quiet".to_string(),
-            target_url,
+            crate::svn::target_without_peg_revision(&target_url),
             "wc".to_string(),
         ],
     )?;
@@ -852,7 +852,7 @@ fn svn_info_item(url: &str, item: &str, options: &DcommitSvnOptions) -> Result<S
             "info".to_string(),
             "--show-item".to_string(),
             item.to_string(),
-            url.to_string(),
+            crate::svn::target_without_peg_revision(url),
         ],
     )?
     .trim()

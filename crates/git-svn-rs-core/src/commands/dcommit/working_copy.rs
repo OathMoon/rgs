@@ -6,6 +6,10 @@ use crate::svn::editor::CommitEditor;
 
 use super::{DcommitSvnOptions, run_svn, svn_commit};
 
+fn svn_target(path: &str) -> String {
+    crate::svn::target_without_peg_revision(path)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EditorState {
     Open,
@@ -78,7 +82,7 @@ impl<'a> WorkingCopyPlanEditor<'a> {
                 name.to_string(),
             ],
         };
-        args.push(target);
+        args.push(svn_target(&target));
         run_svn(Some(&self.wc), self.svn_options, &args)
     }
 
@@ -134,7 +138,7 @@ impl<'a> WorkingCopyPlanEditor<'a> {
                 &[
                     "delete".to_string(),
                     "--keep-local".to_string(),
-                    path.clone(),
+                    svn_target(&path),
                 ],
             )?;
         }
@@ -158,7 +162,7 @@ impl<'a> WorkingCopyPlanEditor<'a> {
         run_svn(
             Some(&self.wc),
             self.svn_options,
-            &["add".to_string(), path.clone()],
+            &["add".to_string(), svn_target(&path)],
         )?;
         if !special {
             run_svn(
@@ -168,7 +172,7 @@ impl<'a> WorkingCopyPlanEditor<'a> {
                     "propdel".to_string(),
                     "--non-interactive".to_string(),
                     "svn:special".to_string(),
-                    path,
+                    svn_target(&path),
                 ],
             )?;
         }
@@ -206,7 +210,11 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
         run_svn(
             Some(&self.wc),
             self.svn_options,
-            &["add".to_string(), "--parents".to_string(), path],
+            &[
+                "add".to_string(),
+                "--parents".to_string(),
+                svn_target(&path),
+            ],
         )
     }
 
@@ -227,7 +235,7 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
         run_svn(
             Some(&self.wc),
             self.svn_options,
-            &["delete".to_string(), path],
+            &["delete".to_string(), svn_target(&path)],
         )
     }
 
@@ -242,7 +250,11 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
         run_svn(
             Some(&self.wc),
             self.svn_options,
-            &["copy".to_string(), source_path, path],
+            &[
+                "copy".to_string(),
+                svn_target(&source_path),
+                svn_target(&path),
+            ],
         )
     }
 
@@ -257,7 +269,11 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
         run_svn(
             Some(&self.wc),
             self.svn_options,
-            &["move".to_string(), source_path, path],
+            &[
+                "move".to_string(),
+                svn_target(&source_path),
+                svn_target(&path),
+            ],
         )
     }
 
@@ -276,7 +292,7 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
             run_svn(
                 Some(&self.wc),
                 self.svn_options,
-                &["add".to_string(), "--parents".to_string(), path.to_string()],
+                &["add".to_string(), "--parents".to_string(), svn_target(path)],
             )?;
         }
         self.change_prop(path, name, value)
@@ -297,7 +313,11 @@ impl CommitEditor for WorkingCopyPlanEditor<'_> {
             run_svn(
                 Some(&self.wc),
                 self.svn_options,
-                &["add".to_string(), "--parents".to_string(), path],
+                &[
+                    "add".to_string(),
+                    "--parents".to_string(),
+                    svn_target(&path),
+                ],
             )?;
         }
         let revision = svn_commit(&self.wc, &self.message, self.svn_options)?;

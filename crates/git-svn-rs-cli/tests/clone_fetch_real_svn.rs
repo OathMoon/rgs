@@ -14,6 +14,69 @@ use svn_fixture::{
 };
 
 #[test]
+fn clone_and_fetch_peg_sensitive_file_url() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let initial_revision = fixture.create_peg_sensitive_trunk().unwrap();
+    let url = format!("{}/trunk%40main", fixture.url());
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &url,
+            "work",
+            "--revision",
+            &format!("{initial_revision}:HEAD"),
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/git-svn:run.sh"])
+            .unwrap(),
+        "#!/bin/sh\necho hi\n"
+    );
+    assert!(
+        git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/git-svn"])
+            .unwrap()
+            .contains(&format!("trunk%40main@{initial_revision} "))
+    );
+
+    let fetched_revision = fixture
+        .modify_peg_sensitive_run_script("#!/bin/sh\necho peg\n")
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/git-svn:run.sh"])
+            .unwrap(),
+        "#!/bin/sh\necho peg\n"
+    );
+    assert!(
+        git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/git-svn"])
+            .unwrap()
+            .contains(&format!("trunk%40main@{fetched_revision} "))
+    );
+}
+
+#[test]
 fn clone_stdlayout_file_url_imports_trunk_history() {
     match require_svn_tools() {
         Ok(()) => {}

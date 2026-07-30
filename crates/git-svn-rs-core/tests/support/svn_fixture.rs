@@ -200,6 +200,64 @@ impl StandardSvnFixture {
     }
 
     #[allow(dead_code)]
+    pub fn create_peg_sensitive_trunk(&self) -> Result<u32, String> {
+        let wc = self._tmp.path().join("create-peg-sensitive-trunk-wc");
+        run(
+            self._tmp.path(),
+            "svn",
+            &[
+                "checkout",
+                "--non-interactive",
+                self.url().as_str(),
+                path_arg(&wc)?,
+            ],
+        )?;
+        std::fs::create_dir(wc.join("trunk@main")).map_err(|e| e.to_string())?;
+        std::fs::write(wc.join("trunk@main/run.sh"), "#!/bin/sh\necho hi\n")
+            .map_err(|e| e.to_string())?;
+        run(&wc, "svn", &["add", "--non-interactive", "trunk@main@"])?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "commit",
+                "--non-interactive",
+                "-m",
+                "add peg-sensitive trunk",
+            ],
+        )?;
+        Ok(self.latest_revision())
+    }
+
+    #[allow(dead_code)]
+    pub fn modify_peg_sensitive_run_script(&self, content: &str) -> Result<u32, String> {
+        let wc = self._tmp.path().join("modify-peg-sensitive-trunk-wc");
+        let target = format!("{}/trunk%40main@", self.url());
+        run(
+            self._tmp.path(),
+            "svn",
+            &[
+                "checkout",
+                "--non-interactive",
+                target.as_str(),
+                path_arg(&wc)?,
+            ],
+        )?;
+        std::fs::write(wc.join("run.sh"), content).map_err(|e| e.to_string())?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "commit",
+                "--non-interactive",
+                "-m",
+                "modify peg-sensitive run script",
+            ],
+        )?;
+        Ok(self.latest_revision())
+    }
+
+    #[allow(dead_code)]
     pub fn remove_executable_from_run_script(&self) -> Result<u32, String> {
         self.remove_run_script_property("svn:executable", "remove executable property")
     }
