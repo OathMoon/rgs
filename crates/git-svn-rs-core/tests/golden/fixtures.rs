@@ -551,6 +551,12 @@ pub fn run_standard_stdlayout_golden_comparison(
     run_standard_golden_comparison(root, GoldenLayout::StdLayout)
 }
 
+pub fn run_standard_full_url_layout_golden_comparison(
+    root: impl AsRef<Path>,
+) -> Result<GoldenComparison, String> {
+    run_standard_golden_comparison(root, GoldenLayout::FullUrlLayout)
+}
+
 pub fn run_standard_subdirectory_golden_comparison(
     root: impl AsRef<Path>,
 ) -> Result<GoldenComparison, String> {
@@ -693,12 +699,15 @@ fn run_standard_dcommit_golden_comparison_for(
         .map(|path| path_arg(path).map(str::to_string))
         .transpose()?;
     commands::clone::run(CloneArgs {
-        url: fixture_url,
+        url: fixture_url.clone(),
         path: Some(path_arg(&rust_path)?.to_string()),
-        layout: golden_layout(match transport {
-            DcommitTransport::File => GoldenLayout::StdLayout,
-            DcommitTransport::AuthenticatedSvn => GoldenLayout::Trunk,
-        }),
+        layout: golden_layout(
+            match transport {
+                DcommitTransport::File => GoldenLayout::StdLayout,
+                DcommitTransport::AuthenticatedSvn => GoldenLayout::Trunk,
+            },
+            &fixture_url,
+        ),
         shared: rust_shared.clone(),
         no_checkout: false,
     })?;
@@ -1342,6 +1351,7 @@ fn normalize_dcommit_summary(
 enum GoldenLayout {
     Trunk,
     StdLayout,
+    FullUrlLayout,
     Subdirectory,
 }
 
@@ -1354,13 +1364,19 @@ fn run_standard_golden_comparison(
     let capture_name = match layout {
         GoldenLayout::Trunk => "standard-linear-history",
         GoldenLayout::StdLayout => "standard-layout-history",
+        GoldenLayout::FullUrlLayout => "standard-full-url-layout-history",
         GoldenLayout::Subdirectory => "standard-subdirectory-history",
     };
     let capture = GoldenArtifactCapture::new(root, capture_name)?;
     let fixture_url = match layout {
         GoldenLayout::Subdirectory => format!("{}/trunk", fixture.url().trim_end_matches('/')),
-        GoldenLayout::Trunk | GoldenLayout::StdLayout => fixture.url(),
+        GoldenLayout::Trunk | GoldenLayout::StdLayout | GoldenLayout::FullUrlLayout => {
+            fixture.url()
+        }
     };
+    let full_trunk_url = format!("{}/trunk", fixture_url.trim_end_matches('/'));
+    let full_branches_url = format!("{}/branches", fixture_url.trim_end_matches('/'));
+    let full_tags_url = format!("{}/tags", fixture_url.trim_end_matches('/'));
 
     let perl_path = root.join("perl-clone");
     let mut perl_clone_args = vec![
@@ -1373,6 +1389,14 @@ fn run_standard_golden_comparison(
     match layout {
         GoldenLayout::Trunk => perl_clone_args.extend(["--trunk", "trunk"]),
         GoldenLayout::StdLayout => perl_clone_args.push("--stdlayout"),
+        GoldenLayout::FullUrlLayout => perl_clone_args.extend([
+            "--trunk",
+            full_trunk_url.as_str(),
+            "--branches",
+            full_branches_url.as_str(),
+            "--tags",
+            full_tags_url.as_str(),
+        ]),
         GoldenLayout::Subdirectory => {}
     }
     if !matches!(layout, GoldenLayout::Subdirectory) {
@@ -1390,6 +1414,14 @@ fn run_standard_golden_comparison(
     match layout {
         GoldenLayout::Trunk => perl_no_checkout_args.extend(["--trunk", "trunk"]),
         GoldenLayout::StdLayout => perl_no_checkout_args.push("--stdlayout"),
+        GoldenLayout::FullUrlLayout => perl_no_checkout_args.extend([
+            "--trunk",
+            full_trunk_url.as_str(),
+            "--branches",
+            full_branches_url.as_str(),
+            "--tags",
+            full_tags_url.as_str(),
+        ]),
         GoldenLayout::Subdirectory => {}
     }
     if !matches!(layout, GoldenLayout::Subdirectory) {
@@ -1464,7 +1496,7 @@ fn run_standard_golden_comparison(
     let rust_clone_output = commands::clone::run_with_output(CloneArgs {
         url: fixture_url.clone(),
         path: Some(path_arg(&rust_path)?.to_string()),
-        layout: golden_layout(layout),
+        layout: golden_layout(layout, &fixture_url),
         shared: default_shared_fetch_args(),
         no_checkout: false,
     })?;
@@ -1479,9 +1511,9 @@ fn run_standard_golden_comparison(
     )?;
     let rust_no_checkout_path = root.join("rust-clone-no-checkout");
     commands::clone::run(CloneArgs {
-        url: fixture_url,
+        url: fixture_url.clone(),
         path: Some(path_arg(&rust_no_checkout_path)?.to_string()),
-        layout: golden_layout(layout),
+        layout: golden_layout(layout, &fixture_url),
         shared: default_shared_fetch_args(),
         no_checkout: true,
     })?;
@@ -1555,12 +1587,24 @@ fn run_standard_golden_comparison(
     })
 }
 
-fn golden_layout(layout: GoldenLayout) -> LayoutArgs {
+fn golden_layout(layout: GoldenLayout, fixture_url: &str) -> LayoutArgs {
     LayoutArgs {
         stdlayout: matches!(layout, GoldenLayout::StdLayout),
-        trunk: matches!(layout, GoldenLayout::Trunk).then(|| "trunk".to_string()),
-        branches: Vec::new(),
-        tags: Vec::new(),
+        trunk: match layout {
+            GoldenLayout::Trunk => Some("trunk".to_string()),
+            GoldenLayout::FullUrlLayout => {
+                Some(format!("{}/trunk", fixture_url.trim_end_matches('/')))
+            }
+            GoldenLayout::StdLayout | GoldenLayout::Subdirectory => None,
+        },
+        branches: matches!(layout, GoldenLayout::FullUrlLayout)
+            .then(|| format!("{}/branches", fixture_url.trim_end_matches('/')))
+            .into_iter()
+            .collect(),
+        tags: matches!(layout, GoldenLayout::FullUrlLayout)
+            .then(|| format!("{}/tags", fixture_url.trim_end_matches('/')))
+            .into_iter()
+            .collect(),
         prefix: None,
     }
 }

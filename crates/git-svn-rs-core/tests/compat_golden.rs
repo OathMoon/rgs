@@ -13,9 +13,9 @@ use golden_fixtures::{
     GoldenFixtureStep, RefTipArtifact, RevMapArtifactRecord, RevMapByteLengthArtifact,
     ToolAvailability, compare_supported_subset, missing_perl_git_svn_policy,
     perl_git_svn_available, require_golden_tools, require_svn_tools,
-    run_rust_stdlayout_ref_artifacts, run_standard_stdlayout_golden_comparison,
-    run_standard_subdirectory_golden_comparison, run_standard_trunk_golden_comparison,
-    supported_rev_map, supported_rev_map_byte_lengths,
+    run_rust_stdlayout_ref_artifacts, run_standard_full_url_layout_golden_comparison,
+    run_standard_stdlayout_golden_comparison, run_standard_subdirectory_golden_comparison,
+    run_standard_trunk_golden_comparison, supported_rev_map, supported_rev_map_byte_lengths,
 };
 #[cfg(unix)]
 use golden_fixtures::{
@@ -411,6 +411,36 @@ fn standard_layout_fixture_matches_perl_git_svn_supported_subset() {
         .tempdir_in(std::env::current_dir().unwrap())
         .unwrap();
     let comparison = run_standard_stdlayout_golden_comparison(tmp.path()).unwrap();
+
+    comparison.assert_supported_subset_matches().unwrap();
+}
+
+#[test]
+fn full_url_layout_fixture_matches_perl_git_svn_supported_subset() {
+    if cfg!(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)) {
+        eprintln!(
+            "full URL layout golden comparison is covered by the SVN CLI compatibility backend"
+        );
+        return;
+    }
+    match require_golden_tools() {
+        Ok(version) => {
+            eprintln!(
+                "Perl git-svn available ({version}); running full URL layout golden comparison"
+            );
+        }
+        Err(CompatDecision::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(CompatDecision::Fail(message)) => panic!("{message}"),
+    }
+
+    let tmp = tempfile::Builder::new()
+        .prefix("golden-compat-full-url-layout-")
+        .tempdir_in(std::env::current_dir().unwrap())
+        .unwrap();
+    let comparison = run_standard_full_url_layout_golden_comparison(tmp.path()).unwrap();
 
     comparison.assert_supported_subset_matches().unwrap();
 }

@@ -1,6 +1,6 @@
 use git_svn_rs_core::path_url::{
     SvnUrlProfile, add_path_to_url, canonicalize_path, canonicalize_url, join_paths,
-    svn_url_profile, validate_dcommit_write_urls, validate_fetch_url,
+    repository_relative_url_path, svn_url_profile, validate_dcommit_write_urls, validate_fetch_url,
 };
 
 #[test]
@@ -29,6 +29,28 @@ fn adds_path_to_url_without_double_slashes() {
     assert_eq!(
         add_path_to_url("https://svn.example/repo/", "/trunk"),
         "https://svn.example/repo/trunk"
+    );
+}
+
+#[test]
+fn derives_decoded_repository_relative_url_paths() {
+    assert_eq!(
+        repository_relative_url_path(
+            "file:///repo",
+            "file:///repo/project%20name/%E5%88%86%E6%94%AF"
+        )
+        .unwrap(),
+        "project name/分支"
+    );
+    assert!(
+        repository_relative_url_path("file:///repo", "file:///other/trunk")
+            .unwrap_err()
+            .contains("outside repository root")
+    );
+    assert!(
+        repository_relative_url_path("svn://one/repo", "svn://two/repo/trunk")
+            .unwrap_err()
+            .contains("outside repository root")
     );
 }
 

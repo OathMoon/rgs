@@ -47,6 +47,14 @@ pub fn build_from_layout_args(
 ) -> Result<LayoutMappings, String> {
     let has_layout_args = stdlayout || trunk.is_some() || !branches.is_empty() || !tags.is_empty();
     let prefix = prefix.unwrap_or(if has_layout_args { "origin/" } else { "" });
+    if (!branches.is_empty() || !tags.is_empty() || stdlayout)
+        && !prefix.is_empty()
+        && !prefix.ends_with('/')
+    {
+        return Err(format!(
+            "--prefix={prefix:?} must have a trailing slash '/' when branches or tags are mapped"
+        ));
+    }
 
     if trunk.is_some() || !branches.is_empty() || !tags.is_empty() {
         let mut mappings = if stdlayout {
@@ -122,7 +130,10 @@ fn build_standard_layout_with_prefix(prefix: &str) -> LayoutMappings {
 }
 
 fn validate_glob(glob: &str) -> Result<String, String> {
-    let trimmed = trim_path(glob);
+    let mut trimmed = trim_path(glob);
+    if !trimmed.contains('*') && !trimmed.contains('{') {
+        trimmed.push_str("/*");
+    }
     GlobSpec::new(&trimmed, true)?;
     Ok(trimmed)
 }

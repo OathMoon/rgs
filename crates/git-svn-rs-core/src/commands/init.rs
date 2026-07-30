@@ -1,15 +1,45 @@
 use std::fs;
 
-use crate::cli::InitArgs;
+use crate::cli::{InitArgs, LayoutArgs, SharedFetchArgs};
 use crate::config::SvnRemoteConfig;
 use crate::git::{GitCli, GitCommandOutput};
 use crate::mapping::{LayoutMappings, build_from_layout_args};
+use crate::path_url::{
+    SvnUrlProfile, canonicalize_url, join_paths, repository_relative_url_path, svn_url_profile,
+    validate_fetch_url,
+};
+use crate::svn::cli::SvnCliBackend;
 
 pub fn run(args: InitArgs) -> Result<(), String> {
     run_with_output(args).map(|_| ())
 }
 
-pub(crate) fn run_with_output(args: InitArgs) -> Result<GitCommandOutput, String> {
+pub(crate) fn run_with_output(mut args: InitArgs) -> Result<GitCommandOutput, String> {
+    validate_args(&args)?;
+    build_from_layout_args(
+        args.layout.stdlayout,
+        args.layout.trunk.as_deref(),
+        &args.layout.branches,
+        &args.layout.tags,
+        args.layout.prefix.as_deref(),
+    )?;
+    let normalization_notice =
+        normalize_layout_args(&mut args.url, &mut args.layout, &args.shared)?;
+    let mappings = build_from_layout_args(
+        args.layout.stdlayout,
+        args.layout.trunk.as_deref(),
+        &args.layout.branches,
+        &args.layout.tags,
+        args.layout.prefix.as_deref(),
+    )?;
+    let mut output = run_prepared_with_output(args, mappings)?;
+    if let Some(notice) = normalization_notice {
+        output.stderr.push_str(&notice);
+    }
+    Ok(output)
+}
+
+fn validate_args(args: &InitArgs) -> Result<(), String> {
     if args.shared.revision.is_some() {
         return Err("init --revision is not supported; use clone or fetch".to_string());
     }
@@ -21,14 +51,14 @@ pub(crate) fn run_with_output(args: InitArgs) -> Result<GitCommandOutput, String
     if args.shared.log_window_size == Some(0) {
         return Err("--log-window-size must be greater than zero".to_string());
     }
-    let mappings = build_from_layout_args(
-        args.layout.stdlayout,
-        args.layout.trunk.as_deref(),
-        &args.layout.branches,
-        &args.layout.tags,
-        args.layout.prefix.as_deref(),
-    )?;
+    Ok(())
+}
 
+pub(crate) fn run_prepared_with_output(
+    args: InitArgs,
+    mappings: LayoutMappings,
+) -> Result<GitCommandOutput, String> {
+    validate_args(&args)?;
     let work_tree = args.path.as_deref().unwrap_or(".");
     fs::create_dir_all(work_tree).map_err(|e| e.to_string())?;
 
@@ -38,6 +68,105 @@ pub(crate) fn run_with_output(args: InitArgs) -> Result<GitCommandOutput, String
     let config = svn_remote_config(args, mappings);
     write_svn_remote_config(&git, &config)?;
     Ok(output)
+}
+
+pub(crate) fn normalize_layout_args(
+    url: &mut String,
+    layout: &mut LayoutArgs,
+    shared: &SharedFetchArgs,
+) -> Result<Option<String>, String> {
+    let has_layout = layout.stdlayout
+        || layout.trunk.is_some()
+        || !layout.branches.is_empty()
+        || !layout.tags.is_empty();
+    if !has_layout {
+        return Ok(None);
+    }
+    let has_full_layout_url = layout
+        .trunk
+        .iter()
+        .chain(&layout.branches)
+        .chain(&layout.tags)
+        .any(|value| url::Url::parse(value).is_ok());
+    if !has_full_layout_url {
+        return Ok(None);
+    }
+
+    let original_url = canonicalize_url(url);
+    let trunk_url = layout
+        .trunk
+        .as_deref()
+        .and_then(|trunk| url::Url::parse(trunk).ok())
+        .map(|trunk| canonicalize_url(trunk.as_str()));
+    let repository_root = match svn_url_profile(url) {
+        SvnUrlProfile::Mock => canonicalize_url(url),
+        SvnUrlProfile::File | SvnUrlProfile::Svn | SvnUrlProfile::Http | SvnUrlProfile::SvnSsh => {
+            let mut backend = SvnCliBackend::new(url.clone())?;
+            if let Some(username) = &shared.username {
+                backend = backend.with_username(username);
+            }
+            if let Some(password) = &shared.password {
+                backend = backend.with_password(password);
+            }
+            if let Some(config_dir) = &shared.config_dir {
+                backend = backend.with_config_dir(config_dir);
+            }
+            if shared.no_auth_cache {
+                backend = backend.without_auth_cache();
+            }
+            backend.repository_root()?
+        }
+        SvnUrlProfile::Https | SvnUrlProfile::Unsupported => {
+            validate_fetch_url(url)?;
+            unreachable!("unsupported fetch URL validation must fail")
+        }
+    };
+    let session_path = repository_relative_url_path(&repository_root, url)?;
+
+    let normalize_path = |value: &str, glob: bool| -> Result<String, String> {
+        let mut path = if url::Url::parse(value).is_ok() {
+            repository_relative_url_path(&repository_root, value)?
+        } else {
+            join_paths([session_path.as_str(), value])
+        };
+        if glob && !path.contains('*') && !path.contains('{') {
+            path.push_str("/*");
+        }
+        Ok(path)
+    };
+
+    layout.trunk = match layout.trunk.as_deref() {
+        Some(trunk) => Some(normalize_path(trunk, false)?),
+        None if layout.stdlayout => Some(join_paths([session_path.as_str(), "trunk"])),
+        None => None,
+    };
+    layout.branches = if layout.branches.is_empty() && layout.stdlayout {
+        vec![normalize_path("branches", true)?]
+    } else {
+        layout
+            .branches
+            .iter()
+            .map(|branch| normalize_path(branch, true))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    layout.tags = if layout.tags.is_empty() && layout.stdlayout {
+        vec![normalize_path("tags", true)?]
+    } else {
+        layout
+            .tags
+            .iter()
+            .map(|tag| normalize_path(tag, true))
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    layout.stdlayout = false;
+    *url = canonicalize_url(&repository_root);
+    let normalization_source = if layout.trunk.is_some() {
+        trunk_url.unwrap_or(original_url)
+    } else {
+        url.clone()
+    };
+    Ok((normalization_source != *url)
+        .then(|| format!("Using higher level of URL: {normalization_source} => {url}\n")))
 }
 
 fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfig {

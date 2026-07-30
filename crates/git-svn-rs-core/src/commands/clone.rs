@@ -15,8 +15,17 @@ pub fn run(args: CloneArgs) -> Result<(), String> {
     run_with_output(args).map(|_| ())
 }
 
-pub fn run_with_output(args: CloneArgs) -> Result<CloneOutput, String> {
+pub fn run_with_output(mut args: CloneArgs) -> Result<CloneOutput, String> {
     let path = args.path.clone().unwrap_or_else(|| default_path(&args.url));
+    build_from_layout_args(
+        args.layout.stdlayout,
+        args.layout.trunk.as_deref(),
+        &args.layout.branches,
+        &args.layout.tags,
+        args.layout.prefix.as_deref(),
+    )?;
+    let normalization_notice =
+        init::normalize_layout_args(&mut args.url, &mut args.layout, &args.shared)?;
     let mappings = build_from_layout_args(
         args.layout.stdlayout,
         args.layout.trunk.as_deref(),
@@ -48,7 +57,10 @@ pub fn run_with_output(args: CloneArgs) -> Result<CloneOutput, String> {
         shared: init_shared,
     };
 
-    let init_output = init::run_with_output(init_args)?;
+    let mut init_output = init::run_prepared_with_output(init_args, mappings)?;
+    if let Some(notice) = normalization_notice {
+        init_output.stderr.push_str(&notice);
+    }
 
     fetch::run_in_work_tree(&path, fetch_args)?;
     let git = GitCli::new(&path);

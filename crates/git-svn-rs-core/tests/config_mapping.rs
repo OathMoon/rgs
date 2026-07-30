@@ -66,6 +66,22 @@ fn partial_custom_layout_does_not_create_an_implicit_trunk() {
 }
 
 #[test]
+fn bare_branch_and_tag_paths_gain_the_frozen_wildcard() {
+    let branches = vec!["project/branches".to_string()];
+    let tags = vec!["project/tags".to_string()];
+    let mappings = build_from_layout_args(false, None, &branches, &tags, Some("origin/")).unwrap();
+    assert_eq!(mappings.branches[0].svn_path, "project/branches/*");
+    assert_eq!(mappings.tags[0].svn_path, "project/tags/*");
+}
+
+#[test]
+fn branch_or_tag_prefix_requires_a_trailing_slash() {
+    let branches = vec!["branches".to_string()];
+    let error = build_from_layout_args(false, None, &branches, &[], Some("custom")).unwrap_err();
+    assert!(error.contains("trailing slash"));
+}
+
+#[test]
 fn partial_stdlayout_overrides_preserve_unspecified_defaults() {
     let branches = vec!["project/branches/*".to_string()];
     let mappings = build_from_layout_args(true, None, &branches, &[], None).unwrap();

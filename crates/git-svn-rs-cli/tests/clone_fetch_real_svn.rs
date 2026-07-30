@@ -140,6 +140,114 @@ fn partial_layout_arguments_match_frozen_mapping_selection() {
 }
 
 #[test]
+fn full_url_layout_arguments_are_repository_relative_and_same_repository() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let trunk = format!("{}/trunk", fixture.url());
+    let branches = format!("{}/branches", fixture.url());
+    let tags = format!("{}/tags", fixture.url());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &fixture.url(),
+            "full-layout",
+            "--trunk",
+            &trunk,
+            "--branches",
+            &branches,
+            "--tags",
+            &tags,
+        ])
+        .assert()
+        .success();
+    let work = temp.path().join("full-layout");
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.config_get_all("svn-remote.svn.url").unwrap(),
+        vec![fixture.url()]
+    );
+    assert_eq!(
+        git.config_get_all("svn-remote.svn.fetch").unwrap(),
+        vec!["trunk:refs/remotes/origin/trunk"]
+    );
+    assert_eq!(
+        git.config_get_all("svn-remote.svn.branches").unwrap(),
+        vec!["branches/*:refs/remotes/origin/*"]
+    );
+    assert_eq!(
+        git.config_get_all("svn-remote.svn.tags").unwrap(),
+        vec!["tags/*:refs/remotes/origin/tags/*"]
+    );
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+    for refname in [
+        "refs/remotes/origin/trunk",
+        "refs/remotes/origin/main",
+        "refs/remotes/origin/tags/v1",
+    ] {
+        assert!(
+            git.run_for_test(["rev-parse", "--verify", refname]).is_ok(),
+            "full URL layout did not import {refname}"
+        );
+    }
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "full-url-clone",
+            "--trunk",
+            &trunk,
+            "--branches",
+            &branches,
+            "--tags",
+            &tags,
+        ])
+        .assert()
+        .success();
+    let clone = git_svn_rs_core::git::GitCli::new(temp.path().join("full-url-clone"));
+    assert_eq!(
+        clone.run_for_test(["show", "HEAD:src/lib.rs"]).unwrap(),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+
+    let other = StandardSvnFixture::create().unwrap();
+    let outside_trunk = format!("{}/trunk", other.url());
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &fixture.url(),
+            "outside-layout",
+            "--trunk",
+            &outside_trunk,
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("outside repository root"));
+    assert!(!temp.path().join("outside-layout").exists());
+}
+
+#[test]
 fn clone_stdlayout_replays_bounded_log_windows_without_losing_mappings() {
     match require_svn_tools() {
         Ok(()) => {}
