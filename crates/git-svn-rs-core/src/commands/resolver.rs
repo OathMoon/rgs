@@ -6,7 +6,6 @@ use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::mapping::{RefMapping, desanitize_refname, sanitize_refname};
 use crate::metadata::svn_metadata_dir;
-use crate::path_url::add_path_to_url;
 use crate::rev_map::{RevMap, RevMapRecord};
 
 pub struct TrackedSvn {
@@ -114,7 +113,11 @@ fn resolve_tracked_svn_impl(
     let mut hard_errors = Vec::new();
 
     for config in &configs {
-        let mappings = tracked_candidate_mappings(&git, config)?;
+        let mappings = crate::tracking_state::validate_candidate_mappings(
+            &git,
+            config,
+            tracked_candidate_mappings(&git, config)?,
+        )?;
         if mappings.is_empty() {
             errors.push((
                 config.name.clone(),
@@ -277,14 +280,23 @@ fn tracked_from_mapping(
     let svn_path = mapping.svn_path.clone();
     let (uuid, rev_map_path) = find_rev_map(metadata_dir)?;
 
-    Ok(TrackedSvn {
+    let tracked = TrackedSvn {
         git: git.clone(),
         config: config.clone(),
         refname,
         svn_path,
         uuid,
         rev_map_path,
-    })
+    };
+    crate::tracking_state::validate_existing_tracking_state(
+        &tracked.git,
+        &tracked.config,
+        &tracked.refname,
+        &tracked.svn_path,
+        &tracked.uuid,
+        &tracked.rev_map_path,
+    )?;
+    Ok(tracked)
 }
 
 fn rev_map_first_parent_identity(
@@ -320,12 +332,7 @@ fn tracking_identity_matches(
     let Ok(identity) = GitSvnId::parse(footer.trim_end_matches('\r')) else {
         return Ok(false);
     };
-    let root = tracked
-        .config
-        .rewrite_root
-        .as_ref()
-        .unwrap_or(&tracked.config.url);
-    let expected_url = add_path_to_url(root, &tracked.svn_path);
+    let expected_url = tracked.config.metadata_url(&tracked.svn_path);
     let expected_uuid = tracked
         .config
         .rewrite_uuid
@@ -336,7 +343,7 @@ fn tracking_identity_matches(
         && identity.revision == record.revision)
 }
 
-fn tracked_candidate_mappings(
+pub(crate) fn tracked_candidate_mappings(
     git: &GitCli,
     config: &SvnRemoteConfig,
 ) -> Result<Vec<RefMapping>, String> {

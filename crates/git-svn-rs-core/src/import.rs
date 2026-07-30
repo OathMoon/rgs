@@ -391,7 +391,7 @@ fn import_revisions_for_mapping(
             committer: author_ident(&revision.author, uuid, Some(&authors))?,
             timestamp: timestamp.seconds,
             timezone_offset: timestamp.offset,
-            message: commit_message(config, revision, uuid, &strip_prefix),
+            message: commit_message(config, revision, uuid, &mapping.svn_path),
             parent_mark: (imported_revisions.len() > 1)
                 .then_some(imported_revisions.len() as u32 - 1),
             parent_ref: first_parent_ref,
@@ -470,7 +470,7 @@ fn import_ra_revisions_for_mapping(
             committer: author_ident(&revision.author, uuid, Some(&authors))?,
             timestamp: timestamp.seconds,
             timezone_offset: timestamp.offset,
-            message: commit_message(config, revision, uuid, &strip_prefix),
+            message: commit_message(config, revision, uuid, &mapping.svn_path),
             parent_mark,
             parent_ref,
         };
@@ -1667,20 +1667,14 @@ fn commit_message(
     config: &SvnRemoteConfig,
     revision: &RevisionEvent,
     uuid: &str,
-    strip_prefix: &str,
+    svn_path: &str,
 ) -> String {
     if config.no_metadata {
         return revision.message.clone();
     }
 
-    let root_url = config.rewrite_root.as_ref().unwrap_or(&config.url);
-    let url = if strip_prefix.is_empty() {
-        root_url.clone()
-    } else {
-        format!("{}/{}", root_url.trim_end_matches('/'), strip_prefix)
-    };
     let footer = GitSvnId {
-        url,
+        url: config.metadata_url(svn_path),
         revision: revision.revision,
         uuid: config
             .rewrite_uuid

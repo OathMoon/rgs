@@ -122,6 +122,28 @@ impl SvnRemoteConfig {
         self
     }
 
+    pub(crate) fn metadata_url(&self, svn_path: &str) -> String {
+        let explicit_path = svn_path.trim_matches('/');
+        if explicit_path.is_empty() && self.rewrite_root.is_none() {
+            return self.url.clone();
+        }
+        let svn_path = if explicit_path.is_empty() && self.url.starts_with("mock://") {
+            self.url
+                .strip_prefix("mock://")
+                .and_then(|rest| rest.split_once('/').map(|(_, path)| path))
+                .unwrap_or_default()
+                .trim_matches('/')
+        } else {
+            explicit_path
+        };
+        let root = self.rewrite_root.as_ref().unwrap_or(&self.url);
+        if svn_path.is_empty() {
+            root.clone()
+        } else {
+            format!("{}/{}", root.trim_end_matches('/'), svn_path)
+        }
+    }
+
     pub fn validate_mapping_destinations(&self) -> Result<(), String> {
         for mapping in self
             .fetch

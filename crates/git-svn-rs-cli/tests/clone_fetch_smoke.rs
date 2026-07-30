@@ -273,6 +273,90 @@ fn fetch_after_clone_is_a_noop_when_mock_rev_map_is_current() {
 }
 
 #[test]
+fn fetch_and_info_reject_semantically_corrupt_mock_rev_map_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", "mock://repo/trunk", "work"])
+        .assert()
+        .success();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let rev_map_path = mock_rev_map_path(&work);
+    let mut rev_map = std::fs::read(&rev_map_path).unwrap();
+    let last_record = rev_map.len() - 24;
+    rev_map[last_record..last_record + 4].copy_from_slice(&100_u32.to_be_bytes());
+    std::fs::write(&rev_map_path, &rev_map).unwrap();
+    let before = tracking_state_snapshot(&git, &work, &rev_map_path);
+
+    for command in ["fetch", "info"] {
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(&work)
+            .arg(command)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("corrupt SVN tracking state"));
+        assert_eq!(tracking_state_snapshot(&git, &work, &rev_map_path), before);
+    }
+}
+
+#[test]
+fn fetch_and_info_reject_tracking_ref_tip_drift_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", "mock://repo/trunk", "work"])
+        .assert()
+        .success();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["config", "user.name", "Test"]).unwrap();
+    git.run_for_test(["config", "user.email", "test@example.com"])
+        .unwrap();
+    git.run_for_test(["commit", "--allow-empty", "-m", "local drift"])
+        .unwrap();
+    let local_oid = git.rev_parse("HEAD").unwrap();
+    git.update_ref("refs/remotes/git-svn", local_oid.trim())
+        .unwrap();
+    let rev_map_path = mock_rev_map_path(&work);
+    let before = tracking_state_snapshot(&git, &work, &rev_map_path);
+
+    for command in ["fetch", "info"] {
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(&work)
+            .arg(command)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("tracking ref points to"));
+        assert_eq!(tracking_state_snapshot(&git, &work, &rev_map_path), before);
+    }
+}
+
+fn mock_rev_map_path(work: &std::path::Path) -> std::path::PathBuf {
+    work.join(".git/svn/refs/remotes/git-svn/.rev_map.mock-uuid")
+}
+
+fn tracking_state_snapshot(
+    git: &git_svn_rs_core::git::GitCli,
+    work: &std::path::Path,
+    rev_map_path: &std::path::Path,
+) -> (String, Vec<u8>, Vec<u8>, Vec<u8>) {
+    (
+        git.rev_parse("refs/remotes/git-svn")
+            .unwrap()
+            .trim()
+            .to_string(),
+        std::fs::read(rev_map_path).unwrap(),
+        std::fs::read(work.join(".git/config")).unwrap(),
+        std::fs::read(work.join(".git/svn/.metadata")).unwrap(),
+    )
+}
+
+#[test]
 fn fetch_parent_uses_the_resolved_named_remote() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");

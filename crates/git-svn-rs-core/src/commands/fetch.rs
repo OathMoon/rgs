@@ -100,6 +100,7 @@ fn fetch_config(
 ) -> Result<(), String> {
     crate::path_url::validate_fetch_url(&config.url)?;
     config.validate_mapping_destinations()?;
+    validate_existing_tracking_states(git, &config, selected_ref)?;
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
         let base_revision = imported_base_revision(git, &config, "mock-uuid", selected_ref)?;
@@ -139,6 +140,19 @@ fn fetch_config(
     backend.import_revisions(git, &config, import_options, selected_ref)?;
     persist_repository_identity(git, &config, &repos_root, &uuid)?;
     persist_discovery_high_water(git, &config, selected_ref, scanned_end)?;
+    Ok(())
+}
+
+fn validate_existing_tracking_states(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    selected_ref: Option<&str>,
+) -> Result<(), String> {
+    let mappings = crate::commands::resolver::tracked_candidate_mappings(git, config)?
+        .into_iter()
+        .filter(|mapping| selected_ref.is_none_or(|selected_ref| mapping.git_ref == selected_ref))
+        .collect();
+    crate::tracking_state::validate_candidate_mappings(git, config, mappings)?;
     Ok(())
 }
 
