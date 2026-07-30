@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `d3792bf Return immediate directories from SVN CLI sessions`
+Committed HEAD at audit: `5e0ea43 Scope tracking validation to safety boundaries`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -47,6 +47,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   compiled/linked libsvn state without reading secret-bearing environment values.
 - Scalar `svn-remote.*` keys reject multiple values instead of silently selecting
   a different repository identity; mapping keys retain intentional multiplicity.
+- Persisted remote booleans use Git's full boolean syntax and reject invalid or
+  duplicate values. Relative authors files are persisted as invocation-cwd
+  absolute paths, so later fetches resolve the same file with path-rich errors.
 - Global `-q`/`--quiet` and `-v`/`--verbose` fail explicitly instead of being
   parsed and silently ignored.
 - SHA-1/SHA-256 rev_maps support zero records, non-creating reads, append ordering,
@@ -56,6 +59,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   mutation.
 - New metadata uses `.git/svn/<full-ref>`; an existing flattened layout remains
   readable, while mixed canonical/legacy identity is rejected.
+- Fetch, normal info, and dcommit validate ref tip, nonzero rev_map record, and
+  `git-svn-id` URL/revision/UUID agreement before their safety boundaries.
+  Structurally verified importer `branch@revision` auxiliary refs remain valid.
 - Git::SVN-compatible ref sanitization is reversible. Candidate and existing
   file/directory ref namespace collisions fail before publication; duplicate fixed
   mappings for one SVN path use deterministic last-wins behavior.
@@ -102,6 +108,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 - HTTPS fetch and HTTP(S) dcommit remain deferred pending TLS/DAV validation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
+- Cross-remote fixed/wildcard and wildcard/wildcard destination intersections
+  fail before migration, recovery, repository access, or metadata mutation.
 - Readonly/write commands and `fetch --parent` resolve named remotes by nearest
   identity; path/rev_map ambiguity fails closed without masking a unique identity.
 - Partial/full-URL layouts match frozen mapping selection. CLI/libsvn normalize
@@ -113,7 +121,7 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 ### Readonly and maintenance
 
 - `find-rev` selects one validated mapping identity rather than flattening all
-  rev_maps.
+  rev_maps, and ignores trailing zero scan markers for before/after searches.
 - `info`, supported SVN-style `log` ranges/modes/pathspecs, conservative `gc`,
   recoverable `reset`, and current-parent selective `rebase` are implemented.
 - The compatibility parser preserves explicit `log -- <pathspec>` boundaries, so
@@ -145,6 +153,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   that rebasing onto the selected tracking ref retains one merge commit.
 - Rebase dry-run reports the selected remote branch and full SVN URL exactly like
   frozen Perl; strict golden comparison now retains both identity lines.
+- Rebase permits untracked-only worktrees while dcommit retains strict cleanliness.
+  Info derives the nearest first-parent mapped revision from HEAD history rather
+  than reporting a newer unrelated rev_map maximum.
 - Rebase command-local verbosity and `--fetch-all/--all` match the frozen order.
   Fetch-all is confined to the initially resolved svn-remote's mappings, ignores
   unrelated remotes, and retains the original upstream identity after fetch.
@@ -153,8 +164,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 - Log treats typed `--pager=<value>` as a frozen no-op when stdout is not a TTY
   and starts the explicit pager with inherited output when stdout is a TTY; a
   Linux PTY fixture verifies invocation and complete record output.
-- Reset `--parent` selects the nearest earlier nonzero rev_map record, including
-  sparse histories, while exact reset remains exact.
+- Reset accepts positional revision plus `-r/--revision` fallback (positional
+  wins), validates it before recovery, and freezes exact/parent stdout. `--parent`
+  selects the nearest earlier nonzero record, including sparse histories.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
   fail closed while reset/import recovery is pending.
 
@@ -199,6 +211,12 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   ignoring its unsupported SVN editor-base semantics.
 - Mock write-back rejects `--commit-url` before journal, lock, or remote mutation
   because the mock sink cannot honor a URL override.
+- Dcommit filters all-empty plans without consuming SVN revisions or creating
+  journals; explicit mergeinfo-only commits remain effective and mixed queues
+  keep contiguous revisions.
+- Dry-run uses the real typed planner, rejects gitlinks, applies completed-ledger
+  overlap checks, and refuses active/pending recovery without lock, journal,
+  checkout, fetch, rebase, reset, sink calls, or metadata mutation.
 
 ### Golden and release evidence
 
@@ -217,10 +235,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace` (532 passed); core lib 120/120; readonly 71/71
-- dcommit linear 56/56; dcommit restart 8/8; linked-feature core 405 passed
-- Focused config/dcommit/diagnostic/get-dir regressions and all-features clippy pass.
-- real SVN default/linked 41/41 each (HTTP DAV skipped without Apache)
+- `cargo test --workspace`; core lib 132/132; readonly 75/75
+- dcommit linear 64/64; clone/fetch smoke 19/19; real SVN default 42/42
+- linked-feature core unit 164/164 and linked backend integration 33/33
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -238,53 +255,33 @@ Verified on 2026-07-30:
 
 ## Important Commit Anchors
 
-- `7f531ee`, `ab52ef1`: CLI, workspace, config/mapping foundations.
-- `edb9161`: SHA-256 rev_map import/fetch.
-- `9d354f6`, `e3b8cf9`, `4bf9205`: shared replay and durable dcommit coordinator.
-- `7e27bcf`, `19ad4ef`: in-flight dcommit and recoverable reset.
-- `8405e79`: recoverable staging-ref import publication foundation.
-- `f11ecd1`: ref/path collision safety, canonical metadata, linked copy parity,
-  binary properties, release gates, and README refresh.
-- `fa5f81f`: remote URL profiles, early fail-closed fetch/dcommit, and uniform
-  non-interactive SVN writes.
-- `9f4b223`: tree-ish/rev_map-scoped Log.pm selection and framing plus the frozen
-  rebase merge/strategy command contract.
-- `08eef18`: fail-closed libsvn callback inputs, lifecycle, allocation, property,
-  panic, and owned-error boundaries.
-- `d42efb3`: commit-URL recovery intent, versioned fingerprints, non-advancing
-  submission ambiguity, and authenticated no-write preflight evidence.
-- `1f87814`, `29d2545`, `a820e13`: early rejection of inert global output
-  options, ambiguous fetch scope, and unsupported mock commit-URL overrides.
-- `5dd0ede`, `838a618`: HTTP profile/DAV fixture plus secret-safe askpass
-  full-URL init, clone, and incremental fetch in default and linked modes.
-- `b7d1a9e`: mapped explicit commit-URL identity, exact post-fetch verification,
-  and no-resubmit recovery evidence.
-- `53707fe`: v3 recovery client intent, v2 journal migration, and secret-safe
-  password-rotation recovery without duplicate submission.
-- `23bf393`, `793fb5d`: real Submitted/post-fetch save and two-entry recovery evidence.
-- `afe3fb4`, `7968d5e`, `3573d2f`: Submitted acknowledgement-loss, multi-entry,
-  and post-rebase durable restart boundaries.
-- `b7d84b7`: inherited successful Git rebase stderr/progress streaming.
-- `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
-- `78b31da`: full-URL layout root normalization and exact frozen golden coverage.
-- `87e1446`: mapped commit-URL unknown-outcome adoption without resubmission.
-- `22c71e9`, `6e8b595`: stale-target preflight and peg-sensitive read/write E2E.
-- `f97b1b7`, `fc34c11`: dcommit askpass and fail-closed named-remote resolution.
-- `53d08a8`, `91042ca`: tracked-remote post-fetch and configured tunnel dcommit.
-- `e57b70e`, `e7f2b2d`: fail-closed existing rev_map validation and explicit
-  Log.pm pathspec-boundary compatibility.
-- `ee7d7e9`, `593d73d`: scalar remote-config cardinality and explicit rejection
-  of inert dcommit revision overrides.
-- `98b87f1`: most-specific/root-aware copy-parent mapping and dependency order.
-- `cf7910b`, `d3792bf`: reproducible frozen-baseline diagnostics and immediate
-  SVN CLI directory discovery.
+- `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
+- `9d354f6`, `e3b8cf9`, `4bf9205`, `8405e79`: shared replay and durable
+  dcommit/import coordinators.
+- `f11ecd1`, `08eef18`: canonical metadata/collision safety and audited libsvn FFI.
+- `fa5f81f`, `5dd0ede`, `838a618`: protocol gating, DAV fixture, and askpass reads.
+- `d42efb3`, `b7d1a9e`, `53707fe`, `87e1446`: mapped commit-URL recovery,
+  versioned fingerprints, adoption, and password-safe resume.
+- `23bf393`, `793fb5d`, `afe3fb4`, `7968d5e`, `3573d2f`: durable dcommit fault
+  and multi-entry restart boundaries.
+- `9f4b223`, `9ad34d8`, `78b31da`: Log/rebase contracts, PTY pager, full-URL golden.
+- `22c71e9`, `6e8b595`, `53d08a8`, `91042ca`: stale-target, peg-sensitive,
+  named-remote, and configured-tunnel E2E.
+- `98b87f1`, `cf7910b`, `d3792bf`: copy-parent ordering and replay diagnostics.
+- `5616b2f`, `d8d5130`, `31a74c6`: rebase cleanliness, historical info, and
+  scan-marker-safe find-rev.
+- `89558ac`, `7636ee8`, `962d36b`: no-op filtering and zero-mutation dry-run
+  planning/journal boundaries.
+- `c399274`, `debfc31`: stable authors-file paths and Git-compatible booleans.
+- `e5eb148`, `5e0ea43`: semantic tracking validation at command safety boundaries.
+- `4143f8f`, `7b3f335`: cross-remote ref preflight and reset compatibility.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 6: allow untracked-only worktrees for rebase without relaxing dcommit.
-2. Phase 7: skip no-op plans safely, then make dry-run use the real planner.
+1. Phase 7: finish read-only remote base/UUID validation for real dcommit dry-run.
+2. Implement the next highest-value local gap from the Phase 4-6 audits.
 3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
 
 ## Handoff Notes
