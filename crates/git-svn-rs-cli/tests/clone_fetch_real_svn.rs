@@ -961,6 +961,97 @@ fn clone_stdlayout_authenticated_svn_url_imports_with_password() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn clone_and_fetch_authenticated_svn_url_use_git_askpass() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let askpass = temp.path().join("askpass");
+    let askpass_log = temp.path().join("askpass.log");
+    std::fs::write(
+        &askpass,
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$GIT_SVN_RS_ASKPASS_LOG\"\nprintf 'secret\\n'\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&askpass).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&askpass, permissions).unwrap();
+
+    let work = temp.path().join("work");
+    let trunk_url = format!("{}/trunk", server.repo_url());
+    let branches_url = format!("{}/branches", server.repo_url());
+    let tags_url = format!("{}/tags", server.repo_url());
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("GIT_ASKPASS", &askpass)
+        .env("GIT_SVN_RS_ASKPASS_LOG", &askpass_log)
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--trunk",
+            &trunk_url,
+            "--branches",
+            &branches_url,
+            "--tags",
+            &tags_url,
+            "--prefix",
+            "origin/",
+            "--username",
+            "alice",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let before = git
+        .run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+        .unwrap();
+    fixture
+        .modify_run_script_content("#!/bin/sh\necho askpass\n")
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .env("GIT_ASKPASS", &askpass)
+        .env("GIT_SVN_RS_ASKPASS_LOG", &askpass_log)
+        .args(["fetch", "--no-auth-cache"])
+        .assert()
+        .success();
+
+    let after = git
+        .run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert_ne!(after, before);
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/origin/trunk:run.sh"])
+            .unwrap(),
+        "#!/bin/sh\necho askpass\n"
+    );
+    let prompts = std::fs::read_to_string(askpass_log).unwrap();
+    assert_eq!(prompts.lines().count(), 3);
+    assert!(prompts.lines().all(|line| line.contains("alice@svn://")));
+    assert!(!prompts.contains("secret"));
+    let git_config = std::fs::read_to_string(work.join(".git/config")).unwrap();
+    assert!(!git_config.contains("secret"));
+    assert!(!git_config.contains("password"));
+}
+
 #[test]
 fn clone_stdlayout_svn_url_imports_branch_tag_and_copy_contents() {
     match require_svn_tools() {

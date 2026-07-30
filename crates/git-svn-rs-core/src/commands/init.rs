@@ -8,6 +8,7 @@ use crate::path_url::{
     SvnUrlProfile, canonicalize_url, join_paths, repository_relative_url_path, svn_url_profile,
     validate_fetch_url,
 };
+use crate::svn::auth::askpass_password;
 use crate::svn::cli::SvnCliBackend;
 
 pub fn run(args: InitArgs) -> Result<(), String> {
@@ -105,7 +106,16 @@ pub(crate) fn normalize_layout_args(
             if let Some(username) = &shared.username {
                 backend = backend.with_username(username);
             }
-            if let Some(password) = &shared.password {
+            let askpass = if shared.password.is_none()
+                && matches!(
+                    svn_url_profile(url),
+                    SvnUrlProfile::Svn | SvnUrlProfile::Http
+                ) {
+                askpass_password(url, shared.username.as_deref(), shared.no_auth_cache)?
+            } else {
+                None
+            };
+            if let Some(password) = shared.password.as_ref().or(askpass.as_ref()) {
                 backend = backend.with_password(password);
             }
             if let Some(config_dir) = &shared.config_dir {

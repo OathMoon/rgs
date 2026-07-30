@@ -1,4 +1,4 @@
-use git_svn_rs_core::svn::auth::{AuthPrompt, AuthRequest, MockAuthPrompt};
+use git_svn_rs_core::svn::auth::{AskpassAuthPrompt, AuthPrompt, AuthRequest, MockAuthPrompt};
 
 #[test]
 fn username_option_overrides_default_username() {
@@ -33,4 +33,85 @@ fn askpass_fallback_can_be_mocked_without_terminal_input() {
 
     assert_eq!(creds.username, "alice");
     assert_eq!(creds.password, "askpass-secret");
+}
+
+#[cfg(unix)]
+#[test]
+fn askpass_program_receives_prompt_and_trims_only_line_endings() {
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("prompt.log");
+    let script = write_askpass_script(
+        temp.path(),
+        "askpass",
+        &format!(
+            "#!/bin/sh\nprintf '%s' \"$1\" > '{}'\nprintf ' secret with spaces \\r\\n'\n",
+            log.display()
+        ),
+    );
+    let creds = AskpassAuthPrompt::new(script)
+        .simple(AuthRequest {
+            realm: Some("svn://example/repo".to_string()),
+            default_username: Some("alice".to_string()),
+            may_save: true,
+            no_auth_cache: true,
+        })
+        .unwrap();
+
+    assert_eq!(creds.password, " secret with spaces ");
+    assert!(!creds.may_save);
+    assert_eq!(
+        std::fs::read_to_string(log).unwrap(),
+        "Password for 'alice@svn://example/repo': "
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn askpass_failure_and_empty_answer_are_secret_safe() {
+    let temp = tempfile::tempdir().unwrap();
+    let failing = write_askpass_script(
+        temp.path(),
+        "failing",
+        "#!/bin/sh\nprintf 'do-not-leak' >&2\nexit 9\n",
+    );
+    let error = AskpassAuthPrompt::new(failing)
+        .simple(auth_request())
+        .unwrap_err();
+    assert!(error.contains("status"));
+    assert!(error.contains('9'));
+    assert!(!error.contains("do-not-leak"));
+
+    let empty = write_askpass_script(temp.path(), "empty", "#!/bin/sh\nprintf '\\n'\n");
+    assert!(
+        AskpassAuthPrompt::new(empty)
+            .simple(auth_request())
+            .unwrap_err()
+            .contains("empty password")
+    );
+}
+
+#[cfg(unix)]
+fn auth_request() -> AuthRequest {
+    AuthRequest {
+        realm: Some("svn://example/repo".to_string()),
+        default_username: Some("alice".to_string()),
+        may_save: false,
+        no_auth_cache: true,
+    }
+}
+
+#[cfg(unix)]
+fn write_askpass_script(
+    directory: &std::path::Path,
+    name: &str,
+    contents: &str,
+) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let path = directory.join(name);
+    std::fs::write(&path, contents).unwrap();
+    let mut permissions = std::fs::metadata(&path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&path, permissions).unwrap();
+    path
 }

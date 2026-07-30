@@ -3,8 +3,10 @@ use crate::config::SvnRemoteConfig;
 use crate::git::GitCli;
 use crate::import::{ImportOptions, import_mock_revisions_for_ref, import_ra_revisions_for_ref};
 use crate::mapping::{MappingKind, RefMapping};
+use crate::path_url::{SvnUrlProfile, svn_url_profile};
 use crate::rev_map::RevMap;
 use crate::svn::SvnBackend;
+use crate::svn::auth::askpass_password;
 use crate::svn::cli::SvnCliBackend;
 use crate::svn::mock::MockRaSession;
 use crate::svn::ra::RaSession;
@@ -342,6 +344,7 @@ fn configured_backend(
     config: &SvnRemoteConfig,
     shared: &SharedFetchArgs,
 ) -> Result<ConfiguredBackend, String> {
+    let password = configured_password(config, shared)?;
     #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     {
         let mut backend = crate::svn::libsvn::LibSvnBackend::from_config(config);
@@ -351,7 +354,7 @@ fn configured_backend(
         if let Some(username) = &shared.username {
             backend = backend.with_username(username);
         }
-        if let Some(password) = &shared.password {
+        if let Some(password) = &password {
             backend = if let Some(username) = shared.username.as_ref().or(config.username.as_ref())
             {
                 backend.with_credentials(username, password)
@@ -371,7 +374,7 @@ fn configured_backend(
         if let Some(username) = &shared.username {
             backend = backend.with_username(username);
         }
-        if let Some(password) = &shared.password {
+        if let Some(password) = &password {
             backend = backend.with_password(password);
         }
         if let Some(config_dir) = &shared.config_dir {
@@ -382,6 +385,26 @@ fn configured_backend(
         }
         Ok(ConfiguredBackend::Cli(backend))
     }
+}
+
+fn configured_password(
+    config: &SvnRemoteConfig,
+    shared: &SharedFetchArgs,
+) -> Result<Option<String>, String> {
+    if shared.password.is_some() {
+        return Ok(shared.password.clone());
+    }
+    if !matches!(
+        svn_url_profile(&config.url),
+        SvnUrlProfile::Svn | SvnUrlProfile::Http | SvnUrlProfile::Https
+    ) {
+        return Ok(None);
+    }
+    askpass_password(
+        &config.url,
+        shared.username.as_deref().or(config.username.as_deref()),
+        shared.no_auth_cache || config.no_auth_cache,
+    )
 }
 
 fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
