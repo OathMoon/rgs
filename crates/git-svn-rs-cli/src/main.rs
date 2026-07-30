@@ -53,6 +53,13 @@ fn main() -> Result<()> {
         Command::Reset(args) => commands::reset::run(args).map_err(anyhow::Error::msg),
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
+            println!("git-svn-rs version: {}", diagnostics::package_version());
+            println!(
+                "frozen git-svn baseline: {} ({})",
+                diagnostics::FROZEN_GIT_SVN_VERSION,
+                diagnostics::FROZEN_GIT_COMMIT
+            );
+            println!("platform: {}", diagnostics::platform());
             println!("libsvn feature: {}", diagnostics::libsvn_feature_status());
             println!("libsvn link: {}", diagnostics::libsvn_link_status());
             Ok(())

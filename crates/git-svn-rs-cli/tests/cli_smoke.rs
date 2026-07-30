@@ -19,6 +19,15 @@ fn diagnose_prints_feature_state() {
         .assert()
         .success()
         .stdout(predicate::str::contains("git-svn-rs diagnostics"))
+        .stdout(predicate::str::contains("git-svn-rs version: 0.1.0"))
+        .stdout(predicate::str::contains(
+            "frozen git-svn baseline: 2.54.0 (0b13e48a3a30cdfa94e8ef842e24d6045ab3d015)",
+        ))
+        .stdout(predicate::str::contains(format!(
+            "platform: {}/{}",
+            std::env::consts::OS,
+            std::env::consts::ARCH
+        )))
         .stdout(predicate::str::contains("libsvn feature: disabled"))
         .stdout(predicate::str::contains("libsvn link: not-compiled"));
 }
