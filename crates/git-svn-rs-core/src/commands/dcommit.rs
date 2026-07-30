@@ -492,6 +492,7 @@ fn dcommit_file_svn(
         git: ctx.git,
         original_base_oid: prepared.journal.original_base_oid.clone(),
         plans: prepared.plans.clone(),
+        fetch_config: ctx.post_commit_fetch_config,
         rebase_shared: ctx.post_commit_fetch_shared.clone(),
         fetch_shared: ctx.post_commit_fetch_shared,
         expected_footer_url: ctx.expected_footer_url,
@@ -634,6 +635,7 @@ struct FileSvnPostSubmit<'a> {
     git: &'a GitCli,
     original_base_oid: String,
     plans: Vec<DcommitPlan>,
+    fetch_config: crate::config::SvnRemoteConfig,
     fetch_shared: crate::cli::SharedFetchArgs,
     rebase_shared: crate::cli::SharedFetchArgs,
     expected_footer_url: String,
@@ -649,9 +651,13 @@ impl PostSubmit for FileSvnPostSubmit<'_> {
     ) -> Result<String, String> {
         let revision = u32::try_from(svn_revision)
             .map_err(|_| "submitted SVN revision exceeds u32".to_string())?;
-        fetch::run_in_work_tree(
+        let mut fetch_shared = self.fetch_shared.clone();
+        fetch_shared.revision = Some(revision.to_string());
+        fetch::run_for_tracking_identity(
             self.git.work_tree().to_path_buf(),
-            fetch_args_for_revision(self.fetch_shared.clone(), revision),
+            self.fetch_config.clone(),
+            &target.mapping_ref,
+            &fetch_shared,
         )?;
         let expected_tree = projected_tree_for_entry(
             self.git,
@@ -1102,19 +1108,6 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
     }
 
     Ok(out)
-}
-
-fn fetch_args_for_revision(
-    mut shared: crate::cli::SharedFetchArgs,
-    revision: u32,
-) -> crate::cli::FetchArgs {
-    shared.revision = Some(revision.to_string());
-    crate::cli::FetchArgs {
-        remote: None,
-        shared,
-        fetch_all: false,
-        parent: false,
-    }
 }
 
 #[cfg(test)]
