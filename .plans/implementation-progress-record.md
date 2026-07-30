@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `98b87f1 Select the most specific copy-parent mapping`
+Committed HEAD at audit: `d3792bf Return immediate directories from SVN CLI sessions`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -43,6 +43,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   compatibility shim.
 - Typed command surface, explicit v1 exclusions, config serialization, mapping
   globs, authors, filters, URL helpers, and metadata option conflict checks.
+- `diagnose` reports package version, frozen Git 2.54.0 commit, platform, and
+  compiled/linked libsvn state without reading secret-bearing environment values.
 - Scalar `svn-remote.*` keys reject multiple values instead of silently selecting
   a different repository identity; mapping keys retain intentional multiplicity.
 - Global `-q`/`--quiet` and `-v`/`--verbose` fail explicitly instead of being
@@ -67,6 +69,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 - CLI and linked libsvn use the common `RaSession`/`FetchEditor` coordinator.
   Linked stdlayout copy replay and direct subdirectory sessions pass the same
   34-case CLI suite as the default backend.
+- CLI `get_dir` returns immediate files/directories plus node properties; an empty
+  nested branch inside an ancestor copy is discovered with its auxiliary parent.
 - Native update/switch handles initial and incremental text deltas, copy-only
   files, directory/file properties, checksums, absent nodes, deletes, and callback
   error conversion.
@@ -215,7 +219,7 @@ Verified on 2026-07-30:
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
 - `cargo test --workspace` (532 passed); core lib 120/120; readonly 71/71
 - dcommit linear 56/56; dcommit restart 8/8; linked-feature core 405 passed
-- Focused scalar-config/dcommit no-mutation regressions and all-features clippy pass.
+- Focused config/dcommit/diagnostic/get-dir regressions and all-features clippy pass.
 - real SVN default/linked 41/41 each (HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
@@ -249,14 +253,8 @@ Verified on 2026-07-30:
   panic, and owned-error boundaries.
 - `d42efb3`: commit-URL recovery intent, versioned fingerprints, non-advancing
   submission ambiguity, and authenticated no-write preflight evidence.
-- `ea77681`, `dbf6dc8`: local-only rebase and sparse rev_map parent reset.
 - `1f87814`, `29d2545`, `a820e13`: early rejection of inert global output
   options, ambiguous fetch scope, and unsupported mock commit-URL overrides.
-- `cdc463e`, `caeb41d`: frozen merge-topology rebase and Log.pm color behavior.
-- `3bded4a`: exact frozen rebase dry-run tracking identity and stronger golden
-  evidence.
-- `fc2c420`: scoped fetch-all, command-local verbose, and fixed upstream identity
-  across rebase orchestration.
 - `5dd0ede`, `838a618`: HTTP profile/DAV fixture plus secret-safe askpass
   full-URL init, clone, and incremental fetch in default and linked modes.
 - `b7d1a9e`: mapped explicit commit-URL identity, exact post-fetch verification,
@@ -278,14 +276,16 @@ Verified on 2026-07-30:
 - `ee7d7e9`, `593d73d`: scalar remote-config cardinality and explicit rejection
   of inert dcommit revision overrides.
 - `98b87f1`: most-specific/root-aware copy-parent mapping and dependency order.
+- `cf7910b`, `d3792bf`: reproducible frozen-baseline diagnostics and immediate
+  SVN CLI directory discovery.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Select the next locally verifiable Phase 4/6/7 gap from parallel audits.
-2. Execute strict DAV, then add HTTPS/real OpenSSH and remote write profiles.
-3. Phase 8: run hosted CI when credentials/external execution are available.
+1. Phase 6: allow untracked-only worktrees for rebase without relaxing dcommit.
+2. Phase 7: skip no-op plans safely, then make dry-run use the real planner.
+3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
 
 ## Handoff Notes
 
