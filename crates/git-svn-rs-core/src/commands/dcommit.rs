@@ -71,6 +71,19 @@ pub fn run_in_work_tree(
         );
     }
     if !args.dry_run {
+        if crate::path_url::svn_url_profile(target_url) == crate::path_url::SvnUrlProfile::SvnSsh
+            && args
+                .shared
+                .config_dir
+                .as_ref()
+                .or(tracked.config.config_dir.as_ref())
+                .is_none()
+        {
+            return Err(
+                "svn+ssh dcommit requires --config-dir or svn-remote.<name>.config-dir for a configured non-interactive tunnel"
+                    .to_string(),
+            );
+        }
         crate::path_url::validate_dcommit_write_urls(target_url, &tracked.config.url)?;
     }
     let commits = if tracked.git.rev_parse("HEAD").is_ok() {
@@ -245,7 +258,7 @@ pub fn run_in_work_tree(
         }
         {
             return Err(
-                "dcommit write-back is only implemented for mock://, file://, and svn:// URLs; http(s) SVN write-back is not implemented"
+                "dcommit write-back is only implemented for mock://, file://, svn://, and configured svn+ssh:// URLs; HTTP(S) write-back is not implemented"
                     .to_string(),
             );
         }
@@ -277,7 +290,12 @@ pub fn run_in_work_tree(
 }
 
 fn is_svn_cli_write_back_url(url: &str) -> bool {
-    url.starts_with("file://") || url.starts_with("svn://")
+    matches!(
+        crate::path_url::svn_url_profile(url),
+        crate::path_url::SvnUrlProfile::File
+            | crate::path_url::SvnUrlProfile::Svn
+            | crate::path_url::SvnUrlProfile::SvnSsh
+    )
 }
 
 fn dcommit_message(message: &str) -> String {

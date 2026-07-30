@@ -1280,6 +1280,106 @@ fn dcommit_writes_linear_commit_to_svnserve_when_tools_exist() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn dcommit_writes_through_a_configured_svn_ssh_tunnel_when_tools_exist() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let wrapper = temp.path().join("svn-ssh");
+    let tunnel_log = temp.path().join("svn-ssh.args");
+    std::fs::write(
+        &wrapper,
+        concat!(
+            "#!/bin/sh\n",
+            "printf '%s\\n' \"$@\" >> \"$GIT_SVN_RS_SSH_ARG_LOG\"\n",
+            "[ \"$#\" -eq 3 ] && [ \"$1\" = fixture ] && ",
+            "[ \"$2\" = svnserve ] && [ \"$3\" = -t ] || exit 64\n",
+            "exec svnserve -t --tunnel-user=fixture -r \"$GIT_SVN_RS_SVN_ROOT\"\n",
+        ),
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&wrapper).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&wrapper, permissions).unwrap();
+    let config_dir = temp.path().join("svn-config");
+    std::fs::create_dir(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config"),
+        format!("[tunnels]\nssh = {}\n", wrapper.display()),
+    )
+    .unwrap();
+    let work = temp.path().join("work");
+    let url = "svn+ssh://fixture/repo/trunk";
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .env("GIT_SVN_RS_SVN_ROOT", fixture.root())
+        .env("GIT_SVN_RS_SSH_ARG_LOG", &tunnel_log)
+        .args([
+            "clone",
+            url,
+            "work",
+            "--config-dir",
+            config_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    std::fs::write(&tunnel_log, "").unwrap();
+    run_git(&work, &["checkout", "-b", "topic", "refs/remotes/git-svn"]);
+    std::fs::write(work.join("tunnel-write.txt"), "through tunnel\n").unwrap();
+    run_git(&work, &["add", "tunnel-write.txt"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "write through configured tunnel",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .env("GIT_SVN_RS_SVN_ROOT", fixture.root())
+        .env("GIT_SVN_RS_SSH_ARG_LOG", &tunnel_log)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 1 local Git commit(s)"));
+
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/tunnel-write.txt", fixture.url())]),
+        "through tunnel\n"
+    );
+    assert_eq!(
+        git_stdout(&work, &["show", "refs/remotes/git-svn:tunnel-write.txt"]),
+        "through tunnel"
+    );
+    let tunnel_args = std::fs::read_to_string(tunnel_log).unwrap();
+    let lines = tunnel_args.lines().collect::<Vec<_>>();
+    assert!(!lines.is_empty());
+    assert!(
+        lines
+            .chunks_exact(3)
+            .all(|args| args == ["fixture", "svnserve", "-t"])
+    );
+}
+
 #[test]
 fn dcommit_writes_to_authenticated_svnserve_with_password_when_tools_exist() {
     match require_svn_tools().and_then(|()| require_svnserve()) {
@@ -3821,6 +3921,35 @@ fn dcommit_without_dry_run_is_guarded_for_non_mock_urls() {
             .join(".git/svn/refs/remotes/git-svn/dcommit-journal")
             .exists(),
         "unsupported remote profiles must fail before journal setup"
+    );
+}
+
+#[test]
+fn dcommit_rejects_svn_ssh_without_a_configured_tunnel_before_journal() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    make_commit(&work, "local.txt", "local\n", "local change");
+    run_git(
+        &work,
+        &[
+            "config",
+            "svn-remote.svn.url",
+            "svn+ssh://host.example/repo",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("dcommit")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("requires --config-dir"));
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/git-svn/dcommit-journal")
+            .exists(),
+        "unconfigured svn+ssh must fail before journal setup"
     );
 }
 

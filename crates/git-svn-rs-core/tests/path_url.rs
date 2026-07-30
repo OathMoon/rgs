@@ -74,4 +74,12 @@ fn remote_protocol_profiles_match_validated_read_boundaries() {
             .unwrap_err()
             .contains("before recovery")
     );
+    assert!(
+        validate_dcommit_write_urls("svn+ssh://host/repo/trunk", "svn+ssh://host/repo").is_ok()
+    );
+    assert!(
+        validate_dcommit_write_urls("svn+ssh://host/repo", "file:///repo")
+            .unwrap_err()
+            .contains("matching tracked")
+    );
 }

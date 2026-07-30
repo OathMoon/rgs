@@ -171,12 +171,15 @@ pub fn validate_dcommit_write_urls(target_url: &str, tracked_url: &str) -> Resul
     {
         return Ok(());
     }
+    if target == SvnUrlProfile::SvnSsh && tracked == SvnUrlProfile::SvnSsh {
+        return Ok(());
+    }
     match target {
         SvnUrlProfile::Http | SvnUrlProfile::Https => Err(format!(
             "HTTP(S) SVN dcommit write-back is not implemented; refusing before recovery or write setup: {target_url}"
         )),
         SvnUrlProfile::SvnSsh => Err(format!(
-            "svn+ssh SVN dcommit write-back is not implemented; refusing before recovery or write setup: {target_url}"
+            "svn+ssh SVN dcommit target requires a matching tracked svn+ssh profile: {target_url}"
         )),
         SvnUrlProfile::Unsupported => {
             Err(format!("unsupported SVN dcommit URL scheme: {target_url}"))
