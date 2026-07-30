@@ -1,11 +1,10 @@
 use anyhow::{Result, bail};
-use clap::Parser;
 use git_svn_rs_core::cli::{Cli, Command};
 use git_svn_rs_core::commands;
 use git_svn_rs_core::diagnostics;
 
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let cli = Cli::parse_compat();
     if cli.quiet {
         bail!("global --quiet is not supported in v1");
     }

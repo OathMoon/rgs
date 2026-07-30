@@ -1281,6 +1281,36 @@ fn log_revision_selection_ignores_footer_not_present_in_rev_map() {
 }
 
 #[test]
+fn log_pathspec_separator_disambiguates_a_file_from_a_same_named_ref() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "topic",
+        "one\n",
+        "topic file\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "other.txt",
+        "two\n",
+        "other file\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+    git(work, ["branch", "topic", &rev2]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--oneline", "--", "topic"])
+        .assert()
+        .success()
+        .stdout("r1 | topic file\n");
+}
+
+#[test]
 fn log_invalid_revision_filter_fails() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

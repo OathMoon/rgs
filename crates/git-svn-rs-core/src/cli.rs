@@ -1,4 +1,5 @@
 use clap::{Args, Parser, Subcommand};
+use std::ffi::{OsStr, OsString};
 
 #[derive(Debug, Parser)]
 #[command(
@@ -15,6 +16,47 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Command,
+}
+
+impl Cli {
+    pub fn parse_compat() -> Self {
+        Self::parse_from_compat(std::env::args_os())
+    }
+
+    pub fn parse_from_compat<I, T>(args: I) -> Self
+    where
+        I: IntoIterator<Item = T>,
+        T: Into<OsString>,
+    {
+        Self::parse_from(preserve_log_pathspec_separator(args))
+    }
+}
+
+fn preserve_log_pathspec_separator<I, T>(args: I) -> Vec<OsString>
+where
+    I: IntoIterator<Item = T>,
+    T: Into<OsString>,
+{
+    let mut args = args.into_iter().map(Into::into).collect::<Vec<_>>();
+    let subcommand = args
+        .iter()
+        .enumerate()
+        .skip(1)
+        .find(|(_, arg)| !arg.as_os_str().to_string_lossy().starts_with('-'));
+    let Some((subcommand_index, _)) =
+        subcommand.filter(|(_, arg)| arg.as_os_str() == OsStr::new("log"))
+    else {
+        return args;
+    };
+    if let Some(separator_index) = args
+        .iter()
+        .enumerate()
+        .skip(subcommand_index + 1)
+        .find_map(|(index, arg)| (arg.as_os_str() == OsStr::new("--")).then_some(index))
+    {
+        args.insert(separator_index, OsString::from("--"));
+    }
+    args
 }
 
 #[derive(Debug, Subcommand)]
