@@ -6,6 +6,7 @@ use std::process::Command;
 use git_svn_rs_core::svn::ChangeAction;
 use git_svn_rs_core::svn::SvnBackend;
 use git_svn_rs_core::svn::cli::SvnCliBackend;
+use git_svn_rs_core::svn::ra::{RaSession, SvnNodeKind};
 use support::svn_fixture::{
     StandardSvnFixture, SvnToolPolicy, missing_tools_policy, require_svn_tools,
 };
@@ -37,6 +38,27 @@ fn standard_fixture_creates_trunk_branch_and_tag_revisions() {
 
     assert!(fixture.url().starts_with("file:///"));
     assert!(fixture.latest_revision() >= 4);
+}
+
+#[test]
+fn svn_cli_get_dir_returns_immediate_files_and_directories() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let backend = SvnCliBackend::new(fixture.url()).unwrap();
+    let listing = backend.get_dir("trunk", 2).unwrap();
+
+    assert_eq!(listing.entries["src"].kind, SvnNodeKind::Directory);
+    assert_eq!(listing.entries["empty-dir"].kind, SvnNodeKind::Directory);
+    assert_eq!(listing.entries["run.sh"].kind, SvnNodeKind::File);
+    assert!(!listing.entries.contains_key("src/lib.rs"));
 }
 
 #[test]

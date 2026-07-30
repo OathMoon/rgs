@@ -214,6 +214,26 @@ impl SvnCliBackend {
             .filter(|line| !line.is_empty())
             .collect())
     }
+
+    fn list_dir(
+        &self,
+        repos_root: &str,
+        path: &str,
+        revision: u32,
+    ) -> Result<BTreeMap<String, DirEntry>, String> {
+        let url = versioned_url(repos_root, path, revision);
+        let xml = self.run_text(&[
+            "list",
+            "--xml",
+            "--depth",
+            "immediates",
+            "--non-interactive",
+            "-r",
+            &revision.to_string(),
+            &url,
+        ])?;
+        parse_list_xml(&xml)
+    }
 }
 
 fn versioned_url(repos_root: &str, path: &str, revision: u32) -> String {
@@ -352,18 +372,9 @@ impl RaSession for SvnCliBackend {
     }
 
     fn get_dir(&self, path: &str, revision: u32) -> Result<DirListing, String> {
-        let mut entries = BTreeMap::new();
-        for file in self.list_files(&self.url, path, revision)? {
-            entries.insert(
-                file,
-                DirEntry {
-                    kind: SvnNodeKind::File,
-                },
-            );
-        }
         Ok(DirListing {
-            entries,
-            properties: BTreeMap::new(),
+            entries: self.list_dir(&self.url, path, revision)?,
+            properties: self.node_properties(&self.url, path, revision)?,
         })
     }
 
@@ -554,6 +565,35 @@ fn parse_proplist_xml_bytes(xml: &str) -> Result<BTreeMap<String, Vec<u8>>, Stri
         rest = &rest[value_end + "</property>".len()..];
     }
     Ok(properties)
+}
+
+fn parse_list_xml(xml: &str) -> Result<BTreeMap<String, DirEntry>, String> {
+    let mut entries = BTreeMap::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<entry") {
+        rest = &rest[start..];
+        let header_end = rest
+            .find('>')
+            .ok_or_else(|| "invalid svn list XML: unterminated entry".to_string())?;
+        let header = &rest[..=header_end];
+        let kind = match attr(header, "kind").as_deref() {
+            Some("file") => SvnNodeKind::File,
+            Some("dir") => SvnNodeKind::Directory,
+            Some(kind) => return Err(format!("invalid svn list XML: unknown node kind {kind}")),
+            None => return Err("invalid svn list XML: entry without kind".to_string()),
+        };
+        let body_start = header_end + 1;
+        let body_end = rest[body_start..]
+            .find("</entry>")
+            .ok_or_else(|| "invalid svn list XML: unclosed entry".to_string())?
+            + body_start;
+        let body = &rest[body_start..body_end];
+        let name = element_text(body, "name")
+            .ok_or_else(|| "invalid svn list XML: entry without name".to_string())?;
+        entries.insert(name, DirEntry { kind });
+        rest = &rest[body_end + "</entry>".len()..];
+    }
+    Ok(entries)
 }
 
 fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
@@ -851,6 +891,21 @@ mod tests {
             b"hello & goodbye"
         );
         assert_eq!(properties.get("custom:empty").unwrap(), b"");
+    }
+
+    #[test]
+    fn parses_immediate_list_xml_names_and_node_kinds() {
+        let entries = parse_list_xml(
+            r#"<?xml version="1.0"?>
+<lists><list path="file:///repo/trunk">
+<entry kind="dir"><name>src &amp; tests</name></entry>
+<entry kind="file"><name>run.sh</name></entry>
+</list></lists>"#,
+        )
+        .unwrap();
+
+        assert_eq!(entries["src & tests"].kind, SvnNodeKind::Directory);
+        assert_eq!(entries["run.sh"].kind, SvnNodeKind::File);
     }
 
     #[test]

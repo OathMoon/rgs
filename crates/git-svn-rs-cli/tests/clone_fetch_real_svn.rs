@@ -571,6 +571,79 @@ fn clone_discovers_branches_inside_an_ancestor_directory_copy() {
 }
 
 #[test]
+fn clone_discovers_empty_nested_branch_inside_an_ancestor_copy() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let upstream = temp.path().join("upstream");
+    run_svn(temp.path(), &["checkout", &fixture.url(), "upstream"]);
+    std::fs::create_dir_all(upstream.join("archive/projects/acme/main")).unwrap();
+    run_svn(&upstream, &["add", "--non-interactive", "archive"]);
+    run_svn(
+        &upstream,
+        &[
+            "commit",
+            "--non-interactive",
+            "-m",
+            "create archived empty nested branch",
+        ],
+    );
+    let source_revision = svn_stdout(&["info", "--show-item", "revision", &fixture.url()])
+        .trim()
+        .parse::<u32>()
+        .unwrap();
+    run_svn(
+        &upstream,
+        &["copy", "--non-interactive", "archive/projects", "projects"],
+    );
+    run_svn(
+        &upstream,
+        &[
+            "commit",
+            "--non-interactive",
+            "-m",
+            "promote empty nested branches",
+        ],
+    );
+
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--branches",
+            "projects/*/*",
+            "--prefix",
+            "origin/",
+            "--preserve-empty-dirs",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let destination = "refs/remotes/origin/acme/main";
+    let auxiliary = format!("{destination}@{source_revision}");
+    assert!(git.rev_parse(destination).is_ok());
+    assert!(git.rev_parse(&auxiliary).is_ok());
+    assert_eq!(
+        git.run_for_test(["ls-tree", "-r", "--name-only", destination])
+            .unwrap(),
+        ""
+    );
+}
+
+#[test]
 fn fetch_persists_monotonic_branch_and_tag_discovery_high_water() {
     match require_svn_tools() {
         Ok(()) => {}
