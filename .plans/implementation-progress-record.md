@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `22c71e9 Reject stale mapped dcommit targets early`
+Committed HEAD at audit: `838a618 Add non-interactive SVN askpass authentication`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -32,7 +32,7 @@ hosted compatibility workflow has not yet had its first successful run.
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | relative/partial/full-URL layouts, globs, authors, filters, reversible ref sanitization | remaining encoding/platform edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
-| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, byte properties, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
+| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, askpass, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
 | 7 dcommit | `behavior-pass` for covered local profiles | typed plans, v4 recovery, stale-target preflight, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
@@ -86,9 +86,9 @@ hosted compatibility workflow has not yet had its first successful run.
   backfill, auxiliary `branch@rev` refs, ancestor directory copies, wildcard
   discovery high-water, ignore-refs scope, and trailing-zero scan markers match
   the covered frozen Perl artifacts.
-- `svn+ssh` read paths accept case-insensitive schemes. A persisted temporary SVN
-  tunnel config drives real `svnserve -t`, validates its exact invocation, and
-  covers direct clone plus incremental fetch in default and linked modes.
+- Production auth resolves `GIT_ASKPASS` then `SSH_ASKPASS` without Git persistence.
+  Authenticated svnserve covers full-URL init, clone, and fetch in default/linked;
+  a configured `svn+ssh` tunnel separately validates exact `svnserve -t` invocation.
 - Plain HTTP reads are separated from HTTPS and enabled through the common
   adapters. A loopback Apache DAV Basic-auth fixture covers denied no-credential
   clone, secret-safe errors, authenticated clone, and incremental fetch; strict CI
@@ -205,12 +205,12 @@ hosted compatibility workflow has not yet had its first successful run.
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`
-- `cargo test --workspace` (507 passed); `cargo test -p git-svn-rs-core --lib` (117/117)
+- `cargo test --workspace` (511 passed); `cargo test -p git-svn-rs-core --lib` (118/118)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (65/65)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (50/50); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
-- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (39/39; HTTP DAV skipped without Apache)
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (39/39; HTTP DAV skipped without Apache)
+- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn` (400 passed)
+- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
+- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `git diff --check`
@@ -261,8 +261,8 @@ Verified on 2026-07-30:
   evidence.
 - `fc2c420`: scoped fetch-all, command-local verbose, and fixed upstream identity
   across rebase orchestration.
-- `5dd0ede`: HTTP/HTTPS profile split, fail-closed HTTPS, and strict authenticated
-  Apache DAV clone/fetch fixture plus CI dependencies.
+- `5dd0ede`, `838a618`: HTTP profile/DAV fixture plus secret-safe askpass
+  full-URL init, clone, and incremental fetch in default and linked modes.
 - `b7d1a9e`: mapped explicit commit-URL identity, exact post-fetch verification,
   and no-resubmit recovery evidence.
 - `53707fe`: v3 recovery client intent, v2 journal migration, and secret-safe
