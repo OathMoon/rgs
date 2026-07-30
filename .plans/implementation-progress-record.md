@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `593d73d Reject inert dcommit revision overrides`
+Committed HEAD at audit: `98b87f1 Select the most specific copy-parent mapping`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -86,6 +86,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   backfill, auxiliary `branch@rev` refs, ancestor directory copies, wildcard
   discovery high-water, ignore-refs scope, and trailing-zero scan markers match
   the covered frozen Perl artifacts.
+- Copy-parent lookup and dependency ordering select the most specific overlapping
+  mapping while retaining an empty root mapping as the final fallback.
 - Production auth resolves `GIT_ASKPASS` then `SSH_ASKPASS` without Git persistence.
   Authenticated svnserve covers full-URL init, clone, and fetch in default/linked;
   a configured `svn+ssh` tunnel validates exact `svnserve -t` read/write invocation.
@@ -211,8 +213,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace` (528 passed); core lib 119/119; readonly 71/71
-- dcommit linear 56/56; dcommit restart 8/8; linked-feature core 403 passed
+- `cargo test --workspace` (532 passed); core lib 120/120; readonly 71/71
+- dcommit linear 56/56; dcommit restart 8/8; linked-feature core 405 passed
 - Focused scalar-config/dcommit no-mutation regressions and all-features clippy pass.
 - real SVN default/linked 41/41 each (HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
@@ -245,7 +247,6 @@ Verified on 2026-07-30:
   rebase merge/strategy command contract.
 - `08eef18`: fail-closed libsvn callback inputs, lifecycle, allocation, property,
   panic, and owned-error boundaries.
-- `cf90c68`: frozen recursive/non-recursive Git log argument contract.
 - `d42efb3`: commit-URL recovery intent, versioned fingerprints, non-advancing
   submission ambiguity, and authenticated no-write preflight evidence.
 - `ea77681`, `dbf6dc8`: local-only rebase and sparse rev_map parent reset.
@@ -262,8 +263,6 @@ Verified on 2026-07-30:
   and no-resubmit recovery evidence.
 - `53707fe`: v3 recovery client intent, v2 journal migration, and secret-safe
   password-rotation recovery without duplicate submission.
-- `046bf41`: v4 effective post-fetch intent, authors-content binding, and v2/v3
-  compatible recovery migration.
 - `23bf393`, `793fb5d`: real Submitted/post-fetch save and two-entry recovery evidence.
 - `afe3fb4`, `7968d5e`, `3573d2f`: Submitted acknowledgement-loss, multi-entry,
   and post-rebase durable restart boundaries.
@@ -278,13 +277,14 @@ Verified on 2026-07-30:
   Log.pm pathspec-boundary compatibility.
 - `ee7d7e9`, `593d73d`: scalar remote-config cardinality and explicit rejection
   of inert dcommit revision overrides.
+- `98b87f1`: most-specific/root-aware copy-parent mapping and dependency order.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 5: make copy-parent mapping selection most-specific and root-aware.
-2. Phase 4/7: execute strict DAV, then add HTTPS/real OpenSSH and write profiles.
+1. Select the next locally verifiable Phase 4/6/7 gap from parallel audits.
+2. Execute strict DAV, then add HTTPS/real OpenSSH and remote write profiles.
 3. Phase 8: run hosted CI when credentials/external execution are available.
 
 ## Handoff Notes
