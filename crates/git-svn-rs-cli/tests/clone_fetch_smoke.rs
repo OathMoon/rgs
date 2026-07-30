@@ -134,6 +134,52 @@ fn fetch_uses_existing_mock_remote_config() {
 }
 
 #[test]
+fn fetch_rejects_duplicate_remote_url_without_metadata_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["init", "mock://repo/trunk", "work"])
+        .assert()
+        .success();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test([
+        "config",
+        "--add",
+        "svn-remote.svn.url",
+        "mock://other/trunk",
+    ])
+    .unwrap();
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+    let refs_before = git
+        .run_for_test(["for-each-ref", "--format=%(refname) %(objectname)"])
+        .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .failure()
+        .stdout("")
+        .stderr(predicate::str::contains(
+            "multiple values for svn-remote.svn.url",
+        ));
+
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        git.run_for_test(["for-each-ref", "--format=%(refname) %(objectname)"])
+            .unwrap(),
+        refs_before
+    );
+    assert!(!work.join(".git/svn").exists());
+}
+
+#[test]
 fn fetch_rejects_unvalidated_https_before_metadata_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");

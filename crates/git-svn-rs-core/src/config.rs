@@ -225,9 +225,8 @@ pub fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
 
 pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
     let prefix = format!("svn-remote.{remote}");
-    let url = git
-        .config_get(&format!("{prefix}.url"))?
-        .ok_or_else(|| format!("missing {prefix}.url"))?;
+    let read = |key: &str| read_single_config(git, &format!("{prefix}.{key}"));
+    let url = read("url")?.ok_or_else(|| format!("missing {prefix}.url"))?;
     let mappings = read_mappings(git, &prefix, "fetch", MappingKind::Fetch)?;
     let branch_mappings = read_mappings(git, &prefix, "branches", MappingKind::Branches)?;
     let tag_mappings = read_mappings(git, &prefix, "tags", MappingKind::Tags)?;
@@ -238,39 +237,41 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
         fetch: mappings,
         branches: branch_mappings,
         tags: tag_mappings,
-        ignore_paths: git.config_get(&format!("{prefix}.ignore-paths"))?,
-        include_paths: git.config_get(&format!("{prefix}.include-paths"))?,
-        ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
-        authors_file: git.config_get(&format!("{prefix}.authors-file"))?,
-        authors_prog: git.config_get(&format!("{prefix}.authors-prog"))?,
-        log_window_size: git
-            .config_get(&format!("{prefix}.log-window-size"))?
+        ignore_paths: read("ignore-paths")?,
+        include_paths: read("include-paths")?,
+        ignore_refs: read("ignore-refs")?,
+        authors_file: read("authors-file")?,
+        authors_prog: read("authors-prog")?,
+        log_window_size: read("log-window-size")?
             .map(|value| {
                 value
                     .parse()
                     .map_err(|_| format!("invalid {prefix}.log-window-size: {value}"))
             })
             .transpose()?,
-        localtime: git
-            .config_get(&format!("{prefix}.localtime"))?
-            .is_some_and(|value| value == "true"),
-        username: git.config_get(&format!("{prefix}.username"))?,
-        config_dir: git.config_get(&format!("{prefix}.config-dir"))?,
-        no_auth_cache: git
-            .config_get(&format!("{prefix}.no-auth-cache"))?
-            .is_some_and(|value| value == "true"),
-        no_metadata: git
-            .config_get(&format!("{prefix}.noMetadata"))?
-            .is_some_and(|value| value == "true"),
-        rewrite_root: git.config_get(&format!("{prefix}.rewriteRoot"))?,
-        rewrite_uuid: git.config_get(&format!("{prefix}.rewriteUUID"))?,
-        preserve_empty_dirs: git
-            .config_get(&format!("{prefix}.preserve-empty-dirs"))?
-            .is_some_and(|value| value == "true"),
-        placeholder_filename: git
-            .config_get(&format!("{prefix}.placeholder-filename"))?
+        localtime: read("localtime")?.is_some_and(|value| value == "true"),
+        username: read("username")?,
+        config_dir: read("config-dir")?,
+        no_auth_cache: read("no-auth-cache")?.is_some_and(|value| value == "true"),
+        no_metadata: read("noMetadata")?.is_some_and(|value| value == "true"),
+        rewrite_root: read("rewriteRoot")?,
+        rewrite_uuid: read("rewriteUUID")?,
+        preserve_empty_dirs: read("preserve-empty-dirs")?.is_some_and(|value| value == "true"),
+        placeholder_filename: read("placeholder-filename")?
             .unwrap_or_else(|| ".gitignore".to_string()),
     })
+}
+
+fn read_single_config(git: &GitCli, key: &str) -> Result<Option<String>, String> {
+    let values = git.config_get_all(key)?;
+    match values.as_slice() {
+        [] => Ok(None),
+        [value] => Ok(Some(value.clone())),
+        _ => Err(format!(
+            "multiple values for {key}: expected one, found {}",
+            values.len()
+        )),
+    }
 }
 
 fn read_mappings(

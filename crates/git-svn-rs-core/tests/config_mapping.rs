@@ -1,4 +1,5 @@
-use git_svn_rs_core::config::SvnRemoteConfig;
+use git_svn_rs_core::config::{SvnRemoteConfig, read_svn_remote_config};
+use git_svn_rs_core::git::GitCli;
 use git_svn_rs_core::mapping::{
     MappingKind, build_from_layout_args, build_single_path, build_standard_layout,
 };
@@ -133,4 +134,27 @@ fn serializes_svn_remote_config_keys() {
         "svn-remote.svn.include-paths".to_string(),
         "^(trunk|branches/main)/".to_string()
     )));
+}
+
+#[test]
+fn rejects_duplicate_single_value_remote_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = GitCli::new(temp.path());
+    git.init().unwrap();
+    git.config_add("svn-remote.svn.url", "mock://one").unwrap();
+    git.config_add("svn-remote.svn.url", "mock://two").unwrap();
+    git.config_add("svn-remote.svn.authors-file", "one.txt")
+        .unwrap();
+    git.config_add("svn-remote.svn.authors-file", "two.txt")
+        .unwrap();
+
+    let url_error = read_svn_remote_config(&git, "svn").unwrap_err();
+    assert!(url_error.contains("multiple values for svn-remote.svn.url"));
+    assert!(url_error.contains("found 2"));
+
+    git.run_for_test(["config", "--unset-all", "svn-remote.svn.url"])
+        .unwrap();
+    git.config_add("svn-remote.svn.url", "mock://one").unwrap();
+    let authors_error = read_svn_remote_config(&git, "svn").unwrap_err();
+    assert!(authors_error.contains("multiple values for svn-remote.svn.authors-file"));
 }
