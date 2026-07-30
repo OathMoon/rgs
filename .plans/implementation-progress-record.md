@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `e7f2b2d Preserve explicit log pathspec separators`
+Committed HEAD at audit: `593d73d Reject inert dcommit revision overrides`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -43,6 +43,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   compatibility shim.
 - Typed command surface, explicit v1 exclusions, config serialization, mapping
   globs, authors, filters, URL helpers, and metadata option conflict checks.
+- Scalar `svn-remote.*` keys reject multiple values instead of silently selecting
+  a different repository identity; mapping keys retain intentional multiplicity.
 - Global `-q`/`--quiet` and `-v`/`--verbose` fail explicitly instead of being
   parsed and silently ignored.
 - SHA-1/SHA-256 rev_maps support zero records, non-creating reads, append ordering,
@@ -187,6 +189,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   svnserve write and post-fetch without persisting credentials.
 - Configured `svn+ssh` dcommit completes preflight/write/post-fetch through the
   tracked remote; missing tunnel config and HTTP(S)/incompatible profiles fail early.
+- `dcommit --revision` fails before recovery or lookup rather than silently
+  ignoring its unsupported SVN editor-base semantics.
 - Mock write-back rejects `--commit-url` before journal, lock, or remote mutation
   because the mock sink cannot honor a URL override.
 
@@ -209,6 +213,7 @@ Verified on 2026-07-30:
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
 - `cargo test --workspace` (528 passed); core lib 119/119; readonly 71/71
 - dcommit linear 56/56; dcommit restart 8/8; linked-feature core 403 passed
+- Focused scalar-config/dcommit no-mutation regressions and all-features clippy pass.
 - real SVN default/linked 41/41 each (HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
@@ -238,15 +243,8 @@ Verified on 2026-07-30:
   non-interactive SVN writes.
 - `9f4b223`: tree-ish/rev_map-scoped Log.pm selection and framing plus the frozen
   rebase merge/strategy command contract.
-- `b7d6855`: real invalid-UTF-8 SVN property replay and filtered-editor byte
-  callback forwarding.
-- `97735da`: rev_map-bounded Log.pm ranges, author timezone preservation, and
-  configured object abbreviation.
-- `2a68582`: runtime Log.pm authors-file override with CLI and output coverage.
-- `57eb773`: frozen repository-relative verbose paths and unmasked golden checks.
 - `08eef18`: fail-closed libsvn callback inputs, lifecycle, allocation, property,
   panic, and owned-error boundaries.
-- `32dd27a`: frozen trailing-blank collapse and message line counts.
 - `cf90c68`: frozen recursive/non-recursive Git log argument contract.
 - `d42efb3`: commit-URL recovery intent, versioned fingerprints, non-advancing
   submission ambiguity, and authenticated no-write preflight evidence.
@@ -269,7 +267,6 @@ Verified on 2026-07-30:
 - `23bf393`, `793fb5d`: real Submitted/post-fetch save and two-entry recovery evidence.
 - `afe3fb4`, `7968d5e`, `3573d2f`: Submitted acknowledgement-loss, multi-entry,
   and post-rebase durable restart boundaries.
-- `77e0c0c`: frozen placeholder-without-preserve no-op semantics.
 - `b7d84b7`: inherited successful Git rebase stderr/progress streaming.
 - `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
 - `78b31da`: full-URL layout root normalization and exact frozen golden coverage.
@@ -279,13 +276,15 @@ Verified on 2026-07-30:
 - `53d08a8`, `91042ca`: tracked-remote post-fetch and configured tunnel dcommit.
 - `e57b70e`, `e7f2b2d`: fail-closed existing rev_map validation and explicit
   Log.pm pathspec-boundary compatibility.
+- `ee7d7e9`, `593d73d`: scalar remote-config cardinality and explicit rejection
+  of inert dcommit revision overrides.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
-2. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
+1. Phase 5: make copy-parent mapping selection most-specific and root-aware.
+2. Phase 4/7: execute strict DAV, then add HTTPS/real OpenSSH and write profiles.
 3. Phase 8: run hosted CI when credentials/external execution are available.
 
 ## Handoff Notes
