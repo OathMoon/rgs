@@ -1,11 +1,8 @@
 # git-svn-rs Implementation Progress Record
 
-Last audited: 2026-07-28
+Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `49c12da Fix partial layout mapping semantics`
-Latest implementation commits:
-
-- `49c12da Fix partial layout mapping semantics`
+Committed HEAD at audit: `78b31da Support full URL layout mappings`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -35,7 +32,7 @@ hosted compatibility workflow has not yet had its first successful run.
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
-| 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, reversible ref sanitization | remaining option/layout edge semantics |
+| 2 config/mapping | `structural-pass` | relative/partial/full-URL layouts, globs, authors, filters, reversible ref sanitization | remaining encoding/platform edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, byte properties, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
@@ -102,8 +99,9 @@ hosted compatibility workflow has not yet had its first successful run.
   `svn+ssh` dcommit remain rejected before write preparation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
-- Partial layout arguments match frozen mapping selection: branch/tag-only
-  layouts do not invent trunk, while stdlayout overrides retain other defaults.
+- Partial and full-URL layout arguments match frozen mapping selection:
+  branch/tag-only layouts do not invent trunk, stdlayout overrides retain other
+  defaults, and full URLs become same-repository relative refspecs.
 - A placeholder filename without empty-directory preservation remains a frozen
   clone-compatible no-op and cannot change the effective import configuration.
 
@@ -203,16 +201,16 @@ hosted compatibility workflow has not yet had its first successful run.
 
 ## Current Verification
 
-Verified on 2026-07-28:
+Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`
 - `cargo test --workspace`; `cargo test -p git-svn-rs-core --lib` (117/117)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (65/65)
 - `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
-- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (38/38; HTTP DAV skipped without Apache)
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (38/38; HTTP DAV skipped without Apache)
-- `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (40/40)
+- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (39/39; HTTP DAV skipped without Apache)
+- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (39/39; HTTP DAV skipped without Apache)
+- `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 - `cargo clippy --all-targets --all-features -- -D warnings`
 - `git diff --check`
 
@@ -262,7 +260,6 @@ Verified on 2026-07-28:
   evidence.
 - `fc2c420`: scoped fetch-all, command-local verbose, and fixed upstream identity
   across rebase orchestration.
-- `f16c366`: frozen non-TTY pager no-op with an explicit interactive boundary.
 - `5dd0ede`: HTTP/HTTPS profile split, fail-closed HTTPS, and strict authenticated
   Apache DAV clone/fetch fixture plus CI dependencies.
 - `b7d1a9e`: mapped explicit commit-URL identity, exact post-fetch verification,
@@ -278,14 +275,16 @@ Verified on 2026-07-28:
 - `b7d84b7`: inherited successful Git rebase stderr/progress streaming.
 - `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
 - `49c12da`: frozen partial custom/stdlayout mapping selection.
+- `78b31da`: full-URL layout root normalization and exact frozen golden coverage.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
-2. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
-3. Phase 8: run hosted CI when credentials/external execution are available.
+1. Phase 7: cover local `--adopt-revision` with a mapped `--commit-url`.
+2. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
+3. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
+4. Phase 8: run hosted CI when credentials/external execution are available.
 
 ## Handoff Notes
 
