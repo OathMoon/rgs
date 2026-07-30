@@ -21,6 +21,7 @@ use crate::git::{GitCli, GitCommitSummary};
 use crate::git_svn_id::GitSvnId;
 use crate::rev_map::RevMap;
 use crate::svn::CommitRecord;
+use crate::svn::auth::askpass_password;
 use crate::svn::mock::MockSvnBackend;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -191,6 +192,16 @@ pub fn run_in_work_tree(
                 None,
                 &args.shared,
             );
+            if svn_options.password.is_none()
+                && crate::path_url::svn_url_profile(target_url)
+                    == crate::path_url::SvnUrlProfile::Svn
+            {
+                svn_options.password = askpass_password(
+                    target_url,
+                    svn_options.username.as_deref(),
+                    svn_options.no_auth_cache,
+                )?;
+            }
             if target_url.starts_with("file://") {
                 svn_options.username = None;
                 svn_options.password = None;

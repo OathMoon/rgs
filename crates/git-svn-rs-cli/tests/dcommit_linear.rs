@@ -1215,6 +1215,114 @@ fn dcommit_writes_to_authenticated_svnserve_with_password_when_tools_exist() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn dcommit_uses_git_askpass_for_authenticated_svnserve_write_and_fetch() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_write_auth("alice", "secret").unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let work = parent.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args(["clone", &server.repo_url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    make_commit(
+        &work,
+        "askpass-write.txt",
+        "authenticated by askpass\n",
+        "askpass authenticated dcommit",
+    );
+
+    let askpass = parent.path().join("askpass");
+    let askpass_log = parent.path().join("askpass.log");
+    std::fs::write(
+        &askpass,
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$GIT_SVN_RS_ASKPASS_LOG\"\nprintf 'do-not-leak' >&2\nexit 9\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&askpass).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&askpass, permissions).unwrap();
+
+    let before = fixture.latest_revision();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .env("GIT_ASKPASS", &askpass)
+        .env("GIT_SVN_RS_ASKPASS_LOG", &askpass_log)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("SVN askpass exited"))
+        .stderr(predicate::str::contains("do-not-leak").not());
+    assert_eq!(fixture.latest_revision(), before);
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/origin/trunk/dcommit-journal")
+            .exists()
+    );
+
+    std::fs::write(
+        &askpass,
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$GIT_SVN_RS_ASKPASS_LOG\"\nprintf 'secret\\n'\n",
+    )
+    .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .env("GIT_ASKPASS", &askpass)
+        .env("GIT_SVN_RS_ASKPASS_LOG", &askpass_log)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("askpass authenticated dcommit"));
+
+    assert_eq!(
+        svn_stdout(&[
+            "cat",
+            &format!("{}/trunk/askpass-write.txt", server.repo_url())
+        ]),
+        "authenticated by askpass\n"
+    );
+    let prompts = std::fs::read_to_string(askpass_log).unwrap();
+    assert_eq!(prompts.lines().count(), 3);
+    assert!(prompts.lines().all(|line| line.contains("alice@svn://")));
+    assert!(!prompts.contains("secret"));
+    let git_config = std::fs::read_to_string(work.join(".git/config")).unwrap();
+    assert!(!git_config.contains("secret"));
+    assert!(!git_config.contains("password"));
+}
+
 #[test]
 fn dcommit_fetches_after_authenticated_svnserve_write_when_reads_require_auth() {
     match require_svn_tools().and_then(|()| require_svnserve()) {
