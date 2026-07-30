@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `91042ca Support configured svn+ssh dcommit tunnels`
+Committed HEAD at audit: `e7f2b2d Preserve explicit log pathspec separators`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -46,7 +46,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 - Global `-q`/`--quiet` and `-v`/`--verbose` fail explicitly instead of being
   parsed and silently ignored.
 - SHA-1/SHA-256 rev_maps support zero records, non-creating reads, append ordering,
-  OS locks, fsync, reset, gitfiles, and commondir.
+  OS locks, fsync, reset, gitfiles, and commondir. All read/write entry points
+  reject non-monotonic revisions and non-trailing zero OIDs before mutation.
 - Legacy rev_db/v0-v2/mixed layouts and multi-UUID ambiguity fail closed without
   mutation.
 - New metadata uses `.git/svn/<full-ref>`; an existing flattened layout remains
@@ -107,6 +108,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   rev_maps.
 - `info`, supported SVN-style `log` ranges/modes/pathspecs, conservative `gc`,
   recoverable `reset`, and current-parent selective `rebase` are implemented.
+- The compatibility parser preserves explicit `log -- <pathspec>` boundaries, so
+  a path remains a path even when it has the same name as a Git ref.
 - Log preserves author/date/message framing, numeric direction, oneline revision
   width, and record-safe stat/raw/patch passthrough for covered cases.
 - Log resolves an explicit pre-pathspec tree-ish to its own tracking identity,
@@ -204,8 +207,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace` (524 passed); core lib 119/119; readonly 69/69
-- dcommit linear 56/56; dcommit restart 8/8; strict linked core 401 passed
+- `cargo test --workspace` (528 passed); core lib 119/119; readonly 71/71
+- dcommit linear 56/56; dcommit restart 8/8; linked-feature core 403 passed
 - real SVN default/linked 41/41 each (HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
@@ -274,6 +277,8 @@ Verified on 2026-07-30:
 - `22c71e9`, `6e8b595`: stale-target preflight and peg-sensitive read/write E2E.
 - `f97b1b7`, `fc34c11`: dcommit askpass and fail-closed named-remote resolution.
 - `53d08a8`, `91042ca`: tracked-remote post-fetch and configured tunnel dcommit.
+- `e57b70e`, `e7f2b2d`: fail-closed existing rev_map validation and explicit
+  Log.pm pathspec-boundary compatibility.
 
 ## Next Steps
 

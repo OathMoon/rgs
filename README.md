@@ -36,7 +36,7 @@ CLI `clone_fetch_real_svn` workflows.
 
 ## Current compatibility evidence
 
-The strict golden suite passes 40/40 covered scenarios against the frozen Perl
+The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 `git svn` 2.54.0 baseline. The exact comparisons currently cover:
 
 - trunk, standard-layout, and direct `/trunk` URL clone/import behavior;
@@ -46,16 +46,16 @@ The strict golden suite passes 40/40 covered scenarios against the frozen Perl
   `git-svn-id` metadata;
 - `.rev_map` object IDs and transactional trailing-zero scan markers;
 - covered `find-rev`, `info`, `log`, `gc`, `reset`, and rebase behavior;
-- deterministic local `file://` and authenticated local `svn://` dcommit;
+- deterministic local `file://`, authenticated local `svn://`, and configured
+  non-interactive `svn+ssh://` tunnel dcommit;
 - submitted-write recovery without a duplicate revision; and
 - dirty-index rejection with no SVN write or Rust recovery journal.
 
 This is a `behavior-pass` for those scenarios, not a blanket compatibility claim.
 Plain HTTP reads have a loopback Apache DAV fixture and are enabled separately
 from HTTPS. HTTPS trust/authentication, real OpenSSH key/host-trust behavior, and
-remote write-back beyond the covered local `file://` and local `svn://` fixtures
-are not claimed. Configured `svn+ssh://` external-tunnel reads are covered without
-implying `svn+ssh` dcommit support.
+HTTP(S) write-back are not claimed. Configured `svn+ssh://` external-tunnel
+reads/writes are covered without implying real OpenSSH key or host-trust support.
 
 ## `svn-libsvn` feature status
 
