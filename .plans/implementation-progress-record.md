@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `fc34c11 Resolve named SVN remotes by tracking identity`
+Committed HEAD at audit: `6e8b595 Handle peg-sensitive SVN targets end to end`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -96,9 +96,9 @@ preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validati
   combinations fail before metadata or recovery side effects.
 - Readonly/write commands and `fetch --parent` resolve named remotes by nearest
   identity; path/rev_map ambiguity fails closed without masking a unique identity.
-- Partial and full-URL layout arguments match frozen mapping selection:
-  branch/tag-only layouts do not invent trunk, stdlayout overrides retain other
-  defaults, and full URLs become same-repository relative refspecs.
+- Partial/full-URL layouts match frozen mapping selection. CLI/libsvn normalize
+  peg-sensitive `@`/`%40` only at the command boundary; real clone/fetch/dcommit
+  covers an encoded session URL and an `@` working-copy file path.
 - A placeholder filename without empty-directory preservation remains a frozen
   clone-compatible no-op and cannot change the effective import configuration.
 
@@ -205,11 +205,9 @@ preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validati
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace` (518 passed); `cargo test -p git-svn-rs-core --lib` (118/118)
-- readonly commands 69/69; dcommit linear 52/52; dcommit restart 8/8
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn` (400 passed)
-- `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
-- `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
+- `cargo test --workspace` (521 passed); core lib 119/119; readonly 69/69
+- dcommit linear 53/53; dcommit restart 8/8; strict linked core 401 passed
+- real SVN default/linked 41/41 each (HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -274,7 +272,7 @@ Verified on 2026-07-30:
 - `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
 - `78b31da`: full-URL layout root normalization and exact frozen golden coverage.
 - `87e1446`: mapped commit-URL unknown-outcome adoption without resubmission.
-- `22c71e9`: mapped stale-target preflight and second-workcopy no-write evidence.
+- `22c71e9`, `6e8b595`: stale-target preflight and peg-sensitive read/write E2E.
 - `f97b1b7`, `fc34c11`: dcommit askpass and fail-closed named-remote resolution.
 
 ## Next Steps
