@@ -1608,6 +1608,84 @@ fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
 }
 
 #[test]
+fn dcommit_rejects_stale_explicit_target_before_journal_or_svn_write() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    make_commit(
+        &work,
+        "src/lib.rs",
+        "pub fn answer() -> u8 { 100 }\n",
+        "local stale commit",
+    );
+    let local_head = git_stdout(&work, &["rev-parse", "HEAD"]);
+
+    let upstream = temp.path().join("upstream");
+    let branch_url = format!("{}/branches/main", fixture.url());
+    svn_command(
+        temp.path(),
+        &["checkout", "--non-interactive", &branch_url, "upstream"],
+    );
+    std::fs::write(upstream.join("upstream.txt"), "advanced elsewhere\n").unwrap();
+    svn_command(&upstream, &["add", "--non-interactive", "upstream.txt"]);
+    svn_command(
+        &upstream,
+        &[
+            "commit",
+            "--non-interactive",
+            "-m",
+            "advance mapped branch externally",
+        ],
+    );
+    let advanced_revision = fixture.latest_revision();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase", "--commit-url", &branch_url])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("SVN remote advanced"))
+        .stderr(predicate::str::contains("refusing to submit"));
+
+    assert_eq!(
+        fixture.latest_revision(),
+        advanced_revision,
+        "stale-head rejection must not create an SVN revision"
+    );
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), local_head);
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{branch_url}/src/lib.rs")]),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/origin/main/dcommit-journal")
+            .exists(),
+        "stale-head preflight must fail before creating a dcommit journal"
+    );
+}
+
+#[test]
 fn dcommit_rejects_commit_url_outside_configured_remote_before_write() {
     match require_svn_tools() {
         Ok(()) => {}
@@ -3598,6 +3676,20 @@ fn svn_stdout(args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap()
+}
+
+fn svn_command(cwd: &std::path::Path, args: &[&str]) {
+    let output = std::process::Command::new("svn")
+        .current_dir(cwd)
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "svn {:?} failed: {}",
+        args,
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn svn_propget_missing(name: &str, url: &str) {

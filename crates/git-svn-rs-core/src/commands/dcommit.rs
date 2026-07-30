@@ -205,7 +205,6 @@ pub fn run_in_work_tree(
                     uuid: &tracked.uuid,
                     source_refname: &tracked.refname,
                     mapping_ref,
-                    base_revision: revision,
                     no_rebase: args.no_rebase,
                     mergeinfo: args.mergeinfo.as_deref(),
                     svn_options,
@@ -297,7 +296,6 @@ struct FileSvnDcommit<'a> {
     uuid: &'a str,
     source_refname: &'a str,
     mapping_ref: &'a str,
-    base_revision: u32,
     no_rebase: bool,
     mergeinfo: Option<&'a str>,
     svn_options: DcommitSvnOptions,
@@ -379,6 +377,18 @@ fn dcommit_file_svn(
         crate::dcommit::fingerprint::legacy_recovery_config_fingerprint_v3(
             recovery_fingerprint_input,
         );
+    let new_base = active
+        .is_none()
+        .then(|| {
+            validate_new_dcommit_base(
+                ctx.git,
+                ctx.mapping_ref,
+                ctx.rev_map_path,
+                &target_url,
+                &ctx.svn_options,
+            )
+        })
+        .transpose()?;
     let plan_chain = if let Some(located) = &active {
         located
             .journal
@@ -403,14 +413,16 @@ fn dcommit_file_svn(
     };
     let original_base_revision = match &active {
         Some(located) => located.journal.original_base_revision,
-        None if ctx.commit_url_override => {
-            svn_last_changed_revision(&target_url, &ctx.svn_options)?
+        None => {
+            new_base
+                .as_ref()
+                .expect("new dcommit base must be validated")
+                .0
         }
-        None => ctx.base_revision as u64,
     };
     let original_base_oid = match &active {
         Some(located) => located.journal.original_base_oid.clone(),
-        None => ctx.git.rev_parse(ctx.mapping_ref)?.trim().to_string(),
+        None => new_base.expect("new dcommit base must be validated").1,
     };
     let original_head = match &active {
         Some(located) => located.journal.original_head.clone(),
@@ -772,6 +784,39 @@ fn svn_last_changed_revision(url: &str, options: &DcommitSvnOptions) -> Result<u
     svn_info_item(url, "last-changed-revision", options)?
         .parse::<u64>()
         .map_err(|error| format!("invalid SVN remote revision: {error}"))
+}
+
+fn validate_new_dcommit_base(
+    git: &GitCli,
+    mapping_ref: &str,
+    rev_map_path: &Path,
+    target_url: &str,
+    options: &DcommitSvnOptions,
+) -> Result<(u64, String), String> {
+    let record = RevMap::open_existing(rev_map_path, git.object_format()?)?
+        .max_record(true)?
+        .ok_or_else(|| "dcommit target rev_map is empty".to_string())?;
+    let mapping_oid = git.rev_parse(mapping_ref)?.trim().to_string();
+    if mapping_oid != record.object_id_hex {
+        return Err(format!(
+            "dcommit tracking ref {mapping_ref} does not match its rev_map; expected {}, found {mapping_oid}",
+            record.object_id_hex
+        ));
+    }
+
+    let expected_revision = u64::from(record.revision);
+    let actual_revision = svn_last_changed_revision(target_url, options)?;
+    if actual_revision > expected_revision {
+        return Err(format!(
+            "SVN remote advanced from expected r{expected_revision} to r{actual_revision}; refusing to submit"
+        ));
+    }
+    if actual_revision != expected_revision {
+        return Err(format!(
+            "SVN remote revision mismatch: expected r{expected_revision}, found r{actual_revision}; refusing to submit"
+        ));
+    }
+    Ok((expected_revision, mapping_oid))
 }
 
 fn validate_svn_repository_uuid(
