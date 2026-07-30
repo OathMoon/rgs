@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `838a618 Add non-interactive SVN askpass authentication`
+Committed HEAD at audit: `793fb5d Prove post-fetch dcommit recovery is idempotent`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -176,11 +176,11 @@ hosted compatibility workflow has not yet had its first successful run.
 - A post-submit password rotation resumes with the same username and new secret
   without credential leakage or a duplicate SVN revision; changing username is
   rejected, as is changing bound authors-file content.
-- Lost-submit-response and Submitted-save failures stay in-flight until verified
-  adoption; a visible Submitted snapshot with lost acknowledgement restarts
-  without a sink call. Two-entry verified/Submitted save faults neither duplicate
-  nor skip commits and preserve the verified queue prefix. A lost Complete
-  tombstone safely retries rebase without sink access.
+- Lost-response and save faults retain the last durable state. Real post-fetch
+  save failure proves ref/rev_map publication can precede a Submitted restart that
+  only re-fetches/verifies; multi-entry faults neither duplicate nor skip commits.
+  A visible Submitted snapshot avoids sink calls, and a lost Complete tombstone
+  safely retries rebase without sink access.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
   options consistently.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
@@ -205,9 +205,9 @@ hosted compatibility workflow has not yet had its first successful run.
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`
-- `cargo test --workspace` (511 passed); `cargo test -p git-svn-rs-core --lib` (118/118)
+- `cargo test --workspace` (512 passed); `cargo test -p git-svn-rs-core --lib` (118/118)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (65/65)
-- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (50/50); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
+- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (51/51); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn` (400 passed)
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
@@ -269,7 +269,7 @@ Verified on 2026-07-30:
   password-rotation recovery without duplicate submission.
 - `046bf41`: v4 effective post-fetch intent, authors-content binding, and v2/v3
   compatible recovery migration.
-- `23bf393`: real unknown-outcome, Submitted-save, and two-entry recovery evidence.
+- `23bf393`, `793fb5d`: real Submitted/post-fetch save and two-entry recovery evidence.
 - `afe3fb4`, `7968d5e`, `3573d2f`: Submitted acknowledgement-loss, multi-entry,
   and post-rebase durable restart boundaries.
 - `77e0c0c`: frozen placeholder-without-preserve no-op semantics.
