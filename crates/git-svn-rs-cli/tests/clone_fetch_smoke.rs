@@ -532,7 +532,7 @@ fn fetch_all_rejects_duplicate_remote_ref_before_import_mutation() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "remote ref refs/remotes/origin/trunk is tracked by both",
+            "remote ref refs/remotes/origin/trunk may be tracked by both",
         ));
 
     assert!(
@@ -540,4 +540,139 @@ fn fetch_all_rejects_duplicate_remote_ref_before_import_mutation() {
             .is_err()
     );
     assert!(!work.join(".git/svn").exists());
+}
+
+#[test]
+fn fetch_all_rejects_duplicate_wildcard_destination_before_import_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["init"]).unwrap();
+    for remote in ["one", "two"] {
+        git.run_for_test([
+            "config",
+            &format!("svn-remote.{remote}.url"),
+            &format!("file:///repository-that-must-not-be-accessed/{remote}"),
+        ])
+        .unwrap();
+        git.run_for_test([
+            "config",
+            "--add",
+            &format!("svn-remote.{remote}.branches"),
+            "branches/*:refs/remotes/shared/*",
+        ])
+        .unwrap();
+    }
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["fetch", "--fetch-all"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("remote ref refs/remotes/shared/* may be tracked by both")
+                .and(predicate::str::contains(
+                    "svn-remote.one.branches=branches/*:refs/remotes/shared/*",
+                ))
+                .and(predicate::str::contains(
+                    "svn-remote.two.branches=branches/*:refs/remotes/shared/*",
+                )),
+        );
+
+    assert!(
+        git.run_for_test(["show-ref", "--verify", "refs/remotes/shared/main"])
+            .is_err()
+    );
+    assert!(!work.join(".git/svn").exists());
+}
+
+#[test]
+fn fetch_all_rejects_fixed_and_wildcard_destination_intersection() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["init"]).unwrap();
+    git.run_for_test([
+        "config",
+        "svn-remote.fixed.url",
+        "file:///repository-that-must-not-be-accessed/fixed",
+    ])
+    .unwrap();
+    git.run_for_test([
+        "config",
+        "--add",
+        "svn-remote.fixed.fetch",
+        "trunk:refs/remotes/shared/main",
+    ])
+    .unwrap();
+    git.run_for_test([
+        "config",
+        "svn-remote.wildcard.url",
+        "file:///repository-that-must-not-be-accessed/wildcard",
+    ])
+    .unwrap();
+    git.run_for_test([
+        "config",
+        "--add",
+        "svn-remote.wildcard.tags",
+        "tags/*:refs/remotes/shared/*",
+    ])
+    .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["fetch", "--fetch-all"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains(
+                "remote ref destinations refs/remotes/shared/main and refs/remotes/shared/*",
+            )
+            .and(predicate::str::contains(
+                "svn-remote.fixed.fetch=trunk:refs/remotes/shared/main",
+            ))
+            .and(predicate::str::contains(
+                "svn-remote.wildcard.tags=tags/*:refs/remotes/shared/*",
+            )),
+        );
+
+    assert!(!work.join(".git/svn").exists());
+}
+
+#[test]
+fn fetch_all_allows_nonintersecting_wildcard_destinations() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["init"]).unwrap();
+    for (remote, key, refspec) in [
+        ("one", "branches", "branches/*:refs/remotes/one/*"),
+        ("two", "tags", "tags/*:refs/remotes/two/*"),
+    ] {
+        git.run_for_test([
+            "config",
+            &format!("svn-remote.{remote}.url"),
+            &format!("mock://{remote}"),
+        ])
+        .unwrap();
+        git.run_for_test([
+            "config",
+            "--add",
+            &format!("svn-remote.{remote}.{key}"),
+            refspec,
+        ])
+        .unwrap();
+    }
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["fetch", "--fetch-all"])
+        .assert()
+        .success();
 }

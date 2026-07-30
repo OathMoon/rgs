@@ -1,6 +1,7 @@
 use crate::cli::{FetchArgs, SharedFetchArgs};
 use crate::config::{SvnRemoteConfig, read_svn_remote_config, svn_remote_names};
 use crate::git::GitCli;
+use crate::glob_spec::GlobSpec;
 use crate::import::{ImportOptions, import_mock_revisions_for_ref, import_ra_revisions_for_ref};
 use crate::mapping::{MappingKind, RefMapping};
 use crate::path_url::{SvnUrlProfile, svn_url_profile};
@@ -11,7 +12,6 @@ use crate::svn::cli::SvnCliBackend;
 use crate::svn::mock::MockRaSession;
 use crate::svn::ra::RaSession;
 use std::cmp;
-use std::collections::BTreeMap;
 
 pub fn run(args: FetchArgs) -> Result<(), String> {
     run_in_work_tree(".", args)
@@ -28,9 +28,9 @@ pub fn run_in_work_tree(
         return Err("fetch --parent cannot be combined with --fetch-all".to_string());
     }
     let work_tree = work_tree.into();
-    crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
     verify_remote_fetch_ref_sanity(&git)?;
+    crate::migration::ensure_supported_git_svn_metadata(git.work_tree())?;
     validate_requested_urls_before_recovery(&git, &args)?;
     crate::import_transaction::recover_pending(&git)?;
     if args.parent {
@@ -422,23 +422,110 @@ fn configured_password(
 }
 
 fn verify_remote_fetch_ref_sanity(git: &GitCli) -> Result<(), String> {
-    let mut keys = git.config_names_matching(r"^svn-remote\..*\.fetch$")?;
+    let mut keys = git.config_names_matching(r"^svn-remote\..*\.(fetch|branches|tags)$")?;
     keys.sort();
     keys.dedup();
-    let mut seen = BTreeMap::<String, String>::new();
+    let mut destinations = Vec::<ConfiguredDestination>::new();
     for key in keys {
+        let kind = if key.ends_with(".branches") {
+            MappingKind::Branches
+        } else if key.ends_with(".tags") {
+            MappingKind::Tags
+        } else {
+            MappingKind::Fetch
+        };
         for value in git.config_get_all(&key)? {
-            let mapping = parse_mapping(&value, MappingKind::Fetch)?;
+            let mapping = parse_mapping(&value, kind.clone())?;
             let owner = format!("{key}={value}");
-            if let Some(previous) = seen.insert(mapping.git_ref.clone(), owner.clone()) {
+            let remote = key
+                .strip_prefix("svn-remote.")
+                .and_then(|key| key.rsplit_once('.').map(|(remote, _)| remote))
+                .ok_or_else(|| format!("invalid SVN remote mapping key: {key}"))?;
+            let destination = ConfiguredDestination::new(remote.to_string(), mapping, owner)?;
+            if let Some(previous) = destinations
+                .iter()
+                .find(|previous| previous.may_overlap(&destination))
+            {
+                let description = if previous.pattern == destination.pattern {
+                    format!("remote ref {}", destination.pattern)
+                } else {
+                    format!(
+                        "remote ref destinations {} and {}",
+                        previous.pattern, destination.pattern
+                    )
+                };
                 return Err(format!(
-                    "remote ref {} is tracked by both {previous} and {owner}; resolve this ambiguity before fetching",
-                    mapping.git_ref
+                    "{description} may be tracked by both {} and {}; resolve this ambiguity before fetching",
+                    previous.owner, destination.owner
                 ));
             }
+            destinations.push(destination);
         }
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct ConfiguredDestination {
+    remote: String,
+    owner: String,
+    pattern: String,
+    wildcard_depth: Option<usize>,
+}
+
+impl ConfiguredDestination {
+    fn new(remote: String, mapping: RefMapping, owner: String) -> Result<Self, String> {
+        let wildcard_depth = match mapping.kind {
+            MappingKind::Fetch => None,
+            MappingKind::Branches | MappingKind::Tags if mapping.git_ref.contains('*') => {
+                Some(GlobSpec::new(&mapping.svn_path, true)?.depth())
+            }
+            MappingKind::Branches | MappingKind::Tags => None,
+        };
+        let mut pattern = crate::mapping::sanitize_refname(&mapping.git_ref)?;
+        if wildcard_depth.is_some() {
+            pattern = pattern.replace("%2A", "*");
+        }
+        Ok(Self {
+            remote,
+            owner,
+            pattern,
+            wildcard_depth,
+        })
+    }
+
+    fn may_overlap(&self, other: &Self) -> bool {
+        if self.remote == other.remote {
+            return self.pattern == other.pattern;
+        }
+        if self.wildcard_depth.is_none() && other.wildcard_depth.is_none() {
+            return self.pattern == other.pattern;
+        }
+        if self.expanded_slash_count() != other.expanded_slash_count() {
+            return false;
+        }
+
+        let (self_prefix, self_suffix) = literal_edges(&self.pattern);
+        let (other_prefix, other_suffix) = literal_edges(&other.pattern);
+        (self_prefix.starts_with(other_prefix) || other_prefix.starts_with(self_prefix))
+            && (self_suffix.ends_with(other_suffix) || other_suffix.ends_with(self_suffix))
+    }
+
+    fn expanded_slash_count(&self) -> usize {
+        let literal_slashes = self.pattern.bytes().filter(|byte| *byte == b'/').count();
+        let wildcard_count = self.pattern.bytes().filter(|byte| *byte == b'*').count();
+        literal_slashes + wildcard_count * self.wildcard_depth.unwrap_or(1).saturating_sub(1)
+    }
+}
+
+fn literal_edges(pattern: &str) -> (&str, &str) {
+    let prefix = pattern
+        .split_once('*')
+        .map_or(pattern, |(prefix, _)| prefix);
+    let suffix = pattern
+        .rsplit_once('*')
+        .map_or(pattern, |(_, suffix)| suffix);
+    (prefix, suffix)
 }
 
 fn import_options(
