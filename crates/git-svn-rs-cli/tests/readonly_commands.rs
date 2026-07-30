@@ -2058,6 +2058,42 @@ fn rebase_rejects_dirty_work_tree_before_fetch_mutates_tracking_state() {
 }
 
 #[test]
+fn rebase_local_allows_untracked_files_without_mutating_them() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let tracked = commit_file(
+        work,
+        "tracked.txt",
+        "clean\n",
+        "tracked\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    write_rev_map(work, &[&tracked]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &tracked]);
+    let rev_map_path = work.join(".git/svn/git-svn/.rev_map.mock-uuid");
+    let rev_map_before = std::fs::read(&rev_map_path).unwrap();
+    let untracked_path = work.join("scratch.untracked");
+    std::fs::write(&untracked_path, "keep me\n").unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["rebase", "--local"])
+        .assert()
+        .success();
+
+    assert_eq!(
+        std::fs::read_to_string(untracked_path).unwrap(),
+        "keep me\n"
+    );
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+        tracked
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+}
+
+#[test]
 fn rebase_local_skips_remote_fetch() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");

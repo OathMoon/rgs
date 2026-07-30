@@ -295,6 +295,12 @@ impl GitCli {
             .is_empty())
     }
 
+    pub fn is_index_and_tracked_work_tree_clean(&self) -> Result<bool, String> {
+        Ok(self
+            .run_args(["status", "--porcelain=v1", "--untracked-files=no"])?
+            .is_empty())
+    }
+
     pub fn log_records(
         &self,
         rev: &str,
@@ -1065,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn git_cli_reports_tracked_and_untracked_work_tree_changes() {
+    fn git_cli_distinguishes_tracked_and_untracked_work_tree_changes() {
         let dir = tempfile::tempdir().unwrap();
         let git = GitCli::new(dir.path());
         git.init().unwrap();
@@ -1078,10 +1084,17 @@ mod tests {
         git.run_for_test(["commit", "-m", "base"]).unwrap();
 
         assert!(git.is_work_tree_clean().unwrap());
+        assert!(git.is_index_and_tracked_work_tree_clean().unwrap());
         std::fs::write(dir.path().join("untracked.txt"), "dirty\n").unwrap();
         assert!(!git.is_work_tree_clean().unwrap());
+        assert!(git.is_index_and_tracked_work_tree_clean().unwrap());
         std::fs::remove_file(dir.path().join("untracked.txt")).unwrap();
         std::fs::write(dir.path().join("tracked.txt"), "modified\n").unwrap();
         assert!(!git.is_work_tree_clean().unwrap());
+        assert!(!git.is_index_and_tracked_work_tree_clean().unwrap());
+        git.run_for_test(["checkout", "--", "tracked.txt"]).unwrap();
+        std::fs::write(dir.path().join("tracked.txt"), "staged\n").unwrap();
+        git.run_for_test(["add", "tracked.txt"]).unwrap();
+        assert!(!git.is_index_and_tracked_work_tree_clean().unwrap());
     }
 }

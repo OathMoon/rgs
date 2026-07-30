@@ -39,7 +39,7 @@ fn run_in_work_tree_mode(
             tracked.refname
         ));
     }
-    if !tracked.git.is_work_tree_clean()? {
+    if !tracked.git.is_index_and_tracked_work_tree_clean()? {
         return Err("rebase requires a clean index and work tree".to_string());
     }
 
