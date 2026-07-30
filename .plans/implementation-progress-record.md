@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `793fb5d Prove post-fetch dcommit recovery is idempotent`
+Committed HEAD at audit: `fc34c11 Resolve named SVN remotes by tracking identity`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -21,17 +21,14 @@ produce `release-pass`.
 ## Current Overall State
 
 The repository provides an initially complete core workflow for covered `file://`,
-authenticated local `svn://`, configured `svn+ssh` tunnel, mock, and plain HTTP
-read profiles. It remains a preview: the strict Apache DAV fixture awaits an
-equipped run; HTTPS, real OpenSSH
-authentication/trust, and remote dcommit are not validated, and the required
-hosted compatibility workflow has not yet had its first successful run.
+local `svn://`, configured `svn+ssh`, mock, and plain HTTP reads. It remains a
+preview: strict DAV, HTTPS/OpenSSH, remote dcommit, and hosted CI await validation.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | relative/partial/full-URL layouts, globs, authors, filters, reversible ref sanitization | remaining encoding/platform edge semantics |
-| 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical metadata paths, legacy fallback, transactional publication/recovery | broader migration and remote ambiguity policy |
+| 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, named-remote identity resolution, transactional recovery | broader migration policy |
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, askpass, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
@@ -97,6 +94,8 @@ hosted compatibility workflow has not yet had its first successful run.
   `svn+ssh` dcommit remain rejected before write preparation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
+- Readonly/write commands and `fetch --parent` resolve named remotes by nearest
+  identity; path/rev_map ambiguity fails closed without masking a unique identity.
 - Partial and full-URL layout arguments match frozen mapping selection:
   branch/tag-only layouts do not invent trunk, stdlayout overrides retain other
   defaults, and full URLs become same-repository relative refspecs.
@@ -182,7 +181,8 @@ hosted compatibility workflow has not yet had its first successful run.
   A visible Submitted snapshot avoids sink calls, and a lost Complete tombstone
   safely retries rebase without sink access.
 - SVN subprocesses are non-interactive and apply persisted/CLI auth and config
-  options consistently.
+  options consistently. Dcommit uses secret-safe askpass for authenticated
+  svnserve write and post-fetch without persisting credentials.
 - Non-dry-run HTTP(S), `svn+ssh`, unsupported, or incompatible write profiles fail
   before journal discovery/lock or write preparation. Dry-run remains descriptive.
 - Mock write-back rejects `--commit-url` before journal, lock, or remote mutation
@@ -204,16 +204,13 @@ hosted compatibility workflow has not yet had its first successful run.
 
 Verified on 2026-07-30:
 
-- `cargo fmt --all -- --check`
-- `cargo test --workspace` (512 passed); `cargo test -p git-svn-rs-core --lib` (118/118)
-- `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (65/65)
-- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (51/51); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
+- `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
+- `cargo test --workspace` (518 passed); `cargo test -p git-svn-rs-core --lib` (118/118)
+- readonly commands 69/69; dcommit linear 52/52; dcommit restart 8/8
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn` (400 passed)
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (40/40; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
-- `cargo clippy --all-targets --all-features -- -D warnings`
-- `git diff --check`
 
 ## Remaining Work
 
@@ -278,6 +275,7 @@ Verified on 2026-07-30:
 - `78b31da`: full-URL layout root normalization and exact frozen golden coverage.
 - `87e1446`: mapped commit-URL unknown-outcome adoption without resubmission.
 - `22c71e9`: mapped stale-target preflight and second-workcopy no-write evidence.
+- `f97b1b7`, `fc34c11`: dcommit askpass and fail-closed named-remote resolution.
 
 ## Next Steps
 
