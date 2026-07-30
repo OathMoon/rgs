@@ -2,11 +2,10 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `87e1446 Allow mapped commit URL revision adoption`
+Committed HEAD at audit: `22c71e9 Reject stale mapped dcommit targets early`
 
-This is the concise handoff record. Product requirements live in
-`.plans/git-svn-rs-plan.md`; architecture and ordering live in
-`.plans/00-git-svn-rs-review-and-roadmap.md`.
+Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
+ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
 ## Status Vocabulary
 
@@ -21,11 +20,10 @@ produce `release-pass`.
 
 ## Current Overall State
 
-The repository now provides an initially complete core workflow for the covered
-`file://`, local authenticated `svn://`, configured external `svn+ssh` tunnel,
-and mock profiles, plus an implemented plain HTTP read profile whose strict
-Apache DAV fixture awaits its first equipped execution. It remains a preview
-rather than a general `git svn` replacement: HTTPS, real OpenSSH
+The repository provides an initially complete core workflow for covered `file://`,
+authenticated local `svn://`, configured `svn+ssh` tunnel, mock, and plain HTTP
+read profiles. It remains a preview: the strict Apache DAV fixture awaits an
+equipped run; HTTPS, real OpenSSH
 authentication/trust, and remote dcommit are not validated, and the required
 hosted compatibility workflow has not yet had its first successful run.
 
@@ -37,8 +35,8 @@ hosted compatibility workflow has not yet had its first successful run.
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, byte properties, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
-| 7 dcommit | `behavior-pass` for covered local profiles | typed plans, v4 intent-bound recovery, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
-| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 40/40 locally; Linux workflow defined | first hosted execution |
+| 7 dcommit | `behavior-pass` for covered local profiles | typed plans, v4 recovery, stale-target preflight, verified mapped commit URLs, local file/svn exact writes | remote write-back and broader recovery faults |
+| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; Linux workflow defined | first hosted execution |
 
 ## Validated Capabilities
 
@@ -171,6 +169,8 @@ hosted compatibility workflow has not yet had its first successful run.
 - Explicit commit URLs must resolve to one tracked mapping before write. The
   journal binds that ref/rev_map, verifies the imported footer/tree/OID, and a
   submitted-state restart re-verifies without creating another SVN revision.
+- New file/svn transactions bind the mapping ref and rev_map, rejecting a remotely
+  advanced target before journal/checkout; a second workcopy proves zero write.
 - Authenticated svnserve preflight failure is verified to leave neither an SVN
   revision nor a dcommit journal.
 - A post-submit password rotation resumes with the same username and new secret
@@ -190,7 +190,7 @@ hosted compatibility workflow has not yet had its first successful run.
 
 ### Golden and release evidence
 
-- The strict frozen Perl Git 2.54.0 suite passes 40/40 locally.
+- The strict frozen Perl Git 2.54.0 suite passes 41/41 locally.
 - Exact artifacts cover ref tips, reachable graph/OIDs, rev_maps, configs,
   HEAD/index/worktree, tree contents/modes/properties, readonly outputs, clone
   output, local file/svn writes, submitted recovery, and dirty no-write behavior.
@@ -205,9 +205,9 @@ hosted compatibility workflow has not yet had its first successful run.
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`
-- `cargo test --workspace`; `cargo test -p git-svn-rs-core --lib` (117/117)
+- `cargo test --workspace` (507 passed); `cargo test -p git-svn-rs-core --lib` (117/117)
 - `cargo test -p git-svn-rs --test readonly_commands -- --test-threads=1` (65/65)
-- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (49/49); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
+- `cargo test -p git-svn-rs --test dcommit_linear -- --test-threads=1` (50/50); `cargo test -p git-svn-rs-core --test dcommit_restart` (8/8)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs-core --features svn-libsvn`
 - `cargo test -p git-svn-rs --test clone_fetch_real_svn -- --nocapture --test-threads=1` (39/39; HTTP DAV skipped without Apache)
 - `GIT_SVN_RS_STRICT_LIBSVN=1 cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn -- --nocapture --test-threads=1` (39/39; HTTP DAV skipped without Apache)
@@ -277,15 +277,15 @@ Verified on 2026-07-30:
 - `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
 - `78b31da`: full-URL layout root normalization and exact frozen golden coverage.
 - `87e1446`: mapped commit-URL unknown-outcome adoption without resubmission.
+- `22c71e9`: mapped stale-target preflight and second-workcopy no-write evidence.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 7: add real SVN stale-head no-write preflight evidence.
-2. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
-3. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
-4. Phase 8: run hosted CI when credentials/external execution are available.
+1. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
+2. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
+3. Phase 8: run hosted CI when credentials/external execution are available.
 
 ## Handoff Notes
 
