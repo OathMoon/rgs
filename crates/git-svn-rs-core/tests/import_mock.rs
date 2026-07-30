@@ -506,6 +506,69 @@ fn bounded_multi_level_copy_backfills_each_auxiliary_parent() {
 }
 
 #[test]
+fn overlapping_copy_source_mappings_use_the_most_specific_parent() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let backend = MockSvnBackend::new("mock-uuid", overlapping_copy_source_revisions());
+    let mut config = SvnRemoteConfig::new("svn", "mock://repo", build_single_path(""));
+    config.fetch = vec![
+        RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: "projects".to_string(),
+            git_ref: "refs/remotes/broad".to_string(),
+        },
+        RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: "projects/trunk".to_string(),
+            git_ref: "refs/remotes/trunk".to_string(),
+        },
+        RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: "branches/topic".to_string(),
+            git_ref: "refs/remotes/topic".to_string(),
+        },
+    ];
+
+    import_mock_revisions(
+        &backend,
+        &git,
+        &config,
+        ImportOptions {
+            start_revision: 1,
+            end_revision: Some(2),
+        },
+    )
+    .unwrap();
+
+    assert_eq!(
+        git.run_for_test(["rev-parse", "refs/remotes/topic^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", "refs/remotes/trunk"])
+            .unwrap()
+            .trim()
+    );
+    assert_ne!(
+        git.run_for_test(["rev-parse", "refs/remotes/topic^"])
+            .unwrap()
+            .trim(),
+        git.run_for_test(["rev-parse", "refs/remotes/broad"])
+            .unwrap()
+            .trim()
+    );
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/topic:a.txt"])
+            .unwrap(),
+        "source\n"
+    );
+    assert!(
+        git.run_for_test(["show", "refs/remotes/topic:trunk/a.txt"])
+            .is_err()
+    );
+}
+
+#[test]
 fn unfinished_multi_mapping_batch_resumes_without_republishing_completed_mapping() {
     let dir = tempdir().unwrap();
     let git = GitCli::new(dir.path());
@@ -1173,6 +1236,45 @@ fn branch_to_branch_copy_revisions() -> Vec<RevisionEvent> {
                 path: "/branches/destination".to_string(),
                 action: ChangeAction::Add,
                 copy_from_path: Some("/branches/source".to_string()),
+                copy_from_rev: Some(1),
+                kind: NodeKind::Directory,
+                properties_modified: false,
+                content_modified: false,
+                properties: BTreeMap::new(),
+                content: None,
+            }],
+        },
+    ]
+}
+
+fn overlapping_copy_source_revisions() -> Vec<RevisionEvent> {
+    vec![
+        RevisionEvent {
+            revision: 1,
+            author: "alice".to_string(),
+            message: "create nested trunk".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/projects/trunk/a.txt".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"source\n".to_vec()),
+            }],
+        },
+        RevisionEvent {
+            revision: 2,
+            author: "alice".to_string(),
+            message: "copy nested trunk".to_string(),
+            timestamp: "2026-01-02T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/branches/topic".to_string(),
+                action: ChangeAction::Add,
+                copy_from_path: Some("/projects/trunk".to_string()),
                 copy_from_rev: Some(1),
                 kind: NodeKind::Directory,
                 properties_modified: false,

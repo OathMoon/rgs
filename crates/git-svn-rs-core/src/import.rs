@@ -777,11 +777,8 @@ fn copy_parent_source(
         .copy_from_rev
         .expect("copy candidates require a source revision");
 
-    let Some(source_mapping) = all_mappings.iter().find(|candidate| {
-        let candidate_path = candidate.svn_path.trim_matches('/');
-        copy_source_path == candidate_path
-            || copy_source_path.starts_with(&format!("{candidate_path}/"))
-    }) else {
+    let Some(source_mapping) = most_specific_mapping_for_path(all_mappings, copy_source_path)
+    else {
         return Ok(None);
     };
     let path = rev_map_path(git, &source_mapping.git_ref, uuid)?;
@@ -880,10 +877,7 @@ fn copy_from_parent_ref(
         let Some(source_revision) = copy_candidate.copy_from_rev else {
             continue;
         };
-        let Some(source_mapping) = all_mappings.iter().find(|candidate| {
-            let candidate_path = candidate.svn_path.trim_matches('/');
-            source_path == candidate_path || source_path.starts_with(&format!("{candidate_path}/"))
-        }) else {
+        let Some(source_mapping) = most_specific_mapping_for_path(all_mappings, source_path) else {
             continue;
         };
 
@@ -1251,13 +1245,8 @@ fn copy_dependencies(mappings: &[RefMapping], revisions: &[RevisionEvent]) -> Ve
             };
             let destination_path = changed_path.path.trim_matches('/');
             let source_path = source_path.trim_matches('/');
-            let destination = mappings
-                .iter()
-                .find(|mapping| mapping_contains_path(&mapping.svn_path, destination_path));
-            let source = mappings
-                .iter()
-                .filter(|mapping| mapping_contains_path(&mapping.svn_path, source_path))
-                .max_by_key(|mapping| mapping.svn_path.trim_matches('/').len());
+            let destination = most_specific_mapping_for_path(mappings, destination_path);
+            let source = most_specific_mapping_for_path(mappings, source_path);
             let (Some(destination), Some(source)) = (destination, source) else {
                 continue;
             };
@@ -1280,6 +1269,16 @@ fn copy_dependencies(mappings: &[RefMapping], revisions: &[RevisionEvent]) -> Ve
 fn mapping_contains_path(mapping_path: &str, path: &str) -> bool {
     let mapping_path = mapping_path.trim_matches('/');
     mapping_path.is_empty() || path == mapping_path || path.starts_with(&format!("{mapping_path}/"))
+}
+
+fn most_specific_mapping_for_path<'a>(
+    mappings: &'a [RefMapping],
+    path: &str,
+) -> Option<&'a RefMapping> {
+    mappings
+        .iter()
+        .filter(|mapping| mapping_contains_path(&mapping.svn_path, path))
+        .max_by_key(|mapping| mapping.svn_path.trim_matches('/').len())
 }
 
 fn select_and_order_mappings<'a>(
@@ -1788,8 +1787,8 @@ fn svn_git_timestamp(value: &str, localtime: bool) -> Result<GitTimestamp, Strin
 mod timestamp_tests {
     use super::{
         apply_placeholder_log, author_ident, commit_message, imports_initial_mapping_root,
-        max_imported_revision, rev_map_path, svn_git_timestamp, validate_mapping_ref_collisions,
-        validate_refname_namespace,
+        max_imported_revision, most_specific_mapping_for_path, rev_map_path, svn_git_timestamp,
+        validate_mapping_ref_collisions, validate_refname_namespace,
     };
     use crate::config::SvnRemoteConfig;
     use crate::git::GitCli;
@@ -1823,6 +1822,40 @@ mod timestamp_tests {
         );
         assert!(!path.exists());
         assert!(!path.parent().unwrap().exists());
+    }
+
+    #[test]
+    fn copy_source_mapping_prefers_the_most_specific_path_with_root_fallback() {
+        let mappings = vec![
+            RefMapping {
+                kind: MappingKind::Fetch,
+                svn_path: String::new(),
+                git_ref: "refs/remotes/root".to_string(),
+            },
+            RefMapping {
+                kind: MappingKind::Fetch,
+                svn_path: "projects".to_string(),
+                git_ref: "refs/remotes/projects".to_string(),
+            },
+            RefMapping {
+                kind: MappingKind::Fetch,
+                svn_path: "projects/trunk".to_string(),
+                git_ref: "refs/remotes/trunk".to_string(),
+            },
+        ];
+
+        assert_eq!(
+            most_specific_mapping_for_path(&mappings, "projects/trunk/src/lib.rs")
+                .unwrap()
+                .git_ref,
+            "refs/remotes/trunk"
+        );
+        assert_eq!(
+            most_specific_mapping_for_path(&mappings, "unmapped/file.txt")
+                .unwrap()
+                .git_ref,
+            "refs/remotes/root"
+        );
     }
 
     #[test]
