@@ -1,6 +1,5 @@
 use crate::cli::InfoArgs;
 use crate::commands::resolver::resolve_tracked_svn;
-use crate::path_url::add_path_to_url;
 use crate::rev_map::RevMapRecord;
 
 pub fn run(args: InfoArgs) -> Result<String, String> {
@@ -12,7 +11,7 @@ pub fn run_in_work_tree(
     args: InfoArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
-    let url = add_path_to_url(&tracked.config.url, &tracked.svn_path);
+    let url = tracked.config.metadata_url(&tracked.svn_path);
     if args.url {
         return Ok(format!("{url}\n"));
     }

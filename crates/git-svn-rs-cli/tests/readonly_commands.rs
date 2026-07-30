@@ -619,6 +619,48 @@ fn info_url_includes_tracked_fetch_path() {
 }
 
 #[test]
+fn info_uses_rewritten_metadata_url_for_url_and_full_output() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree_with_remote(work, "mock://repo", "trunk:refs/remotes/git-svn");
+    git(
+        work,
+        [
+            "config",
+            "svn-remote.svn.rewriteRoot",
+            "https://mirror.example/svn/repo",
+        ],
+    );
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "r1\n\ngit-svn-id: https://mirror.example/svn/repo/trunk@1 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "--url"])
+        .assert()
+        .success()
+        .stdout("https://mirror.example/svn/repo/trunk\n");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "URL: https://mirror.example/svn/repo/trunk\n",
+        ))
+        .stdout(predicate::str::contains("Repository Root: mock://repo\n"));
+}
+
+#[test]
 fn info_url_accepts_leading_plus_in_fetch_refspec() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
