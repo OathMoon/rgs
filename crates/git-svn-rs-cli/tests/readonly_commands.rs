@@ -552,6 +552,42 @@ fn info_prints_tracked_url_and_revision() {
 }
 
 #[test]
+fn info_reports_the_detached_heads_svn_revision_not_the_rev_map_maximum() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "first\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "two.txt",
+        "two\n",
+        "second\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+    git(work, ["checkout", "--detach", &rev1]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .arg("info")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Revision: 1"))
+        .stdout(predicate::str::contains("Revision: 2").not());
+
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+        rev2
+    );
+}
+
+#[test]
 fn info_url_prints_only_url() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
