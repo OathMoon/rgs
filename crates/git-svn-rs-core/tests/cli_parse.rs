@@ -2,6 +2,23 @@ use clap::Parser;
 use git_svn_rs_core::cli::{Cli, Command};
 
 #[test]
+fn reset_parses_positional_revision_and_named_fallback() {
+    let cli = Cli::parse_from(["git-svn-rs", "reset", "r7", "--revision", "r8"]);
+    let Command::Reset(args) = cli.command else {
+        panic!("expected reset");
+    };
+    assert_eq!(args.revision.as_deref(), Some("r7"));
+    assert_eq!(args.revision_option.as_deref(), Some("r8"));
+
+    let cli = Cli::parse_from(["git-svn-rs", "reset", "-r", "r8"]);
+    let Command::Reset(args) = cli.command else {
+        panic!("expected reset");
+    };
+    assert_eq!(args.revision, None);
+    assert_eq!(args.revision_option.as_deref(), Some("r8"));
+}
+
+#[test]
 fn parses_rebase_uppercase_merge_alias_and_strategy() {
     let cli = Cli::parse_from(["git-svn-rs", "rebase", "-v", "--all", "-M", "-s", "ort"]);
     let Command::Rebase(args) = cli.command else {

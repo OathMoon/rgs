@@ -4,14 +4,15 @@ use crate::commands::resolver::resolve_tracked_svn;
 use crate::dcommit::journal_registry::{RepositoryDcommitLock, discover_repository_journals};
 use crate::git::GitCli;
 
-pub fn run(args: ResetArgs) -> Result<(), String> {
+pub fn run(args: ResetArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
 }
 
 pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: ResetArgs,
-) -> Result<(), String> {
+) -> Result<String, String> {
+    let revision = requested_revision(&args)?;
     let work_tree = work_tree.into();
     let git = GitCli::new(&work_tree);
     let svn_metadata_root = git.work_tree().join(git.git_dir()?).join("svn");
@@ -26,7 +27,6 @@ pub fn run_in_work_tree(
     }
     reset_transaction::recover_pending(&git)?;
     let tracked = resolve_tracked_svn(work_tree)?;
-    let revision = parse_revision(&args.revision)?;
     let records = tracked.records()?;
     let record = if args.parent {
         records
@@ -48,7 +48,19 @@ pub fn run_in_work_tree(
         &tracked.rev_map_path,
         target_revision,
         &record.object_id_hex,
-    )
+    )?;
+    Ok(format!(
+        "r{target_revision} = {} ({})\n",
+        record.object_id_hex, tracked.refname
+    ))
+}
+
+fn requested_revision(args: &ResetArgs) -> Result<u32, String> {
+    args.revision
+        .as_deref()
+        .or(args.revision_option.as_deref())
+        .ok_or_else(|| "SVN revision required".to_string())
+        .and_then(parse_revision)
 }
 
 fn parse_revision(value: &str) -> Result<u32, String> {

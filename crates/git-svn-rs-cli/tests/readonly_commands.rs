@@ -1920,16 +1920,28 @@ fn reset_moves_tracked_ref_and_truncates_rev_map() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
-    let rev1 = commit_file(work, "one.txt", "one\n", "r1");
-    let rev2 = commit_file(work, "two.txt", "two\n", "r2");
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "two.txt",
+        "two\n",
+        "r2\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
     write_rev_map(work, &[&rev1, &rev2]);
     git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
 
     let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
     cmd.current_dir(work)
-        .args(["reset", "--revision", "1"])
+        .args(["reset", "1"])
         .assert()
-        .success();
+        .success()
+        .stdout(format!("r1 = {rev1} (refs/remotes/git-svn)\n"))
+        .stderr("");
 
     let tracked = git_output(work, ["rev-parse", "refs/remotes/git-svn"]);
     assert_eq!(tracked.trim(), rev1);
@@ -1944,11 +1956,104 @@ fn reset_moves_tracked_ref_and_truncates_rev_map() {
 }
 
 #[test]
+fn reset_positional_revision_takes_precedence_over_named_fallback() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "two.txt",
+        "two\n",
+        "r2\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["reset", "--revision", "2", "1"])
+        .assert()
+        .success()
+        .stdout(format!("r1 = {rev1} (refs/remotes/git-svn)\n"))
+        .stderr("");
+
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+        rev1
+    );
+}
+
+#[test]
+fn invalid_or_missing_reset_revision_does_not_recover_a_pending_journal() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
+    let rev_map_path = work
+        .join(".git/svn/git-svn/.rev_map.mock-uuid")
+        .canonicalize()
+        .unwrap();
+    let journal_path = work.join(".git/svn/reset-journal");
+    let journal = format!(
+        "git-svn-rs-reset-journal-v1\nrefname\t{}\nexpected_old_oid\t{rev1}\ntarget_oid\t{rev1}\ntarget_revision\t1\nrev_map_path\t{}\n",
+        hex_encode("refs/remotes/git-svn"),
+        hex_encode(&rev_map_path.to_string_lossy()),
+    );
+    std::fs::write(&journal_path, &journal).unwrap();
+    let rev_map_before = std::fs::read(&rev_map_path).unwrap();
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+
+    for args in [&["reset", "invalid"][..], &["reset"][..]] {
+        let expected = if args.len() == 1 {
+            "SVN revision required"
+        } else {
+            "invalid SVN revision: invalid"
+        };
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(work)
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(expected));
+        assert_eq!(std::fs::read(&journal_path).unwrap(), journal.as_bytes());
+        assert_eq!(std::fs::read(&rev_map_path).unwrap(), rev_map_before);
+        assert_eq!(
+            std::fs::read(work.join(".git/config")).unwrap(),
+            config_before
+        );
+        assert_eq!(
+            git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+            rev1
+        );
+    }
+}
+
+#[test]
 fn reset_missing_revision_fails_without_moving_tracked_ref() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
-    let rev1 = commit_file(work, "one.txt", "one\n", "r1");
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
     write_rev_map(work, &[&rev1]);
     git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
 
@@ -1970,8 +2075,18 @@ fn reset_parent_uses_the_nearest_earlier_nonzero_rev_map_record() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
     init_git_svn_work_tree(work);
-    let rev1 = commit_file(work, "one.txt", "one\n", "r1");
-    let rev4 = commit_file(work, "four.txt", "four\n", "r4");
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let rev4 = commit_file(
+        work,
+        "four.txt",
+        "four\n",
+        "r4\n\ngit-svn-id: mock://repo/trunk@4 mock-uuid",
+    );
     write_rev_map_for_short_ref(work, "git-svn", &[(1, &rev1), (4, &rev4)]);
     git(work, ["update-ref", "refs/remotes/git-svn", &rev4]);
 
@@ -1980,7 +2095,9 @@ fn reset_parent_uses_the_nearest_earlier_nonzero_rev_map_record() {
         .current_dir(work)
         .args(["reset", "--revision", "4", "--parent"])
         .assert()
-        .success();
+        .success()
+        .stdout(format!("r1 = {rev1} (refs/remotes/git-svn)\n"))
+        .stderr("");
 
     assert_eq!(
         git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
@@ -2428,4 +2545,12 @@ fn git_output<const N: usize>(work: &std::path::Path, args: [&str; N]) -> String
         .unwrap();
     assert!(output.status.success());
     String::from_utf8_lossy(&output.stdout).to_string()
+}
+
+fn hex_encode(value: &str) -> String {
+    value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }

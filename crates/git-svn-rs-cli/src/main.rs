@@ -50,7 +50,13 @@ fn main() -> Result<()> {
             Ok(())
         }
         Command::Gc(args) => commands::gc::run(args).map_err(anyhow::Error::msg),
-        Command::Reset(args) => commands::reset::run(args).map_err(anyhow::Error::msg),
+        Command::Reset(args) => {
+            print!(
+                "{}",
+                commands::reset::run(args).map_err(anyhow::Error::msg)?
+            );
+            Ok(())
+        }
         Command::Diagnose(_) => {
             println!("git-svn-rs diagnostics");
             println!("git-svn-rs version: {}", diagnostics::package_version());

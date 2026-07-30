@@ -2293,7 +2293,8 @@ fn supported_reset(work_tree: &Path, tool: GoldenTool, revision: u32) -> Result<
             commands::reset::run_in_work_tree(
                 &reset_tree,
                 ResetArgs {
-                    revision: revision.to_string(),
+                    revision: Some(revision.to_string()),
+                    revision_option: None,
                     parent: false,
                 },
             )?;

@@ -263,8 +263,9 @@ pub struct GcArgs {}
 
 #[derive(Debug, Args)]
 pub struct ResetArgs {
+    pub revision: Option<String>,
     #[arg(short = 'r', long = "revision")]
-    pub revision: String,
+    pub revision_option: Option<String>,
     #[arg(short = 'p', long = "parent")]
     pub parent: bool,
 }
