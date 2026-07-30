@@ -27,6 +27,14 @@ fn run_in_work_tree_mode(
     if tracked.config.no_metadata {
         return Err("fetch is unavailable after a --no-metadata one-shot import".to_string());
     }
+    crate::tracking_state::validate_existing_tracking_state(
+        &tracked.git,
+        &tracked.config,
+        &tracked.refname,
+        &tracked.svn_path,
+        &tracked.uuid,
+        &tracked.rev_map_path,
+    )?;
     if args.dry_run {
         let root = tracked
             .config

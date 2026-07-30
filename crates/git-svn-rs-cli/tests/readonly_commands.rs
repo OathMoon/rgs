@@ -2247,6 +2247,70 @@ fn rebase_local_allows_untracked_files_without_mutating_them() {
 }
 
 #[test]
+fn rebase_local_rejects_tracking_ref_drift_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let tracked = commit_file(
+        work,
+        "tracked.txt",
+        "tracked\n",
+        "tracked\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    write_rev_map(work, &[&tracked]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &tracked]);
+    let local = commit_file(work, "local.txt", "local\n", "local");
+    let tree = git_output(work, ["rev-parse", "refs/remotes/git-svn^{tree}"]);
+    let foreign = git_output(
+        work,
+        ["commit-tree", tree.trim(), "-m", "foreign tracking tip"],
+    );
+    let foreign = foreign.trim();
+    git(work, ["update-ref", "refs/remotes/git-svn", foreign]);
+
+    let rev_map_path = work.join(".git/svn/git-svn/.rev_map.mock-uuid");
+    let rev_map_before = std::fs::read(&rev_map_path).unwrap();
+    let index_before = std::fs::read(work.join(".git/index")).unwrap();
+    let status_before = git_output(work, ["status", "--porcelain=v1", "--untracked-files=all"]);
+    let tracked_contents_before = std::fs::read(work.join("tracked.txt")).unwrap();
+    let local_contents_before = std::fs::read(work.join("local.txt")).unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["rebase", "--local"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("corrupt SVN tracking state")
+                .and(predicate::str::contains("tracking ref points to")),
+        );
+
+    assert_eq!(git_output(work, ["rev-parse", "HEAD"]).trim(), local);
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+        foreign
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        std::fs::read(work.join(".git/index")).unwrap(),
+        index_before
+    );
+    assert_eq!(
+        git_output(work, ["status", "--porcelain=v1", "--untracked-files=all"]),
+        status_before
+    );
+    assert_eq!(
+        std::fs::read(work.join("tracked.txt")).unwrap(),
+        tracked_contents_before
+    );
+    assert_eq!(
+        std::fs::read(work.join("local.txt")).unwrap(),
+        local_contents_before
+    );
+}
+
+#[test]
 fn rebase_local_skips_remote_fetch() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");
