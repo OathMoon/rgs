@@ -340,6 +340,65 @@ fn dcommit_fails_closed_before_mock_write_back_for_unfinished_journal() {
 }
 
 #[test]
+fn dcommit_dry_run_refuses_active_journal_without_recovery_or_sink_calls() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    make_commit(&work, "local.txt", "local\n", "local change");
+    let head_before = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let refs_before = git_stdout(
+        &work,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    );
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    write_mock_dcommit_journal(
+        &work,
+        &tracked_before,
+        &head_before,
+        BatchState::Submitting,
+        EntryState::Ready {
+            expected_base_revision: 2,
+            expected_tracking_oid: tracked_before.clone(),
+        },
+    );
+    let journal_directory = dcommit_journal_path(&work, "refs/remotes/git-svn");
+    let journal_before = directory_file_snapshot(&journal_directory);
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+    let metadata_before = directory_file_snapshot(&work.join(".git/svn"));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unfinished dcommit journal found"))
+        .stderr(predicate::str::contains(
+            "dry-run is read-only and will not recover it",
+        ));
+
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        git_stdout(
+            &work,
+            &["for-each-ref", "--format=%(refname) %(objectname)"]
+        ),
+        refs_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(directory_file_snapshot(&journal_directory), journal_before);
+    assert_eq!(
+        directory_file_snapshot(&work.join(".git/svn")),
+        metadata_before,
+        "dry-run must not acquire a lock, recover the journal, or invoke the mock sink"
+    );
+}
+
+#[test]
 fn dcommit_rejects_local_commit_recorded_by_completed_ledger() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
@@ -357,6 +416,16 @@ fn dcommit_rejects_local_commit_recorded_by_completed_ledger() {
             imported_oid: head.clone(),
         },
     );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "local commits overlap completed dcommit ledger",
+        ));
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()

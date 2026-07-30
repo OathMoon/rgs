@@ -9,7 +9,7 @@ use crate::dcommit::journal::{
 };
 use crate::dcommit::journal_persistence::JournalStorePersistence;
 use crate::dcommit::journal_registry::{
-    LocatedJournal, RepositoryDcommitLock, discover_repository_journals,
+    JournalDiscovery, LocatedJournal, RepositoryDcommitLock, discover_repository_journals,
 };
 use crate::dcommit::tree_projection::{apply_plan_to_tree, canonicalize_tree_keywords, tree_map};
 use crate::dcommit::{
@@ -99,13 +99,13 @@ pub fn run_in_work_tree(
     } else {
         Vec::new()
     };
+    let svn_metadata_root = tracked
+        .git
+        .work_tree()
+        .join(tracked.git.git_dir()?)
+        .join("svn");
 
     if !args.dry_run {
-        let svn_metadata_root = tracked
-            .git
-            .work_tree()
-            .join(tracked.git.git_dir()?)
-            .join("svn");
         let _repository_lock = RepositoryDcommitLock::acquire(&svn_metadata_root)
             .map_err(|error| error.to_string())?;
         let discovery =
@@ -134,20 +134,7 @@ pub fn run_in_work_tree(
                 "dcommit requires a clean index and working tree before SVN write-back".to_string(),
             );
         }
-        if let Some(discovery) = &discovery
-            && let Some(completed) = discovery.completed.iter().find(|located| {
-                located.journal.entries.iter().any(|entry| {
-                    commits
-                        .iter()
-                        .any(|commit| commit.id.as_str() == entry.git_oid)
-                })
-            })
-        {
-            return Err(format!(
-                "local commits overlap completed dcommit ledger at {}; rebase or reset before dcommit",
-                completed.directory.display()
-            ));
-        }
+        reject_completed_ledger_overlap(discovery.as_ref(), &commits)?;
         if target_url.starts_with("mock://") && tracked.config.url.starts_with("mock://") {
             if args.adopt_revision.is_some() {
                 return Err(
@@ -270,7 +257,37 @@ pub fn run_in_work_tree(
         }
     }
 
+    let discovery =
+        discover_repository_journals(&svn_metadata_root).map_err(|error| error.to_string())?;
+    if let Some(active) = discovery.as_ref().and_then(|value| value.active.as_ref()) {
+        return Err(format!(
+            "unfinished dcommit journal found at {}; dcommit --dry-run is read-only and will not recover it",
+            active.directory.display()
+        ));
+    }
+    reject_completed_ledger_overlap(discovery.as_ref(), &commits)?;
     dcommit_dry_run(&tracked, &args, &commits)
+}
+
+fn reject_completed_ledger_overlap(
+    discovery: Option<&JournalDiscovery>,
+    commits: &[GitCommitSummary],
+) -> Result<(), String> {
+    if let Some(completed) = discovery.and_then(|discovery| {
+        discovery.completed.iter().find(|located| {
+            located.journal.entries.iter().any(|entry| {
+                commits
+                    .iter()
+                    .any(|commit| commit.id.as_str() == entry.git_oid)
+            })
+        })
+    }) {
+        return Err(format!(
+            "local commits overlap completed dcommit ledger at {}; rebase or reset before dcommit",
+            completed.directory.display()
+        ));
+    }
+    Ok(())
 }
 
 struct DcommitPlanningContext<'a> {
