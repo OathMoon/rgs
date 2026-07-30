@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `5e0ea43 Scope tracking validation to safety boundaries`
+Committed HEAD at audit: `f69dcdd Validate tracking state before reset`
 
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
@@ -153,9 +153,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   that rebasing onto the selected tracking ref retains one merge commit.
 - Rebase dry-run reports the selected remote branch and full SVN URL exactly like
   frozen Perl; strict golden comparison now retains both identity lines.
-- Rebase permits untracked-only worktrees while dcommit retains strict cleanliness.
-  Info derives the nearest first-parent mapped revision from HEAD history rather
-  than reporting a newer unrelated rev_map maximum.
+- Rebase permits untracked-only worktrees while dcommit retains strict cleanliness,
+  and validates tracking identity before dry-run, fetch, cleanliness checks, or
+  mutation. Info derives HEAD's mapped revision and reports rewriteRoot metadata URLs.
 - Rebase command-local verbosity and `--fetch-all/--all` match the frozen order.
   Fetch-all is confined to the initially resolved svn-remote's mappings, ignores
   unrelated remotes, and retains the original upstream identity after fetch.
@@ -168,7 +168,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   wins), validates it before recovery, and freezes exact/parent stdout. `--parent`
   selects the nearest earlier nonzero record, including sparse histories.
 - Reset uses expected-old CAS plus a durable transaction; resolver-backed commands
-  fail closed while reset/import recovery is pending.
+  fail closed while recovery is pending, and reset validates tracking before execution.
+- GC and migration walkers skip root and nested symlinks, preventing metadata
+  inspection, deletion, or compression from escaping `.git/svn`.
 
 ### Dcommit
 
@@ -216,7 +218,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   keep contiguous revisions.
 - Dry-run uses the real typed planner, rejects gitlinks, applies completed-ledger
   overlap checks, and refuses active/pending recovery without lock, journal,
-  checkout, fetch, rebase, reset, sink calls, or metadata mutation.
+  checkout, fetch, rebase, reset, sink calls, or metadata mutation. Real SVN
+  targets also receive read-only remote UUID and base-revision validation.
 
 ### Golden and release evidence
 
@@ -235,9 +238,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 Verified on 2026-07-30:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 132/132; readonly 75/75
-- dcommit linear 64/64; clone/fetch smoke 19/19; real SVN default 42/42
-- linked-feature core unit 164/164 and linked backend integration 33/33
+- `cargo test --workspace`; core lib 133/133; readonly follow-up 78/78
+- dcommit linear 66/66; clone/fetch smoke 19/19; real SVN default 42/42
+- linked-feature core unit 165/165 and linked backend integration 33/33
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -275,13 +278,14 @@ Verified on 2026-07-30:
 - `c399274`, `debfc31`: stable authors-file paths and Git-compatible booleans.
 - `e5eb148`, `5e0ea43`: semantic tracking validation at command safety boundaries.
 - `4143f8f`, `7b3f335`: cross-remote ref preflight and reset compatibility.
+- `2bfac94`, `5265ad9`, `62aa49c`, `4799765`, `f69dcdd`: latest safety/readonly batch.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 7: finish read-only remote base/UUID validation for real dcommit dry-run.
-2. Implement the next highest-value local gap from the Phase 4-6 audits.
+1. Phase 6: make GC compression replacement crash-safe and atomic.
+2. Expand the next frozen-compatible `info [path]` subset.
 3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
 
 ## Handoff Notes
