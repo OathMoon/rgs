@@ -80,6 +80,36 @@ fn dcommit_mock_write_back_registers_linear_commit() {
 }
 
 #[test]
+fn dcommit_mock_skips_an_empty_commit_without_advancing_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    make_empty_commit(&work, "empty mock commit");
+    let local_head = git_stdout(&work, &["rev-parse", "HEAD"]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes to dcommit."));
+
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), local_head);
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/git-svn/dcommit-journal")
+            .exists()
+    );
+}
+
+#[test]
 fn dcommit_mock_rejects_commit_url_before_journal_or_write() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
@@ -281,6 +311,168 @@ fn dcommit_writes_linear_commit_to_file_svn_when_tools_exist() {
     let log = String::from_utf8_lossy(&output.stdout);
     assert!(log.contains("change answer"));
     assert!(log.contains("full dcommit message body"));
+}
+
+#[test]
+fn dcommit_skips_an_all_noop_queue_without_creating_a_journal_or_revision() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = clone_standard_svn_repo(temp.path(), &fixture);
+    let tracked_ref = "refs/remotes/origin/trunk";
+    let tracked_before = git_stdout(&work, &["rev-parse", tracked_ref]);
+    let (rev_map_path, rev_map_before) =
+        tracking_rev_map_snapshot(&work, "refs/remotes/origin/trunk");
+    let config_before = git_stdout(&work, &["config", "--local", "--list"]);
+    let svn_revision_before = svn_revision(&fixture.url());
+    make_empty_commit(&work, "empty local commit");
+    let local_head = git_stdout(&work, &["rev-parse", "HEAD"]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes to dcommit."))
+        .stdout(predicate::str::contains("Skipped rebase (--no-rebase)."));
+
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), local_head);
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", tracked_ref]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(&rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        git_stdout(&work, &["config", "--local", "--list"]),
+        config_before
+    );
+    assert_eq!(svn_revision(&fixture.url()), svn_revision_before);
+    assert!(!dcommit_journal_path(&work, tracked_ref).exists());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("dcommit")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes to dcommit."))
+        .stdout(predicate::str::contains("Reset to tracked SVN ref."));
+
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), tracked_before);
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", tracked_ref]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        git_stdout(&work, &["config", "--local", "--list"]),
+        config_before
+    );
+    assert_eq!(svn_revision(&fixture.url()), svn_revision_before);
+    assert!(!dcommit_journal_path(&work, tracked_ref).exists());
+}
+
+#[test]
+fn dcommit_skips_a_middle_noop_and_keeps_effective_revisions_contiguous() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = clone_standard_svn_repo(temp.path(), &fixture);
+    let tracked_ref = "refs/remotes/origin/trunk";
+    let svn_revision_before = svn_revision(&fixture.url());
+    make_commit(&work, "effective-a.txt", "a\n", "effective A");
+    let first_oid = git_stdout(&work, &["rev-parse", "HEAD"]);
+    make_empty_commit(&work, "empty middle commit");
+    let empty_oid = git_stdout(&work, &["rev-parse", "HEAD"]);
+    make_commit(&work, "effective-b.txt", "b\n", "effective B");
+    let last_oid = git_stdout(&work, &["rev-parse", "HEAD"]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 2 local Git commit(s)"))
+        .stdout(predicate::str::contains("effective A"))
+        .stdout(predicate::str::contains("effective B"))
+        .stdout(predicate::str::contains("empty middle commit").not());
+
+    assert_eq!(svn_revision(&fixture.url()), svn_revision_before + 2);
+    let store = JournalStore::new(dcommit_journal_path(&work, tracked_ref));
+    let journal = store.load().unwrap().expect("completed dcommit journal");
+    assert_eq!(journal.entries.len(), 2);
+    assert_eq!(journal.entries[0].git_oid, first_oid);
+    assert_eq!(journal.entries[1].git_oid, last_oid);
+    assert!(
+        journal
+            .entries
+            .iter()
+            .all(|entry| entry.git_oid != empty_oid)
+    );
+    let log = svn_stdout(&["log", "-l", "2", &fixture.url()]);
+    assert!(log.contains("effective A"));
+    assert!(log.contains("effective B"));
+    assert!(!log.contains("empty middle commit"));
+}
+
+#[test]
+fn dcommit_does_not_skip_an_empty_commit_with_explicit_mergeinfo() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = clone_standard_svn_repo(temp.path(), &fixture);
+    let svn_revision_before = svn_revision(&fixture.url());
+    make_empty_commit(&work, "mergeinfo-only commit");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--mergeinfo",
+            "/branches/main:1-2",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 1 local Git commit(s)"));
+
+    assert_eq!(svn_revision(&fixture.url()), svn_revision_before + 1);
+    assert_eq!(
+        svn_stdout(&[
+            "propget",
+            "--strict",
+            "svn:mergeinfo",
+            &format!("{}/trunk", fixture.url())
+        ]),
+        "/branches/main:1-2"
+    );
 }
 
 #[test]
@@ -3948,6 +4140,24 @@ fn clone_mock_repo(parent: &std::path::Path) -> std::path::PathBuf {
     work
 }
 
+fn clone_standard_svn_repo(
+    parent: &std::path::Path,
+    fixture: &StandardSvnFixture,
+) -> std::path::PathBuf {
+    let work = parent.join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent)
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    work
+}
+
 fn make_commit(work: &std::path::Path, path: &str, content: &str, message: &str) {
     std::fs::write(work.join(path), content).unwrap();
     run_git(work, &["add", path]);
@@ -3963,6 +4173,54 @@ fn make_commit(work: &std::path::Path, path: &str, content: &str, message: &str)
             message,
         ],
     );
+}
+
+fn make_empty_commit(work: &std::path::Path, message: &str) {
+    run_git(
+        work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "--allow-empty",
+            "-m",
+            message,
+        ],
+    );
+}
+
+fn tracking_rev_map_snapshot(
+    work: &std::path::Path,
+    tracking_ref: &str,
+) -> (std::path::PathBuf, Vec<u8>) {
+    let metadata = work.join(".git/svn").join(tracking_ref);
+    let rev_map_path = std::fs::read_dir(metadata)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .starts_with(".rev_map.")
+        })
+        .expect("mapping metadata must contain a rev_map");
+    let bytes = std::fs::read(&rev_map_path).unwrap();
+    (rev_map_path, bytes)
+}
+
+fn dcommit_journal_path(work: &std::path::Path, tracking_ref: &str) -> std::path::PathBuf {
+    work.join(".git/svn")
+        .join(tracking_ref)
+        .join("dcommit-journal")
+}
+
+fn svn_revision(url: &str) -> u32 {
+    svn_stdout(&["info", "--show-item", "revision", url])
+        .trim()
+        .parse()
+        .unwrap()
 }
 
 fn mock_rev_map_snapshot(work: &std::path::Path) -> (std::path::PathBuf, Vec<u8>) {

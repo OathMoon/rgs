@@ -459,11 +459,24 @@ fn dcommit_file_svn(
         Some(located) => located.journal.original_base_oid.clone(),
         None => new_base.expect("new dcommit base must be validated").1,
     };
+    let plans = build_file_svn_plans(
+        &ctx,
+        &target_url,
+        original_base_revision,
+        &plan_chain,
+        active.is_none(),
+    )?;
+    if plans.is_empty() && active.is_none() {
+        return finish_noop_dcommit(ctx.git, ctx.mapping_ref, ctx.no_rebase);
+    }
     let original_head = match &active {
         Some(located) => located.journal.original_head.clone(),
-        None => ctx.git.rev_parse("HEAD")?.trim().to_string(),
+        None => plans
+            .last()
+            .expect("new dcommit plan queue must be nonempty")
+            .git_commit
+            .clone(),
     };
-    let plans = build_file_svn_plans(&ctx, &target_url, original_base_revision, &plan_chain)?;
     let mut prepared = build_prepared_dcommit(PreparedDcommitRequest {
         target: target.clone(),
         original_base_revision,
@@ -581,41 +594,58 @@ fn build_file_svn_plans(
     target_url: &str,
     original_base_revision: u64,
     chain: &[(String, String)],
+    skip_noop: bool,
 ) -> Result<Vec<DcommitPlan>, String> {
     let planner = DcommitPlanBuilder::new();
-    chain
-        .iter()
-        .enumerate()
-        .map(|(index, (base_oid, git_commit))| {
-            let base_revision = u32::try_from(original_base_revision + index as u64)
-                .map_err(|_| "dcommit base revision exceeds u32".to_string())?;
-            let mut plan = planner.build(
-                DcommitPlanRequest {
-                    target: DcommitTarget {
-                        url: target_url.to_string(),
-                        repository_root: ctx.svn_root_url.to_string(),
-                        repository_uuid: ctx.uuid.to_string(),
-                        git_ref: ctx.mapping_ref.to_string(),
-                    },
-                    base_revision,
-                    git_commit: git_commit.clone(),
-                    message: dcommit_message(&ctx.git.commit_message(git_commit)?),
-                    author: Some(ctx.git.commit_author(git_commit)?),
-                    mergeinfo: ctx.mergeinfo.map(str::to_owned),
-                    changes: ctx.git.diff_raw(base_oid, git_commit)?,
+    let mut plans = Vec::new();
+    for (base_oid, git_commit) in chain {
+        let offset =
+            u64::try_from(plans.len()).map_err(|_| "dcommit plan count exceeds u64".to_string())?;
+        let revision = original_base_revision
+            .checked_add(offset)
+            .ok_or_else(|| "dcommit base revision exceeds u64".to_string())?;
+        let base_revision =
+            u32::try_from(revision).map_err(|_| "dcommit base revision exceeds u32".to_string())?;
+        let mut plan = planner.build(
+            DcommitPlanRequest {
+                target: DcommitTarget {
+                    url: target_url.to_string(),
+                    repository_root: ctx.svn_root_url.to_string(),
+                    repository_uuid: ctx.uuid.to_string(),
+                    git_ref: ctx.mapping_ref.to_string(),
                 },
-                |path| ctx.git.show_file(git_commit, path),
-            )?;
-            let base_attributes = git_attributes(ctx.git, base_oid)?;
-            let current_attributes = git_attributes(ctx.git, git_commit)?;
-            merge_attribute_properties(
-                &mut plan,
-                base_attributes.as_deref(),
-                current_attributes.as_deref(),
-            );
-            Ok(plan)
-        })
-        .collect()
+                base_revision,
+                git_commit: git_commit.clone(),
+                message: dcommit_message(&ctx.git.commit_message(git_commit)?),
+                author: Some(ctx.git.commit_author(git_commit)?),
+                mergeinfo: ctx.mergeinfo.map(str::to_owned),
+                changes: ctx.git.diff_raw(base_oid, git_commit)?,
+            },
+            |path| ctx.git.show_file(git_commit, path),
+        )?;
+        let base_attributes = git_attributes(ctx.git, base_oid)?;
+        let current_attributes = git_attributes(ctx.git, git_commit)?;
+        merge_attribute_properties(
+            &mut plan,
+            base_attributes.as_deref(),
+            current_attributes.as_deref(),
+        );
+        if !skip_noop || plan.has_svn_changes() {
+            plans.push(plan);
+        }
+    }
+    Ok(plans)
+}
+
+fn finish_noop_dcommit(git: &GitCli, mapping_ref: &str, no_rebase: bool) -> Result<String, String> {
+    let mut out = "No changes to dcommit.\n".to_string();
+    if no_rebase {
+        out.push_str("Skipped rebase (--no-rebase).\n");
+    } else {
+        git.reset_mixed(mapping_ref)?;
+        out.push_str("Reset to tracked SVN ref.\n");
+    }
+    Ok(out)
 }
 
 struct WorkingCopyCommitSink<'a> {
@@ -1072,13 +1102,15 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
 
     let planner = DcommitPlanBuilder::new();
     let svn_editor = SvnCommitEditor::new(PropertyMapper);
-    let mut backend = MockSvnBackend::new(ctx.uuid, Vec::new());
-    let mut rev_map = ctx.rev_map;
-    let mut base_revision = ctx.base_revision;
-    let mut out = String::new();
     let mut diff_base = ctx.refname.to_string();
-
+    let mut queue = Vec::new();
     for commit in &commits {
+        let offset =
+            u32::try_from(queue.len()).map_err(|_| "dcommit plan count exceeds u32".to_string())?;
+        let base_revision = ctx
+            .base_revision
+            .checked_add(offset)
+            .ok_or_else(|| "dcommit base revision exceeds u32".to_string())?;
         let plan = planner.build(
             DcommitPlanRequest {
                 target: DcommitTarget {
@@ -1096,6 +1128,19 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
             },
             |path| ctx.git.show_file(&commit.id, path),
         )?;
+        diff_base.clone_from(&commit.id);
+        if plan.has_svn_changes() {
+            queue.push((commit, plan));
+        }
+    }
+    if queue.is_empty() {
+        return finish_noop_dcommit(ctx.git, ctx.refname, ctx.no_rebase);
+    }
+
+    let mut backend = MockSvnBackend::new(ctx.uuid, Vec::new());
+    let mut rev_map = ctx.rev_map;
+    let mut out = String::new();
+    for (commit, plan) in &queue {
         let record = CommitRecord {
             author: plan.author.clone().unwrap_or_default(),
             message: plan.message.clone(),
@@ -1103,12 +1148,10 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
         };
         let revision = {
             let mut editor = backend.commit_editor(record);
-            svn_editor.apply_plan(&mut editor, &plan)?
+            svn_editor.apply_plan(&mut editor, plan)?
         };
         rev_map.append(revision, &commit.id)?;
         ctx.git.update_ref(ctx.refname, &commit.id)?;
-        base_revision = revision;
-        diff_base = commit.id.clone();
         out.push_str(&format!(
             "Committed {} {} as r{revision}\n",
             commit.short_id, commit.subject
@@ -1117,7 +1160,7 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
 
     out.insert_str(
         0,
-        &format!("Committed {} local Git commit(s)\n", commits.len()),
+        &format!("Committed {} local Git commit(s)\n", queue.len()),
     );
 
     if ctx.no_rebase {

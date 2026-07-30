@@ -11,6 +11,12 @@ pub struct DcommitPlan {
     pub changes: Vec<PlannedChange>,
 }
 
+impl DcommitPlan {
+    pub fn has_svn_changes(&self) -> bool {
+        !self.root_properties.is_empty() || !self.changes.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DcommitTarget {
     pub url: String,

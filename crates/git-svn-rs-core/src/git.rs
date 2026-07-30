@@ -491,6 +491,10 @@ impl GitCli {
         ))
     }
 
+    pub fn reset_mixed(&self, target: &str) -> Result<String, String> {
+        self.run(["reset", "--mixed", target])
+    }
+
     pub fn rebase_with_inherited_stderr(
         &self,
         upstream: &str,
