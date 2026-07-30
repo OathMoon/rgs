@@ -2,7 +2,7 @@
 
 Last audited: 2026-07-30
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `78b31da Support full URL layout mappings`
+Committed HEAD at audit: `87e1446 Allow mapped commit URL revision adoption`
 
 This is the concise handoff record. Product requirements live in
 `.plans/git-svn-rs-plan.md`; architecture and ordering live in
@@ -160,8 +160,9 @@ hosted compatibility workflow has not yet had its first successful run.
   recovery, fetch verification, and final rebase/no-rebase state.
 - Dirty worktrees, merge ranges, wrong repository UUIDs, ambiguous submissions,
   multiple active journals, and completed-ledger overlap fail closed.
-- `--adopt-revision` resumes an unknown-outcome local file/svn submission only
-  after exact imported-tree verification.
+- `--adopt-revision` resumes unknown-outcome local file/svn submissions,
+  including mapped commit URLs, only after exact target/ref/rev_map/footer/tree
+  verification; omitting the bound commit URL during recovery fails closed.
 - Recovery fingerprints use a versioned v4 encoding and bind explicit commit-URL,
   username, config-dir, and auth-cache intent while excluding passwords. Active
   v2/v3 journals migrate on a compatible retry. Effective post-fetch author,
@@ -274,14 +275,14 @@ Verified on 2026-07-30:
 - `77e0c0c`: frozen placeholder-without-preserve no-op semantics.
 - `b7d84b7`: inherited successful Git rebase stderr/progress streaming.
 - `9ad34d8`: explicit TTY log pager execution with Linux PTY coverage.
-- `49c12da`: frozen partial custom/stdlayout mapping selection.
 - `78b31da`: full-URL layout root normalization and exact frozen golden coverage.
+- `87e1446`: mapped commit-URL unknown-outcome adoption without resubmission.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 7: cover local `--adopt-revision` with a mapped `--commit-url`.
+1. Phase 7: add real SVN stale-head no-write preflight evidence.
 2. Phase 4: execute strict HTTP DAV, then add HTTPS and real OpenSSH fixtures.
 3. Phase 7: expand remote write profiles only after repeatable protocol fixtures.
 4. Phase 8: run hosted CI when credentials/external execution are available.
