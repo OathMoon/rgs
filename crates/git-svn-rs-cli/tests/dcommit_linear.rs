@@ -601,6 +601,141 @@ fn dcommit_adopts_verified_in_flight_file_svn_revision_without_resubmitting() {
 
 #[cfg(unix)]
 #[test]
+fn dcommit_repeats_fetch_only_after_fetched_verified_save_failure() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    use std::os::unix::fs::PermissionsExt;
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let authors_prog = recovery_authors_prog(temp.path(), false);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--authors-prog",
+            authors_prog.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    make_commit(
+        &work,
+        "post-fetch-save.txt",
+        "verified before save\n",
+        "recover fetched verified save",
+    );
+    let local_head = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let journal_directory = work.join(".git/svn/refs/remotes/origin/trunk/dcommit-journal");
+    assert!(!journal_directory.to_string_lossy().contains('"'));
+    std::fs::write(
+        &authors_prog,
+        format!(
+            "#!/bin/sh\nchmod 0555 \"{}\"\necho 'Recovery Author <recovery@example.com>'\n",
+            journal_directory.display()
+        ),
+    )
+    .unwrap();
+    let before = fixture.latest_revision();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "could not persist dcommit journal",
+        ));
+    let submitted = fixture.latest_revision();
+    assert_eq!(submitted, before + 1);
+
+    let mut journal_permissions = std::fs::metadata(&journal_directory).unwrap().permissions();
+    journal_permissions.set_mode(0o755);
+    std::fs::set_permissions(&journal_directory, journal_permissions).unwrap();
+    let store = JournalStore::new(&journal_directory);
+    let interrupted = store.load().unwrap().expect("submitted dcommit journal");
+    assert!(matches!(
+        interrupted.entries[0].state,
+        EntryState::Submitted { svn_revision } if svn_revision == u64::from(submitted)
+    ));
+    let tracking_oid = git_stdout(&work, &["rev-parse", "refs/remotes/origin/trunk"]);
+    assert_ne!(tracking_oid, interrupted.original_base_oid);
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), local_head);
+    let rev_map_path = std::path::PathBuf::from(&interrupted.target.rev_map_path);
+    let rev_map_path = if rev_map_path.is_absolute() {
+        rev_map_path
+    } else {
+        work.join(rev_map_path)
+    };
+    assert_eq!(
+        RevMap::open_existing(rev_map_path, ObjectFormat::Sha1)
+            .unwrap()
+            .get(submitted)
+            .unwrap()
+            .as_deref(),
+        Some(tracking_oid.as_str())
+    );
+    assert_eq!(
+        git_stdout(
+            &work,
+            &["show", "refs/remotes/origin/trunk:post-fetch-save.txt"]
+        ),
+        "verified before save"
+    );
+    let footer = git_stdout(
+        &work,
+        &["show", "-s", "--format=%B", "refs/remotes/origin/trunk"],
+    );
+    assert!(footer.contains(&format!("git-svn-id: {}/trunk@{submitted} ", fixture.url())));
+
+    recovery_authors_prog(temp.path(), false);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("recover fetched verified save"));
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "resume must repeat fetch/verification without resubmitting"
+    );
+    let completed = store.load().unwrap().expect("completed dcommit journal");
+    assert_eq!(completed.batch_state, BatchState::Complete);
+    assert!(matches!(
+        &completed.entries[0].state,
+        EntryState::FetchedVerified {
+            svn_revision,
+            imported_oid,
+        } if *svn_revision == u64::from(submitted) && imported_oid == &tracking_oid
+    ));
+    let log = svn_stdout(&["log", "--xml", &fixture.url()]);
+    assert_eq!(
+        log.matches("<msg>recover fetched verified save</msg>")
+            .count(),
+        1
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn dcommit_adopts_revision_after_submitted_journal_save_failure() {
     match require_svn_tools() {
         Ok(()) => {}
