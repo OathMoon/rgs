@@ -227,6 +227,44 @@ fn fetch_after_clone_is_a_noop_when_mock_rev_map_is_current() {
 }
 
 #[test]
+fn fetch_parent_uses_the_resolved_named_remote() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    git.run_for_test(["init"]).unwrap();
+    git.run_for_test(["config", "svn-remote.other.url", "mock://repo"])
+        .unwrap();
+    git.run_for_test([
+        "config",
+        "--add",
+        "svn-remote.other.fetch",
+        "trunk:refs/remotes/other/trunk",
+    ])
+    .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["fetch", "other"])
+        .assert()
+        .success();
+    git.run_for_test(["checkout", "-b", "topic", "refs/remotes/other/trunk"])
+        .unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["fetch", "other", "--parent"])
+        .assert()
+        .success();
+    assert_eq!(
+        git.run_for_test(["show", "refs/remotes/other/trunk:src/lib.rs"])
+            .unwrap(),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
+}
+
+#[test]
 fn fetch_after_import_detects_sha256_rev_map() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");

@@ -15,6 +15,188 @@ fn find_rev_maps_svn_revision_to_git_commit() {
 }
 
 #[test]
+fn named_svn_remote_drives_readonly_commands_and_ignores_unrelated_missing_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    git(work, ["init"]);
+    git(work, ["config", "svn-remote.other.url", "mock://repo"]);
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.other.fetch",
+            "trunk:refs/remotes/other/trunk",
+        ],
+    );
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["fetch", "other"])
+        .assert()
+        .success();
+    git(
+        work,
+        ["checkout", "-b", "topic", "refs/remotes/other/trunk"],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "--url"])
+        .assert()
+        .success()
+        .stdout("mock://repo/trunk\n");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["find-rev", "r2"])
+        .assert()
+        .success()
+        .stdout(predicate::str::is_match("^[0-9a-f]{40}\n$").unwrap());
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["log", "--revision", "2", "--oneline"])
+        .assert()
+        .success()
+        .stdout("r2 | add trunk file\n");
+
+    git(
+        work,
+        ["config", "svn-remote.unrelated.url", "mock://unrelated"],
+    );
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.unrelated.fetch",
+            ":refs/remotes/unrelated",
+        ],
+    );
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "--url"])
+        .assert()
+        .success()
+        .stdout("mock://repo/trunk\n");
+}
+
+#[test]
+fn resolver_rejects_same_distance_identity_across_named_remotes() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    git(work, ["init"]);
+    git(work, ["config", "svn-remote.first.url", "mock://repo"]);
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.first.fetch",
+            "trunk:refs/remotes/first/trunk",
+        ],
+    );
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["fetch", "first"])
+        .assert()
+        .success();
+    let oid = git_output(work, ["rev-parse", "refs/remotes/first/trunk"])
+        .trim()
+        .to_string();
+    git(work, ["update-ref", "refs/remotes/second/trunk", &oid]);
+    git(work, ["config", "svn-remote.second.url", "mock://repo"]);
+    git(
+        work,
+        [
+            "config",
+            "--add",
+            "svn-remote.second.fetch",
+            "trunk:refs/remotes/second/trunk",
+        ],
+    );
+    let second_metadata = work.join(".git/svn/refs/remotes/second/trunk");
+    std::fs::create_dir_all(&second_metadata).unwrap();
+    std::fs::copy(
+        work.join(".git/svn/refs/remotes/first/trunk/.rev_map.mock-uuid"),
+        second_metadata.join(".rev_map.mock-uuid"),
+    )
+    .unwrap();
+    git(work, ["checkout", "-b", "topic", &oid]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "--url"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous SVN tracking identity"))
+        .stderr(predicate::str::contains("first/refs/remotes/first/trunk"))
+        .stderr(predicate::str::contains("second/refs/remotes/second/trunk"));
+}
+
+#[test]
+fn resolver_rejects_same_ref_identity_for_distinct_svn_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    git(&work, ["config", "svn-remote.svn.noMetadata", "true"]);
+    git(
+        &work,
+        [
+            "config",
+            "--add",
+            "svn-remote.svn.fetch",
+            "branches/other:refs/remotes/git-svn",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "--url"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous SVN tracking identity"));
+}
+
+#[test]
+fn resolver_does_not_hide_ambiguous_rev_map_on_an_unrelated_remote() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    git(
+        &work,
+        ["config", "svn-remote.broken.url", "mock://unrelated"],
+    );
+    git(
+        &work,
+        [
+            "config",
+            "--add",
+            "svn-remote.broken.fetch",
+            ":refs/remotes/broken",
+        ],
+    );
+    let broken_metadata = work.join(".git/svn/refs/remotes/broken");
+    std::fs::create_dir_all(&broken_metadata).unwrap();
+    let source = canonical_git_svn_metadata(&work).join(".rev_map.mock-uuid");
+    std::fs::copy(&source, broken_metadata.join(".rev_map.first")).unwrap();
+    std::fs::copy(&source, broken_metadata.join(".rev_map.second")).unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "--url"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("ambiguous .rev_map files"))
+        .stderr(predicate::str::contains("broken"));
+}
+
+#[test]
 fn resolver_rejects_multiple_rev_maps_without_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

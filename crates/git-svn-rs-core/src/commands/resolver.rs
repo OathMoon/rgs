@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use crate::commands::reset_transaction;
-use crate::config::SvnRemoteConfig;
+use crate::config::{SvnRemoteConfig, read_svn_remote_config, svn_remote_names};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
-use crate::mapping::{MappingKind, RefMapping, desanitize_refname, sanitize_refname};
+use crate::mapping::{RefMapping, desanitize_refname, sanitize_refname};
 use crate::metadata::svn_metadata_dir;
 use crate::path_url::add_path_to_url;
 use crate::rev_map::{RevMap, RevMapRecord};
@@ -96,53 +96,109 @@ fn resolve_tracked_svn_impl(
         crate::import_transaction::ensure_no_pending(&git)?;
     }
     reset_transaction::ensure_no_pending(&git)?;
-    let config = read_remote_config(&git, "svn")?;
-    let first_mapping = config
-        .fetch
-        .first()
-        .ok_or_else(|| "svn remote has no fetch mapping".to_string())?;
-    let mappings = tracked_candidate_mappings(&git, &config)?;
+    let remote_names = svn_remote_names(&git)?;
+    if remote_names.is_empty() {
+        return Err("missing svn-remote.svn.url".to_string());
+    }
+    let configs = remote_names
+        .iter()
+        .map(|remote| read_svn_remote_config(&git, remote))
+        .collect::<Result<Vec<_>, _>>()?;
     let git_dir = git.git_dir()?;
     let git_metadata_dir = git.work_tree().join(git_dir);
     let first_parent_history = git.first_parent_history(treeish)?;
-    let mut fallback = None;
-    let mut best_identity: Option<(usize, TrackedSvn)> = None;
+    let mut best_distance = None;
+    let mut best_identities = Vec::new();
+    let mut fallbacks = Vec::new();
+    let mut errors = Vec::new();
+    let mut hard_errors = Vec::new();
 
-    for mapping in &mappings {
-        let metadata_dir = svn_metadata_dir(&git_metadata_dir, &mapping.git_ref)?;
-        let tracked = match tracked_from_mapping(&git, &config, mapping, &metadata_dir) {
-            Ok(tracked) => tracked,
-            Err(_) if mapping != first_mapping => continue,
-            Err(error) => return Err(error),
-        };
-        if let Some((distance, record)) =
-            rev_map_first_parent_identity(&tracked, &first_parent_history)?
-        {
-            if !tracking_identity_matches(&tracked, &record, &first_parent_history[distance])? {
-                continue;
-            }
-            if best_identity
-                .as_ref()
-                .is_none_or(|(best_distance, _)| distance < *best_distance)
-            {
-                best_identity = Some((distance, tracked));
-            } else if best_identity
-                .as_ref()
-                .is_some_and(|(best_distance, _)| distance == *best_distance)
-            {
-                return Err(format!(
-                    "ambiguous SVN tracking identity at first-parent distance {distance}"
-                ));
-            }
+    for config in &configs {
+        let mappings = tracked_candidate_mappings(&git, config)?;
+        if mappings.is_empty() {
+            errors.push((
+                config.name.clone(),
+                format!("SVN remote {} has no candidate mapping", config.name),
+            ));
             continue;
         }
-        if fallback.is_none() {
-            fallback = Some(tracked);
+        let mut remote_fallback = None;
+        let mut remote_error = None;
+        for mapping in &mappings {
+            let metadata_dir = svn_metadata_dir(&git_metadata_dir, &mapping.git_ref)?;
+            let tracked = match tracked_from_mapping(&git, config, mapping, &metadata_dir) {
+                Ok(tracked) => tracked,
+                Err(error) => {
+                    if is_missing_tracking_metadata_error(&error) {
+                        remote_error.get_or_insert(error);
+                    } else {
+                        hard_errors.push((config.name.clone(), error));
+                    }
+                    continue;
+                }
+            };
+            let identity = match rev_map_first_parent_identity(&tracked, &first_parent_history) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    hard_errors.push((config.name.clone(), error));
+                    continue;
+                }
+            };
+            if let Some((distance, record)) = identity
+                && tracking_identity_matches(&tracked, &record, &first_parent_history[distance])?
+            {
+                match best_distance {
+                    None => {
+                        best_distance = Some(distance);
+                        best_identities.push(tracked);
+                    }
+                    Some(current) if distance < current => {
+                        best_distance = Some(distance);
+                        best_identities.clear();
+                        best_identities.push(tracked);
+                    }
+                    Some(current) if distance == current => {
+                        if !best_identities
+                            .iter()
+                            .any(|candidate| same_tracking_target(candidate, &tracked))
+                        {
+                            best_identities.push(tracked);
+                        }
+                    }
+                    Some(_) => {}
+                }
+                continue;
+            }
+            remote_fallback.get_or_insert(tracked);
+        }
+        if let Some(tracked) = remote_fallback {
+            fallbacks.push(tracked);
+        }
+        if let Some(error) = remote_error {
+            errors.push((config.name.clone(), error));
         }
     }
 
-    if let Some((_, tracked)) = best_identity {
-        return Ok(tracked);
+    if !hard_errors.is_empty() {
+        return Err(format_resolver_errors(
+            "invalid SVN tracking metadata across remotes",
+            hard_errors,
+        ));
+    }
+
+    if best_identities.len() == 1 {
+        return Ok(best_identities.pop().expect("one best tracking identity"));
+    }
+    if best_identities.len() > 1 {
+        let distance = best_distance.expect("ambiguous identities have a distance");
+        let targets = best_identities
+            .iter()
+            .map(|tracked| format!("{}/{}", tracked.config.name, tracked.refname))
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "ambiguous SVN tracking identity at first-parent distance {distance}: {targets}"
+        ));
     }
 
     if require_history_identity {
@@ -151,12 +207,64 @@ fn resolve_tracked_svn_impl(
         ));
     }
 
-    if let Some(tracked) = fallback {
-        return Ok(tracked);
+    if let Some(index) = fallbacks
+        .iter()
+        .position(|tracked| tracked.config.name == "svn")
+    {
+        return Ok(fallbacks.swap_remove(index));
+    }
+    if fallbacks.len() == 1 {
+        return Ok(fallbacks.pop().expect("one fallback tracking identity"));
+    }
+    if fallbacks.len() > 1 {
+        let remotes = fallbacks
+            .iter()
+            .map(|tracked| tracked.config.name.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+        return Err(format!(
+            "ambiguous SVN tracking fallback across remotes: {remotes}"
+        ));
     }
 
-    let metadata_dir = svn_metadata_dir(&git_metadata_dir, &first_mapping.git_ref)?;
-    tracked_from_mapping(&git, &config, first_mapping, &metadata_dir)
+    if let Some((_, error)) = errors.iter().find(|(remote, _)| remote == "svn") {
+        return Err(error.clone());
+    }
+    if errors.len() == 1 {
+        return Err(errors.pop().expect("one resolver error").1);
+    }
+    Err(format!(
+        "no usable SVN tracking metadata across remotes: {}",
+        errors
+            .into_iter()
+            .map(|(remote, error)| format!("{remote}: {error}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    ))
+}
+
+fn same_tracking_target(left: &TrackedSvn, right: &TrackedSvn) -> bool {
+    left.config.name == right.config.name
+        && left.refname == right.refname
+        && left.svn_path == right.svn_path
+        && left.uuid == right.uuid
+        && left.rev_map_path == right.rev_map_path
+}
+
+fn is_missing_tracking_metadata_error(error: &str) -> bool {
+    error.starts_with("missing .rev_map in ")
+        || error.starts_with("missing SVN metadata directory ")
+}
+
+fn format_resolver_errors(prefix: &str, errors: Vec<(String, String)>) -> String {
+    format!(
+        "{prefix}: {}",
+        errors
+            .into_iter()
+            .map(|(remote, error)| format!("{remote}: {error}"))
+            .collect::<Vec<_>>()
+            .join("; ")
+    )
 }
 
 fn tracked_from_mapping(
@@ -228,80 +336,6 @@ fn tracking_identity_matches(
         && identity.revision == record.revision)
 }
 
-fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
-    let prefix = format!("svn-remote.{remote}");
-    let url = git
-        .config_get(&format!("{prefix}.url"))?
-        .ok_or_else(|| format!("missing {prefix}.url"))?;
-    let fetch = git.config_get_all(&format!("{prefix}.fetch"))?;
-    let branches = git.config_get_all(&format!("{prefix}.branches"))?;
-    let tags = git.config_get_all(&format!("{prefix}.tags"))?;
-    let mappings = fetch
-        .into_iter()
-        .map(|value| parse_mapping(&value, MappingKind::Fetch))
-        .collect::<Result<Vec<_>, _>>()?;
-    let branch_mappings = branches
-        .into_iter()
-        .map(|value| parse_mapping(&value, MappingKind::Branches))
-        .collect::<Result<Vec<_>, _>>()?;
-    let tag_mappings = tags
-        .into_iter()
-        .map(|value| parse_mapping(&value, MappingKind::Tags))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(SvnRemoteConfig {
-        name: remote.to_string(),
-        url,
-        fetch: mappings,
-        branches: branch_mappings,
-        tags: tag_mappings,
-        ignore_paths: git.config_get(&format!("{prefix}.ignore-paths"))?,
-        include_paths: git.config_get(&format!("{prefix}.include-paths"))?,
-        ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
-        authors_file: git.config_get(&format!("{prefix}.authors-file"))?,
-        authors_prog: git.config_get(&format!("{prefix}.authors-prog"))?,
-        log_window_size: git
-            .config_get(&format!("{prefix}.log-window-size"))?
-            .map(|value| {
-                value
-                    .parse()
-                    .map_err(|_| format!("invalid {prefix}.log-window-size: {value}"))
-            })
-            .transpose()?,
-        localtime: git
-            .config_get(&format!("{prefix}.localtime"))?
-            .is_some_and(|value| value == "true"),
-        username: git.config_get(&format!("{prefix}.username"))?,
-        config_dir: git.config_get(&format!("{prefix}.config-dir"))?,
-        no_auth_cache: git
-            .config_get(&format!("{prefix}.no-auth-cache"))?
-            .is_some_and(|value| value == "true"),
-        no_metadata: git
-            .config_get(&format!("{prefix}.noMetadata"))?
-            .is_some_and(|value| value == "true"),
-        rewrite_root: git.config_get(&format!("{prefix}.rewriteRoot"))?,
-        rewrite_uuid: git.config_get(&format!("{prefix}.rewriteUUID"))?,
-        preserve_empty_dirs: git
-            .config_get(&format!("{prefix}.preserve-empty-dirs"))?
-            .is_some_and(|value| value == "true"),
-        placeholder_filename: git
-            .config_get(&format!("{prefix}.placeholder-filename"))?
-            .unwrap_or_else(|| ".gitignore".to_string()),
-    })
-}
-
-fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
-    let (svn_path, git_ref) = value
-        .split_once(':')
-        .ok_or_else(|| format!("invalid fetch mapping: {value}"))?;
-    sanitize_refname(git_ref)?;
-    Ok(RefMapping {
-        kind,
-        svn_path: svn_path.trim_start_matches('+').to_string(),
-        git_ref: git_ref.to_string(),
-    })
-}
-
 fn tracked_candidate_mappings(
     git: &GitCli,
     config: &SvnRemoteConfig,
@@ -347,7 +381,13 @@ fn expand_ref_mapping(mapping: &RefMapping, refs: &[String]) -> Vec<RefMapping> 
 }
 
 fn find_rev_map(metadata_dir: &Path) -> Result<(String, PathBuf), String> {
-    let entries = std::fs::read_dir(metadata_dir).map_err(|e| e.to_string())?;
+    let entries = std::fs::read_dir(metadata_dir).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound {
+            format!("missing SVN metadata directory {}", metadata_dir.display())
+        } else {
+            error.to_string()
+        }
+    })?;
     let mut candidates = Vec::new();
     for entry in entries {
         let path = entry.map_err(|e| e.to_string())?.path();

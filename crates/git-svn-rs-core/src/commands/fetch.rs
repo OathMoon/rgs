@@ -1,5 +1,5 @@
 use crate::cli::{FetchArgs, SharedFetchArgs};
-use crate::config::SvnRemoteConfig;
+use crate::config::{SvnRemoteConfig, read_svn_remote_config, svn_remote_names};
 use crate::git::GitCli;
 use crate::import::{ImportOptions, import_mock_revisions_for_ref, import_ra_revisions_for_ref};
 use crate::mapping::{MappingKind, RefMapping};
@@ -59,7 +59,7 @@ pub fn run_in_work_tree(
 }
 
 fn fetch_remote(git: &GitCli, remote: &str, shared: &SharedFetchArgs) -> Result<(), String> {
-    let config = read_remote_config(git, remote)?;
+    let config = read_svn_remote_config(git, remote)?;
     fetch_config(git, config, shared, None)
 }
 
@@ -154,7 +154,7 @@ fn validate_requested_urls_before_recovery(git: &GitCli, args: &FetchArgs) -> Re
         vec![args.remote.clone().unwrap_or_else(|| "svn".to_string())]
     };
     for remote in remotes {
-        let config = read_remote_config(git, &remote)?;
+        let config = read_svn_remote_config(git, &remote)?;
         crate::path_url::validate_fetch_url(&config.url)?;
     }
     Ok(())
@@ -407,21 +407,6 @@ fn configured_password(
     )
 }
 
-fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
-    let keys = git.config_names_matching(r"^svn-remote\..*\.url$")?;
-    let mut names = keys
-        .into_iter()
-        .filter_map(|key| {
-            key.strip_prefix("svn-remote.")
-                .and_then(|value| value.strip_suffix(".url"))
-                .map(|value| value.to_string())
-        })
-        .collect::<Vec<_>>();
-    names.sort();
-    names.dedup();
-    Ok(names)
-}
-
 fn verify_remote_fetch_ref_sanity(git: &GitCli) -> Result<(), String> {
     let mut keys = git.config_names_matching(r"^svn-remote\..*\.fetch$")?;
     keys.sort();
@@ -519,68 +504,6 @@ fn parse_numeric_revision(value: &str) -> Option<u32> {
         return None;
     }
     value.parse().ok()
-}
-
-fn read_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteConfig, String> {
-    let prefix = format!("svn-remote.{remote}");
-    let url = git
-        .config_get(&format!("{prefix}.url"))?
-        .ok_or_else(|| format!("missing {prefix}.url"))?;
-    let fetch = git.config_get_all(&format!("{prefix}.fetch"))?;
-    let branches = git.config_get_all(&format!("{prefix}.branches"))?;
-    let tags = git.config_get_all(&format!("{prefix}.tags"))?;
-    let mappings = fetch
-        .into_iter()
-        .map(|value| parse_mapping(&value, MappingKind::Fetch))
-        .collect::<Result<Vec<_>, _>>()?;
-    let branch_mappings = branches
-        .into_iter()
-        .map(|value| parse_mapping(&value, MappingKind::Branches))
-        .collect::<Result<Vec<_>, _>>()?;
-    let tag_mappings = tags
-        .into_iter()
-        .map(|value| parse_mapping(&value, MappingKind::Tags))
-        .collect::<Result<Vec<_>, _>>()?;
-
-    Ok(SvnRemoteConfig {
-        name: remote.to_string(),
-        url,
-        fetch: mappings,
-        branches: branch_mappings,
-        tags: tag_mappings,
-        ignore_paths: git.config_get(&format!("{prefix}.ignore-paths"))?,
-        include_paths: git.config_get(&format!("{prefix}.include-paths"))?,
-        ignore_refs: git.config_get(&format!("{prefix}.ignore-refs"))?,
-        authors_file: git.config_get(&format!("{prefix}.authors-file"))?,
-        authors_prog: git.config_get(&format!("{prefix}.authors-prog"))?,
-        log_window_size: git
-            .config_get(&format!("{prefix}.log-window-size"))?
-            .map(|value| {
-                value
-                    .parse()
-                    .map_err(|_| format!("invalid {prefix}.log-window-size: {value}"))
-            })
-            .transpose()?,
-        localtime: git
-            .config_get(&format!("{prefix}.localtime"))?
-            .is_some_and(|value| value == "true"),
-        username: git.config_get(&format!("{prefix}.username"))?,
-        config_dir: git.config_get(&format!("{prefix}.config-dir"))?,
-        no_auth_cache: git
-            .config_get(&format!("{prefix}.no-auth-cache"))?
-            .is_some_and(|value| value == "true"),
-        no_metadata: git
-            .config_get(&format!("{prefix}.noMetadata"))?
-            .is_some_and(|value| value == "true"),
-        rewrite_root: git.config_get(&format!("{prefix}.rewriteRoot"))?,
-        rewrite_uuid: git.config_get(&format!("{prefix}.rewriteUUID"))?,
-        preserve_empty_dirs: git
-            .config_get(&format!("{prefix}.preserve-empty-dirs"))?
-            .is_some_and(|value| value == "true"),
-        placeholder_filename: git
-            .config_get(&format!("{prefix}.placeholder-filename"))?
-            .unwrap_or_else(|| ".gitignore".to_string()),
-    })
 }
 
 fn parse_mapping(value: &str, kind: MappingKind) -> Result<RefMapping, String> {
