@@ -1,4 +1,5 @@
 use std::fs;
+use std::path::Path;
 
 use crate::cli::{InitArgs, LayoutArgs, SharedFetchArgs};
 use crate::config::SvnRemoteConfig;
@@ -56,10 +57,15 @@ fn validate_args(args: &InitArgs) -> Result<(), String> {
 }
 
 pub(crate) fn run_prepared_with_output(
-    args: InitArgs,
+    mut args: InitArgs,
     mappings: LayoutMappings,
 ) -> Result<GitCommandOutput, String> {
     validate_args(&args)?;
+    if let Some(authors_file) = &args.shared.authors_file {
+        let current_dir = std::env::current_dir()
+            .map_err(|error| format!("failed to resolve --authors-file: {error}"))?;
+        args.shared.authors_file = Some(absolute_authors_file(authors_file, &current_dir)?);
+    }
     let work_tree = args.path.as_deref().unwrap_or(".");
     fs::create_dir_all(work_tree).map_err(|e| e.to_string())?;
 
@@ -69,6 +75,21 @@ pub(crate) fn run_prepared_with_output(
     let config = svn_remote_config(args, mappings);
     write_svn_remote_config(&git, &config)?;
     Ok(output)
+}
+
+fn absolute_authors_file(path: &str, current_dir: &Path) -> Result<String, String> {
+    let path = Path::new(path);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        current_dir.join(path)
+    };
+    absolute.into_os_string().into_string().map_err(|path| {
+        format!(
+            "--authors-file path is not valid UTF-8: {}",
+            path.to_string_lossy()
+        )
+    })
 }
 
 pub(crate) fn normalize_layout_args(
@@ -295,4 +316,24 @@ fn add_mappings(
         git.config_add(key, &format!("{}:{}", mapping.svn_path, mapping.git_ref))?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::absolute_authors_file;
+
+    #[test]
+    fn authors_file_is_made_absolute_from_the_invocation_directory() {
+        let current_dir = tempfile::tempdir().unwrap();
+        let expected = current_dir.path().join("config/authors.txt");
+
+        assert_eq!(
+            absolute_authors_file("config/authors.txt", current_dir.path()).unwrap(),
+            expected.to_str().unwrap()
+        );
+        assert_eq!(
+            absolute_authors_file(expected.to_str().unwrap(), current_dir.path()).unwrap(),
+            expected.to_str().unwrap()
+        );
+    }
 }

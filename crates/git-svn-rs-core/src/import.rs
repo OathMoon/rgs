@@ -1698,8 +1698,12 @@ struct AuthorMapper {
 
 fn author_mapper(config: &SvnRemoteConfig) -> Result<AuthorMapper, String> {
     let file = if let Some(path) = &config.authors_file {
-        let contents = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
-        Some(parse_authors_file(&contents)?)
+        let contents = std::fs::read_to_string(path)
+            .map_err(|error| format!("failed to read authors file {path}: {error}"))?;
+        Some(
+            parse_authors_file(&contents)
+                .map_err(|error| format!("failed to parse authors file {path}: {error}"))?,
+        )
     } else {
         None
     };

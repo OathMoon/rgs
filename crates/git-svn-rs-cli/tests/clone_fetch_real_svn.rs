@@ -2407,12 +2407,18 @@ fn clone_file_url_applies_authors_file_mapping() {
             "work",
             "--stdlayout",
             "--authors-file",
-            authors.to_str().unwrap(),
+            "authors.txt",
         ])
         .assert()
         .success();
 
     let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.config_get("svn-remote.svn.authors-file")
+            .unwrap()
+            .as_deref(),
+        authors.to_str()
+    );
     assert_eq!(
         git.run_for_test([
             "show",
@@ -2423,6 +2429,33 @@ fn clone_file_url_applies_authors_file_mapping() {
         .unwrap()
         .trim(),
         "Ada Lovelace <ada@example.com>"
+    );
+
+    let fetched_revision = fixture
+        .modify_run_script_content("#!/bin/sh\necho authors fetch\n")
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+
+    assert_eq!(
+        git.run_for_test([
+            "show",
+            "-s",
+            "--format=%an <%ae>",
+            "refs/remotes/origin/trunk"
+        ])
+        .unwrap()
+        .trim(),
+        "Ada Lovelace <ada@example.com>"
+    );
+    assert!(
+        git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/origin/trunk"])
+            .unwrap()
+            .contains(&format!("@{fetched_revision} "))
     );
 }
 
