@@ -721,7 +721,7 @@ fn dcommit_adopts_revision_after_submitted_journal_save_failure() {
 
 #[cfg(unix)]
 #[test]
-fn dcommit_adopts_revision_after_svn_commit_success_response_is_lost() {
+fn dcommit_adopts_commit_url_revision_after_svn_commit_success_response_is_lost() {
     match require_svn_tools() {
         Ok(()) => {}
         Err(SvnToolPolicy::Skip(message)) => {
@@ -790,12 +790,13 @@ fn dcommit_adopts_revision_after_svn_commit_success_response_is_lost() {
     )
     .unwrap();
     let before = fixture.latest_revision();
+    let branch_url = format!("{}/branches/main", fixture.url());
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
         .env("PATH", &wrapped_path)
-        .args(["dcommit", "--no-rebase"])
+        .args(["dcommit", "--no-rebase", "--commit-url", &branch_url])
         .assert()
         .failure()
         .stderr(predicate::str::contains("outcome is ambiguous"));
@@ -809,11 +810,28 @@ fn dcommit_adopts_revision_after_svn_commit_success_response_is_lost() {
         journal.entries[0].state,
         EntryState::SubmissionInFlight { .. }
     ));
+    assert_eq!(journal.target.mapping_ref, "refs/remotes/origin/main");
+    assert_eq!(journal.target.commit_url, branch_url);
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
         .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unfinished dcommit journal target does not match",
+        ));
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "retrying without the bound commit URL must not resubmit"
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase", "--commit-url", &branch_url])
         .assert()
         .failure()
         .stderr(predicate::str::contains("outcome is ambiguous"));
@@ -829,6 +847,8 @@ fn dcommit_adopts_revision_after_svn_commit_success_response_is_lost() {
         .args([
             "dcommit",
             "--no-rebase",
+            "--commit-url",
+            &branch_url,
             "--adopt-revision",
             &submitted.to_string(),
         ])
@@ -841,13 +861,49 @@ fn dcommit_adopts_revision_after_svn_commit_success_response_is_lost() {
     );
     let recovered = store.load().unwrap().expect("reconciled dcommit journal");
     assert_eq!(recovered.batch_state, BatchState::Complete);
-    assert!(matches!(
-        recovered.entries[0].state,
+    let imported_oid = match &recovered.entries[0].state {
         EntryState::FetchedVerified {
             svn_revision,
-            ..
-        } if svn_revision == u64::from(submitted)
-    ));
+            imported_oid,
+        } if *svn_revision == u64::from(submitted) => imported_oid,
+        state => panic!("adopted commit URL was not verified: {state:?}"),
+    };
+    assert_eq!(recovered.target.mapping_ref, "refs/remotes/origin/main");
+    assert_eq!(recovered.target.commit_url, branch_url);
+    let branch_oid = git_stdout(&work, &["rev-parse", "refs/remotes/origin/main"]);
+    assert_eq!(imported_oid, &branch_oid);
+    let rev_map_path = std::path::PathBuf::from(&recovered.target.rev_map_path);
+    let rev_map_path = if rev_map_path.is_absolute() {
+        rev_map_path
+    } else {
+        work.join(rev_map_path)
+    };
+    assert_eq!(
+        RevMap::open_existing(rev_map_path, ObjectFormat::Sha1)
+            .unwrap()
+            .get(submitted)
+            .unwrap()
+            .as_deref(),
+        Some(branch_oid.as_str())
+    );
+    assert!(
+        git_stdout(
+            &work,
+            &["show", "-s", "--format=%B", "refs/remotes/origin/main"]
+        )
+        .contains(&format!("{branch_url}@{submitted} "))
+    );
+    assert_eq!(
+        svn_stdout(&[
+            "cat",
+            &format!("{}/branches/main/src/lib.rs", fixture.url())
+        ]),
+        "pub fn answer() -> u8 { 63 }\n"
+    );
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/src/lib.rs", fixture.url())]),
+        "pub fn answer() -> u8 { 42 }\n"
+    );
 }
 
 #[test]

@@ -160,11 +160,6 @@ pub fn run_in_work_tree(
             );
         }
         if is_svn_cli_write_back_url(target_url) && is_svn_cli_write_back_url(&tracked.config.url) {
-            if args.adopt_revision.is_some() && args.commit_url.is_some() {
-                return Err(
-                    "--adopt-revision with --commit-url is not implemented in v1".to_string(),
-                );
-            }
             let commit_svn_path = if args.commit_url.is_some() {
                 ""
             } else {
