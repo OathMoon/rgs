@@ -4,6 +4,7 @@ use git_svn_rs_core::dcommit::journal::{
 };
 use git_svn_rs_core::rev_map::{ObjectFormat, RevMap};
 use predicates::prelude::*;
+use std::collections::BTreeMap;
 
 #[allow(dead_code)]
 #[path = "../../git-svn-rs-core/tests/support/svn_fixture.rs"]
@@ -18,6 +19,7 @@ fn dcommit_dry_run_lists_local_commits_after_tracked_svn_ref() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
     make_commit(&work, "local-one.txt", "one\n", "local one");
+    make_empty_commit(&work, "empty middle commit");
     make_commit(&work, "local-two.txt", "two\n", "local two");
 
     Command::cargo_bin("git-svn-rs")
@@ -34,7 +36,8 @@ fn dcommit_dry_run_lists_local_commits_after_tracked_svn_ref() {
             "Would commit 2 local Git commit(s)",
         ))
         .stdout(predicate::str::contains("local one"))
-        .stdout(predicate::str::contains("local two"));
+        .stdout(predicate::str::contains("local two"))
+        .stdout(predicate::str::contains("empty middle commit").not());
 }
 
 #[test]
@@ -49,6 +52,131 @@ fn dcommit_dry_run_reports_no_local_commits() {
         .assert()
         .success()
         .stdout(predicate::str::contains("No local commits to dcommit."));
+}
+
+#[test]
+fn dcommit_dry_run_reports_an_all_noop_queue_without_resetting() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    make_empty_commit(&work, "empty dry-run commit");
+    let head_before = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+    let metadata_before = directory_file_snapshot(&work.join(".git/svn"));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("No changes to dcommit."))
+        .stdout(predicate::str::contains("Reset to tracked SVN ref.").not());
+
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        directory_file_snapshot(&work.join(".git/svn")),
+        metadata_before
+    );
+}
+
+#[test]
+fn dcommit_dry_run_rejects_gitlinks_without_mutating_metadata() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    make_gitlink_commit(&work, &tracked_before, "add unsupported gitlink");
+    let head_before = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let refs_before = git_stdout(
+        &work,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    );
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+    let metadata_before = directory_file_snapshot(&work.join(".git/svn"));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("unsupported new Git mode 160000"));
+
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        git_stdout(
+            &work,
+            &["for-each-ref", "--format=%(refname) %(objectname)"]
+        ),
+        refs_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        directory_file_snapshot(&work.join(".git/svn")),
+        metadata_before
+    );
+}
+
+#[test]
+fn dcommit_dry_run_refuses_to_recover_a_pending_import_batch() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    make_commit(&work, "local.txt", "local\n", "local change");
+    let tracked_before = git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]);
+    let (rev_map_path, rev_map_before) = mock_rev_map_snapshot(&work);
+    let batch_path = work.join(".git/svn/import-batch-journal");
+    let batch = concat!(
+        "git-svn-rs-import-batch-v1\n",
+        "uuid\tmock-uuid\n",
+        "ref_count\t1\n",
+        "completed_count\t0\n",
+        "ref\trefs/remotes/git-svn\n"
+    );
+    std::fs::write(&batch_path, batch).unwrap();
+    let head_before = git_stdout(&work, &["rev-parse", "HEAD"]);
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+    let metadata_before = directory_file_snapshot(&work.join(".git/svn"));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unfinished import batch journal found",
+        ));
+
+    assert_eq!(git_stdout(&work, &["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/git-svn"]),
+        tracked_before
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(std::fs::read_to_string(batch_path).unwrap(), batch);
+    assert_eq!(
+        directory_file_snapshot(&work.join(".git/svn")),
+        metadata_before
+    );
 }
 
 #[test]
@@ -4189,6 +4317,58 @@ fn make_empty_commit(work: &std::path::Path, message: &str) {
             message,
         ],
     );
+}
+
+fn make_gitlink_commit(work: &std::path::Path, oid: &str, message: &str) {
+    run_git(
+        work,
+        &[
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            &format!("160000,{oid},vendor/submodule"),
+        ],
+    );
+    run_git(
+        work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            message,
+        ],
+    );
+}
+
+fn directory_file_snapshot(root: &std::path::Path) -> BTreeMap<std::path::PathBuf, Vec<u8>> {
+    fn collect(
+        root: &std::path::Path,
+        directory: &std::path::Path,
+        snapshot: &mut BTreeMap<std::path::PathBuf, Vec<u8>>,
+    ) {
+        let mut entries = std::fs::read_dir(directory)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        entries.sort();
+        for path in entries {
+            if path.is_dir() {
+                collect(root, &path, snapshot);
+            } else {
+                snapshot.insert(
+                    path.strip_prefix(root).unwrap().to_path_buf(),
+                    std::fs::read(path).unwrap(),
+                );
+            }
+        }
+    }
+
+    let mut snapshot = BTreeMap::new();
+    collect(root, root, &mut snapshot);
+    snapshot
 }
 
 fn tracking_rev_map_snapshot(

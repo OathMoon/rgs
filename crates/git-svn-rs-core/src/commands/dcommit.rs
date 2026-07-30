@@ -46,7 +46,7 @@ pub fn run_in_work_tree(
     }
     let work_tree = work_tree.into();
     let git = GitCli::new(&work_tree);
-    if crate::import_transaction::has_pending_batch(&git)? {
+    if !args.dry_run && crate::import_transaction::has_pending_batch(&git)? {
         let pending = resolve_tracked_svn_allow_import_batch(&work_tree)?;
         crate::path_url::validate_fetch_url(&pending.config.url)?;
         let refnames = crate::import_transaction::pending_batch_refnames(&git)?;
@@ -270,9 +270,50 @@ pub fn run_in_work_tree(
         }
     }
 
+    dcommit_dry_run(&tracked, &args, &commits)
+}
+
+struct DcommitPlanningContext<'a> {
+    git: &'a GitCli,
+    repository_root: &'a str,
+    repository_uuid: &'a str,
+    mapping_ref: &'a str,
+    mergeinfo: Option<&'a str>,
+}
+
+struct DryRunTarget {
+    repository_root: String,
+    commit_url: String,
+    mapping_ref: String,
+    rev_map_path: PathBuf,
+}
+
+fn dcommit_dry_run(
+    tracked: &crate::commands::resolver::TrackedSvn,
+    args: &DcommitArgs,
+    commits: &[GitCommitSummary],
+) -> Result<String, String> {
+    let target = resolve_dry_run_target(tracked, args.commit_url.as_deref())?;
+    let (base_revision, _) =
+        validate_tracking_base(&tracked.git, &target.mapping_ref, &target.rev_map_path)?;
+    let chain = new_plan_chain(&tracked.refname, commits);
+    let plans = build_dcommit_plans(
+        &DcommitPlanningContext {
+            git: &tracked.git,
+            repository_root: &target.repository_root,
+            repository_uuid: &tracked.uuid,
+            mapping_ref: &target.mapping_ref,
+            mergeinfo: args.mergeinfo.as_deref(),
+        },
+        &target.commit_url,
+        base_revision,
+        &chain,
+        true,
+    )?;
+
     let mut out = format!(
-        "Dcommit dry-run against {target_url} ({}, r{revision})\n",
-        tracked.refname
+        "Dcommit dry-run against {} ({}, r{base_revision})\n",
+        target.commit_url, target.mapping_ref
     );
     if let Some(mergeinfo) = &args.mergeinfo {
         out.push_str(&format!(
@@ -284,15 +325,55 @@ pub fn run_in_work_tree(
         out.push_str("No local commits to dcommit.\n");
         return Ok(out);
     }
+    if plans.is_empty() {
+        out.push_str("No changes to dcommit.\n");
+        return Ok(out);
+    }
 
     out.push_str(&format!(
         "Would commit {} local Git commit(s):\n",
-        commits.len()
+        plans.len()
     ));
-    for commit in commits {
+    for plan in plans {
+        let commit = commits
+            .iter()
+            .find(|commit| commit.id == plan.git_commit)
+            .ok_or_else(|| {
+                format!(
+                    "dcommit plan references commit outside the local queue: {}",
+                    plan.git_commit
+                )
+            })?;
         out.push_str(&format!("{} {}\n", commit.short_id, commit.subject));
     }
     Ok(out)
+}
+
+fn resolve_dry_run_target(
+    tracked: &crate::commands::resolver::TrackedSvn,
+    commit_url: Option<&str>,
+) -> Result<DryRunTarget, String> {
+    if let Some(commit_url) = commit_url {
+        if tracked.config.url.starts_with("mock://") {
+            return Err(
+                "--commit-url is not supported for mock:// dcommit write-back in v1".to_string(),
+            );
+        }
+        let svn_path = commit_url_path(&tracked.config.url, commit_url)?;
+        let mapping = resolve_tracked_svn_path(tracked, &svn_path)?;
+        return Ok(DryRunTarget {
+            repository_root: commit_url.to_string(),
+            commit_url: commit_url.to_string(),
+            mapping_ref: mapping.refname,
+            rev_map_path: mapping.rev_map_path,
+        });
+    }
+    Ok(DryRunTarget {
+        repository_root: tracked.config.url.clone(),
+        commit_url: svn_checkout_url(&tracked.config.url, &tracked.svn_path),
+        mapping_ref: tracked.refname.clone(),
+        rev_map_path: tracked.rev_map_path.clone(),
+    })
 }
 
 fn is_svn_cli_write_back_url(url: &str) -> bool {
@@ -436,15 +517,7 @@ fn dcommit_file_svn(
             })
             .collect::<Result<Vec<_>, _>>()?
     } else {
-        let mut base = ctx.source_refname.to_string();
-        commits
-            .iter()
-            .map(|commit| {
-                let pair = (base.clone(), commit.id.clone());
-                base.clone_from(&commit.id);
-                pair
-            })
-            .collect::<Vec<_>>()
+        new_plan_chain(ctx.source_refname, &commits)
     };
     let original_base_revision = match &active {
         Some(located) => located.journal.original_base_revision,
@@ -459,8 +532,14 @@ fn dcommit_file_svn(
         Some(located) => located.journal.original_base_oid.clone(),
         None => new_base.expect("new dcommit base must be validated").1,
     };
-    let plans = build_file_svn_plans(
-        &ctx,
+    let plans = build_dcommit_plans(
+        &DcommitPlanningContext {
+            git: ctx.git,
+            repository_root: ctx.svn_root_url,
+            repository_uuid: ctx.uuid,
+            mapping_ref: ctx.mapping_ref,
+            mergeinfo: ctx.mergeinfo,
+        },
         &target_url,
         original_base_revision,
         &plan_chain,
@@ -589,8 +668,20 @@ fn reconcile_recovery_config_fingerprint(
     Err("unfinished dcommit journal configuration does not match this invocation".to_string())
 }
 
-fn build_file_svn_plans(
-    ctx: &FileSvnDcommit<'_>,
+fn new_plan_chain(source_refname: &str, commits: &[GitCommitSummary]) -> Vec<(String, String)> {
+    let mut base = source_refname.to_string();
+    commits
+        .iter()
+        .map(|commit| {
+            let pair = (base.clone(), commit.id.clone());
+            base.clone_from(&commit.id);
+            pair
+        })
+        .collect()
+}
+
+fn build_dcommit_plans(
+    ctx: &DcommitPlanningContext<'_>,
     target_url: &str,
     original_base_revision: u64,
     chain: &[(String, String)],
@@ -610,8 +701,8 @@ fn build_file_svn_plans(
             DcommitPlanRequest {
                 target: DcommitTarget {
                     url: target_url.to_string(),
-                    repository_root: ctx.svn_root_url.to_string(),
-                    repository_uuid: ctx.uuid.to_string(),
+                    repository_root: ctx.repository_root.to_string(),
+                    repository_uuid: ctx.repository_uuid.to_string(),
                     git_ref: ctx.mapping_ref.to_string(),
                 },
                 base_revision,
@@ -864,6 +955,26 @@ fn validate_new_dcommit_base(
     target_url: &str,
     options: &DcommitSvnOptions,
 ) -> Result<(u64, String), String> {
+    let (expected_revision, mapping_oid) = validate_tracking_base(git, mapping_ref, rev_map_path)?;
+    let actual_revision = svn_last_changed_revision(target_url, options)?;
+    if actual_revision > expected_revision {
+        return Err(format!(
+            "SVN remote advanced from expected r{expected_revision} to r{actual_revision}; refusing to submit"
+        ));
+    }
+    if actual_revision != expected_revision {
+        return Err(format!(
+            "SVN remote revision mismatch: expected r{expected_revision}, found r{actual_revision}; refusing to submit"
+        ));
+    }
+    Ok((expected_revision, mapping_oid))
+}
+
+fn validate_tracking_base(
+    git: &GitCli,
+    mapping_ref: &str,
+    rev_map_path: &Path,
+) -> Result<(u64, String), String> {
     let record = RevMap::open_existing(rev_map_path, git.object_format()?)?
         .max_record(true)?
         .ok_or_else(|| "dcommit target rev_map is empty".to_string())?;
@@ -876,17 +987,6 @@ fn validate_new_dcommit_base(
     }
 
     let expected_revision = u64::from(record.revision);
-    let actual_revision = svn_last_changed_revision(target_url, options)?;
-    if actual_revision > expected_revision {
-        return Err(format!(
-            "SVN remote advanced from expected r{expected_revision} to r{actual_revision}; refusing to submit"
-        ));
-    }
-    if actual_revision != expected_revision {
-        return Err(format!(
-            "SVN remote revision mismatch: expected r{expected_revision}, found r{actual_revision}; refusing to submit"
-        ));
-    }
     Ok((expected_revision, mapping_oid))
 }
 
@@ -1100,47 +1200,37 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
         return Ok("No local commits to dcommit.\n".to_string());
     }
 
-    let planner = DcommitPlanBuilder::new();
     let svn_editor = SvnCommitEditor::new(PropertyMapper);
-    let mut diff_base = ctx.refname.to_string();
-    let mut queue = Vec::new();
-    for commit in &commits {
-        let offset =
-            u32::try_from(queue.len()).map_err(|_| "dcommit plan count exceeds u32".to_string())?;
-        let base_revision = ctx
-            .base_revision
-            .checked_add(offset)
-            .ok_or_else(|| "dcommit base revision exceeds u32".to_string())?;
-        let plan = planner.build(
-            DcommitPlanRequest {
-                target: DcommitTarget {
-                    url: ctx.target_url.to_string(),
-                    repository_root: ctx.target_url.to_string(),
-                    repository_uuid: ctx.uuid.to_string(),
-                    git_ref: ctx.refname.to_string(),
-                },
-                base_revision,
-                git_commit: commit.id.clone(),
-                message: dcommit_message(&ctx.git.commit_message(&commit.id)?),
-                author: Some(ctx.git.commit_author(&commit.id)?),
-                mergeinfo: None,
-                changes: ctx.git.diff_raw(&diff_base, &commit.id)?,
-            },
-            |path| ctx.git.show_file(&commit.id, path),
-        )?;
-        diff_base.clone_from(&commit.id);
-        if plan.has_svn_changes() {
-            queue.push((commit, plan));
-        }
-    }
-    if queue.is_empty() {
+    let plans = build_dcommit_plans(
+        &DcommitPlanningContext {
+            git: ctx.git,
+            repository_root: ctx.target_url,
+            repository_uuid: ctx.uuid,
+            mapping_ref: ctx.refname,
+            mergeinfo: None,
+        },
+        ctx.target_url,
+        u64::from(ctx.base_revision),
+        &new_plan_chain(ctx.refname, &commits),
+        true,
+    )?;
+    if plans.is_empty() {
         return finish_noop_dcommit(ctx.git, ctx.refname, ctx.no_rebase);
     }
 
     let mut backend = MockSvnBackend::new(ctx.uuid, Vec::new());
     let mut rev_map = ctx.rev_map;
     let mut out = String::new();
-    for (commit, plan) in &queue {
+    for plan in &plans {
+        let commit = commits
+            .iter()
+            .find(|commit| commit.id == plan.git_commit)
+            .ok_or_else(|| {
+                format!(
+                    "dcommit plan references commit outside the local queue: {}",
+                    plan.git_commit
+                )
+            })?;
         let record = CommitRecord {
             author: plan.author.clone().unwrap_or_default(),
             message: plan.message.clone(),
@@ -1160,7 +1250,7 @@ fn dcommit_mock(ctx: MockDcommit<'_>, commits: Vec<GitCommitSummary>) -> Result<
 
     out.insert_str(
         0,
-        &format!("Committed {} local Git commit(s)\n", queue.len()),
+        &format!("Committed {} local Git commit(s)\n", plans.len()),
     );
 
     if ctx.no_rebase {
