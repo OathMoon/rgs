@@ -27,6 +27,14 @@ pub fn run_in_work_tree(
     }
     reset_transaction::recover_pending(&git)?;
     let tracked = resolve_tracked_svn(work_tree)?;
+    crate::tracking_state::validate_existing_tracking_state(
+        &tracked.git,
+        &tracked.config,
+        &tracked.refname,
+        &tracked.svn_path,
+        &tracked.uuid,
+        &tracked.rev_map_path,
+    )?;
     let records = tracked.records()?;
     let record = if args.parent {
         records

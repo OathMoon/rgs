@@ -2033,6 +2033,74 @@ fn reset_positional_revision_takes_precedence_over_named_fallback() {
 }
 
 #[test]
+fn reset_rejects_tracking_ref_drift_without_mutation() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    let rev1 = commit_file(
+        work,
+        "one.txt",
+        "one\n",
+        "r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    let rev2 = commit_file(
+        work,
+        "two.txt",
+        "two\n",
+        "r2\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+    let tree = git_output(work, ["rev-parse", "refs/remotes/git-svn^{tree}"]);
+    let foreign = git_output(
+        work,
+        ["commit-tree", tree.trim(), "-m", "foreign tracking tip"],
+    );
+    let foreign = foreign.trim();
+    git(work, ["update-ref", "refs/remotes/git-svn", foreign]);
+
+    let rev_map_path = work.join(".git/svn/git-svn/.rev_map.mock-uuid");
+    let rev_map_before = std::fs::read(&rev_map_path).unwrap();
+    let index_before = std::fs::read(work.join(".git/index")).unwrap();
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
+    let status_before = git_output(work, ["status", "--porcelain=v1", "--untracked-files=all"]);
+    let one_before = std::fs::read(work.join("one.txt")).unwrap();
+    let two_before = std::fs::read(work.join("two.txt")).unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["reset", "1"])
+        .assert()
+        .failure()
+        .stderr(
+            predicate::str::contains("corrupt SVN tracking state")
+                .and(predicate::str::contains("tracking ref points to")),
+        );
+
+    assert_eq!(
+        git_output(work, ["rev-parse", "refs/remotes/git-svn"]).trim(),
+        foreign
+    );
+    assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
+    assert_eq!(
+        std::fs::read(work.join(".git/index")).unwrap(),
+        index_before
+    );
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
+    );
+    assert_eq!(
+        git_output(work, ["status", "--porcelain=v1", "--untracked-files=all"]),
+        status_before
+    );
+    assert_eq!(std::fs::read(work.join("one.txt")).unwrap(), one_before);
+    assert_eq!(std::fs::read(work.join("two.txt")).unwrap(), two_before);
+    assert!(!work.join(".git/svn/reset-journal").exists());
+}
+
+#[test]
 fn invalid_or_missing_reset_revision_does_not_recover_a_pending_journal() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();
