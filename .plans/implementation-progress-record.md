@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `8cc6135 Complete normal-path info metadata`
+Committed HEAD at audit: `34ee14a Add safe terminal SVN password fallback`
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -26,7 +26,7 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | relative/partial/full-URL layouts, globs, authors, filters, reversible ref sanitization | remaining encoding/platform edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, named-remote identity resolution, transactional recovery | broader migration policy |
-| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, askpass, svn+ssh E2E, strict HTTP DAV fixture | first equipped HTTP run, HTTPS, and real OpenSSH |
+| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | common editor contract, audited FFI callbacks, CLI/linked replay, askpass/no-cache TTY auth, svn+ssh E2E | default cache-miss prompt, equipped HTTP, HTTPS, real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
 | 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/configured-tunnel exact writes | HTTP(S)/real-SSH write-back and broader faults |
@@ -95,9 +95,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   the covered frozen Perl artifacts.
 - Copy-parent lookup and dependency ordering select the most specific overlapping
   mapping while retaining an empty root mapping as the final fallback.
-- Production auth resolves `GIT_ASKPASS` then `SSH_ASKPASS` without Git persistence.
-  Authenticated svnserve covers full-URL init, clone, and fetch in default/linked;
-  a configured `svn+ssh` tunnel validates exact `svnserve -t` read/write invocation.
+- Auth resolves explicit secrets, askpass, then no-cache TTY input without echo or
+  persistence; cache-enabled paths do not prompt, and default cache-miss retry remains.
+  Full-URL and configured `svn+ssh` paths validate exact read/write invocation.
 - Plain HTTP reads are separated from HTTPS and enabled through the common
   adapters. A loopback Apache DAV Basic-auth fixture covers denied no-credential
   clone, secret-safe errors, authenticated clone, and incremental fetch; strict CI
@@ -202,9 +202,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   only re-fetches/verifies; multi-entry faults neither duplicate nor skip commits.
   A visible Submitted snapshot avoids sink calls, and a lost Complete tombstone
   safely retries rebase without sink access.
-- SVN subprocesses are non-interactive and apply persisted/CLI auth and config
-  options consistently. Dcommit uses secret-safe askpass for authenticated
-  svnserve write and post-fetch without persisting credentials.
+- SVN subprocesses remain non-interactive. Dcommit reuses one askpass/no-cache
+  TTY secret across preflight/write/post-fetch; wrong input leaves zero revision
+  or journal, secrets stay out of output/config, and Windows echo restore is reviewed.
 - Configured `svn+ssh` dcommit completes preflight/write/post-fetch through the
   tracked remote; missing tunnel config and HTTP(S)/incompatible profiles fail early.
 - `dcommit --revision` fails before recovery or lookup rather than silently
@@ -238,9 +238,9 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 Verified on 2026-08-01:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 145/145; readonly follow-up 82/82
-- dcommit linear 67/67; config mapping 15/15; real SVN default 42/42
-- linked-feature core unit 165/165 and linked backend integration 33/33
+- `cargo test --workspace`; core lib 147/147; readonly follow-up 82/82
+- dcommit linear 68/68; config mapping 15/15; real SVN default 43/43
+- linked-feature core unit 179/179 and linked backend integration 33/33
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -278,13 +278,13 @@ Verified on 2026-08-01:
 - `e5eb148`, `5e0ea43`: semantic tracking validation at command safety boundaries.
 - `4143f8f`, `7b3f335`: cross-remote ref preflight and reset compatibility.
 - `2bfac94`, `5265ad9`, `62aa49c`, `4799765`, `f69dcdd`: safety/readonly batch.
-- `c8f2eb0`, `5fc16dd`, `25e7df4`, `8cc6135`: GC, dcommit targets, path info.
+- `c8f2eb0`, `5fc16dd`, `8cc6135`, `34ee14a`: GC, targets, info, terminal auth.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Implement safe terminal-auth fallback for authenticated clone/fetch/dcommit.
+1. Add cache-first auth-challenge retry for default-mode terminal prompting.
 2. Audit `useSvmProps`/`useSvnsyncProps` metadata compatibility.
 3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
 
