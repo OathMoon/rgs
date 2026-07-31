@@ -18,11 +18,12 @@ fs2.workspace = true
 hex.workspace = true
 md-5.workspace = true
 sha2.workspace = true
+tempfile.workspace = true
 thiserror.workspace = true
 url.workspace = true
 
-[dev-dependencies]
-tempfile.workspace = true
-
 [build-dependencies]
 vcpkg.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Storage_FileSystem"] }
