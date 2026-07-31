@@ -8,7 +8,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const MAGIC_V1: &str = "git-svn-rs-import-journal-v1";
-const MAGIC: &str = "git-svn-rs-import-journal-v2";
+const MAGIC_V2: &str = "git-svn-rs-import-journal-v2";
+const MAGIC: &str = "git-svn-rs-import-journal-v3";
 const JOURNAL_FILE: &str = "import-journal";
 const BATCH_MAGIC: &str = "git-svn-rs-import-batch-v1";
 const BATCH_JOURNAL_FILE: &str = "import-batch-journal";
@@ -21,24 +22,34 @@ pub struct ImportAppend {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRevMapUpdate {
+    pub path: PathBuf,
+    pub records: Vec<RevMapRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ImportPublication {
     pub refname: String,
     pub expected_old_oid: String,
     pub target_oid: String,
-    pub rev_map_path: PathBuf,
-    pub records: Vec<RevMapRecord>,
+    pub rev_maps: Vec<ImportRevMapUpdate>,
     pub append: Option<ImportAppend>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ImportJournal {
     publication: ImportPublication,
-    original_record_count: usize,
-    original_tail: Option<RevMapRecord>,
+    original_rev_maps: Vec<OriginalRevMapState>,
     append_original_len: usize,
     append_original_sha256: String,
     append_payload_len: usize,
     append_payload_sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct OriginalRevMapState {
+    record_count: usize,
+    tail: Option<RevMapRecord>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,8 +78,15 @@ fn complete_locked(git: &GitCli, publication: ImportPublication) -> Result<(), S
     }
     validate_publication(git, &publication)?;
     let format = git.object_format()?;
-    let existing = existing_records(&publication.rev_map_path, format)?;
-    validate_new_records(&existing, &publication.records)?;
+    let mut original_rev_maps = Vec::with_capacity(publication.rev_maps.len());
+    for update in &publication.rev_maps {
+        let existing = existing_records(&update.path, format)?;
+        validate_new_records(&existing, &update.records)?;
+        original_rev_maps.push(OriginalRevMapState {
+            record_count: existing.len(),
+            tail: existing.last().cloned(),
+        });
+    }
     let append_original = publication
         .append
         .as_ref()
@@ -85,8 +103,7 @@ fn complete_locked(git: &GitCli, publication: ImportPublication) -> Result<(), S
             .as_ref()
             .map_or_else(|| sha256(&[]), |append| sha256(&append.payload)),
         publication,
-        original_record_count: existing.len(),
-        original_tail: existing.last().cloned(),
+        original_rev_maps,
         append_original_len: append_original.len(),
         append_original_sha256: sha256(&append_original),
     };
@@ -216,6 +233,9 @@ pub fn finish_batch_if_complete(git: &GitCli) -> Result<bool, String> {
 
 fn finish(git: &GitCli, path: &Path, journal: &ImportJournal) -> Result<(), String> {
     let publication = &journal.publication;
+    if publication.rev_maps.len() != journal.original_rev_maps.len() {
+        return Err("import journal has inconsistent rev_map state count".to_string());
+    }
     validate_append_prefix(journal)?;
     let current = current_ref_oid(git, &publication.refname)?;
     if current == publication.expected_old_oid
@@ -234,23 +254,28 @@ fn finish(git: &GitCli, path: &Path, journal: &ImportJournal) -> Result<(), Stri
     }
 
     let format = git.object_format()?;
-    let existing = existing_records(&publication.rev_map_path, format)?;
-    let applied = validate_recovery_prefix(journal, &existing)?;
-    let mut rev_map = if publication.rev_map_path.exists() {
-        RevMap::open_existing(&publication.rev_map_path, format)?
-    } else {
-        RevMap::open(&publication.rev_map_path, format)?
-    };
-    for record in publication.records.iter().skip(applied) {
-        rev_map.append(record.revision, &record.object_id_hex)?;
-    }
+    for (update, original) in publication.rev_maps.iter().zip(&journal.original_rev_maps) {
+        let existing = existing_records(&update.path, format)?;
+        let applied = validate_recovery_prefix(update, original, &existing)?;
+        let mut rev_map = if update.path.exists() {
+            RevMap::open_existing(&update.path, format)?
+        } else {
+            RevMap::open(&update.path, format)?
+        };
+        for record in update.records.iter().skip(applied) {
+            rev_map.append(record.revision, &record.object_id_hex)?;
+        }
 
-    let final_records = rev_map.records()?;
-    let final_applied = validate_recovery_prefix(journal, &final_records)?;
-    if final_applied != publication.records.len()
-        || final_records.len() != final_record_count(journal)
-    {
-        return Err("import rev_map verification did not reach the journal target".to_string());
+        let final_records = rev_map.records()?;
+        let final_applied = validate_recovery_prefix(update, original, &final_records)?;
+        if final_applied != update.records.len()
+            || final_records.len() != final_record_count(update, original)
+        {
+            return Err(format!(
+                "import rev_map verification did not reach the journal target: {}",
+                update.path.display()
+            ));
+        }
     }
     let final_ref = current_ref_oid(git, &publication.refname)?;
     if final_ref != publication.target_oid {
@@ -264,57 +289,82 @@ fn finish(git: &GitCli, path: &Path, journal: &ImportJournal) -> Result<(), Stri
 }
 
 fn validate_publication(git: &GitCli, publication: &ImportPublication) -> Result<(), String> {
-    if publication.refname.is_empty() || publication.records.is_empty() {
+    if publication.refname.is_empty()
+        || publication.rev_maps.is_empty()
+        || publication
+            .rev_maps
+            .iter()
+            .any(|update| update.records.is_empty())
+    {
         return Err(
-            "import publication requires a ref and at least one rev_map record".to_string(),
+            "import publication requires a ref and at least one record for every rev_map"
+                .to_string(),
         );
     }
     let format = git.object_format()?;
     validate_oid(&publication.expected_old_oid, format)?;
     validate_oid(&publication.target_oid, format)?;
-    for record in &publication.records {
-        validate_oid(&record.object_id_hex, format)?;
-    }
-    if publication
-        .records
-        .iter()
-        .take(publication.records.len().saturating_sub(1))
-        .any(RevMapRecord::has_zero_object_id)
-    {
-        return Err(
-            "import publication may contain an all-zero record only at the end".to_string(),
-        );
-    }
-    let last_commit = publication
-        .records
-        .iter()
-        .rev()
-        .find(|record| !record.has_zero_object_id());
-    match last_commit {
-        Some(record) if record.object_id_hex != publication.target_oid => {
+    let root = svn_metadata_root(git)?;
+    let mut paths = BTreeSet::new();
+    for (index, update) in publication.rev_maps.iter().enumerate() {
+        for record in &update.records {
+            validate_oid(&record.object_id_hex, format)?;
+        }
+        if update
+            .records
+            .iter()
+            .take(update.records.len().saturating_sub(1))
+            .any(RevMapRecord::has_zero_object_id)
+        {
             return Err(
-                "import publication target does not match the final commit record".to_string(),
+                "import publication may contain an all-zero record only at the end".to_string(),
             );
         }
-        None if publication.expected_old_oid != publication.target_oid => {
-            return Err("zero-only import publication cannot change the tracking ref".to_string());
+        let last_commit = update
+            .records
+            .iter()
+            .rev()
+            .find(|record| !record.has_zero_object_id());
+        match last_commit {
+            Some(record) if index == 0 && record.object_id_hex != publication.target_oid => {
+                return Err(
+                    "import publication target does not match the final primary rev_map commit record"
+                        .to_string(),
+                );
+            }
+            None if index == 0 && publication.expected_old_oid != publication.target_oid => {
+                return Err(
+                    "zero-only import publication cannot change the tracking ref".to_string(),
+                );
+            }
+            None if index == 0 && publication.append.is_some() => {
+                return Err("zero-only import publication cannot append metadata".to_string());
+            }
+            None if index > 0 => {
+                return Err("secondary import rev_map requires a nonzero commit record".to_string());
+            }
+            _ => {}
         }
-        None if publication.append.is_some() => {
-            return Err("zero-only import publication cannot append metadata".to_string());
+        if !paths.insert(update.path.clone()) {
+            return Err(format!(
+                "import publication contains duplicate rev_map path: {}",
+                update.path.display()
+            ));
         }
-        _ => {}
+        if !update.path.starts_with(&root) {
+            return Err(format!(
+                "import journal rev_map path escapes SVN metadata root: {}",
+                update.path.display()
+            ));
+        }
+        ensure_no_symlink_components(&root, &update.path)?;
     }
-    let root = svn_metadata_root(git)?;
-    if !publication.rev_map_path.starts_with(&root) {
-        return Err(format!(
-            "import journal rev_map path escapes SVN metadata root: {}",
-            publication.rev_map_path.display()
-        ));
-    }
-    ensure_no_symlink_components(&root, &publication.rev_map_path)?;
     if let Some(append) = &publication.append {
         let expected = publication
-            .rev_map_path
+            .rev_maps
+            .first()
+            .expect("validated non-empty rev_maps")
+            .path
             .parent()
             .ok_or_else(|| "import rev_map path has no parent".to_string())?
             .join("unhandled.log");
@@ -510,48 +560,49 @@ fn validate_new_records(existing: &[RevMapRecord], records: &[RevMapRecord]) -> 
 }
 
 fn validate_recovery_prefix(
-    journal: &ImportJournal,
+    update: &ImportRevMapUpdate,
+    original: &OriginalRevMapState,
     existing: &[RevMapRecord],
 ) -> Result<usize, String> {
-    if (journal.original_record_count == 0) != journal.original_tail.is_none() {
+    if (original.record_count == 0) != original.tail.is_none() {
         return Err("import journal has inconsistent original rev_map state".to_string());
     }
-    if existing.len() < journal.original_record_count {
+    if existing.len() < original.record_count {
         return Err("import rev_map was truncated after the journal was written".to_string());
     }
-    let replaces_zero = journal
-        .original_tail
+    let replaces_zero = original
+        .tail
         .as_ref()
         .is_some_and(RevMapRecord::has_zero_object_id);
     if replaces_zero {
-        let replacement_index = journal.original_record_count - 1;
-        if existing.get(replacement_index) == journal.original_tail.as_ref() {
-            if existing.len() != journal.original_record_count {
+        let replacement_index = original.record_count - 1;
+        if existing.get(replacement_index) == original.tail.as_ref() {
+            if existing.len() != original.record_count {
                 return Err("import rev_map suffix does not match the journal".to_string());
             }
             return Ok(0);
         }
         let applied = &existing[replacement_index..];
-        if applied.len() > journal.publication.records.len()
+        if applied.len() > update.records.len()
             || applied
                 .iter()
-                .zip(&journal.publication.records)
+                .zip(&update.records)
                 .any(|(actual, expected)| actual != expected)
         {
             return Err("import rev_map replacement does not match the journal".to_string());
         }
         return Ok(applied.len());
     }
-    if journal.original_record_count > 0
-        && existing.get(journal.original_record_count - 1) != journal.original_tail.as_ref()
+    if original.record_count > 0
+        && existing.get(original.record_count - 1) != original.tail.as_ref()
     {
         return Err("import rev_map original tail does not match the journal".to_string());
     }
-    let appended = &existing[journal.original_record_count..];
-    if appended.len() > journal.publication.records.len()
+    let appended = &existing[original.record_count..];
+    if appended.len() > update.records.len()
         || appended
             .iter()
-            .zip(&journal.publication.records)
+            .zip(&update.records)
             .any(|(actual, expected)| actual != expected)
     {
         return Err("import rev_map suffix does not match the journal".to_string());
@@ -559,12 +610,12 @@ fn validate_recovery_prefix(
     Ok(appended.len())
 }
 
-fn final_record_count(journal: &ImportJournal) -> usize {
-    let replaces_zero = journal
-        .original_tail
+fn final_record_count(update: &ImportRevMapUpdate, original: &OriginalRevMapState) -> usize {
+    let replaces_zero = original
+        .tail
         .as_ref()
         .is_some_and(RevMapRecord::has_zero_object_id);
-    journal.original_record_count + journal.publication.records.len() - usize::from(replaces_zero)
+    original.record_count + update.records.len() - usize::from(replaces_zero)
 }
 
 fn existing_records(path: &Path, format: ObjectFormat) -> Result<Vec<RevMapRecord>, String> {
@@ -702,27 +753,33 @@ fn encode(journal: &ImportJournal) -> String {
         .map(|append| hex::encode(&append.payload))
         .unwrap_or_else(|| "-".to_string());
     let mut output = format!(
-        "{MAGIC}\nrefname\t{}\nexpected_old_oid\t{}\ntarget_oid\t{}\nrev_map_path\t{}\noriginal_record_count\t{}\noriginal_tail\t{}\nappend_path\t{}\nappend_original_len\t{}\nappend_original_sha256\t{}\nappend_payload_len\t{}\nappend_payload_sha256\t{}\nappend_payload\t{}\nrecord_count\t{}\n",
+        "{MAGIC}\nrefname\t{}\nexpected_old_oid\t{}\ntarget_oid\t{}\nappend_path\t{}\nappend_original_len\t{}\nappend_original_sha256\t{}\nappend_payload_len\t{}\nappend_payload_sha256\t{}\nappend_payload\t{}\nrev_map_count\t{}\n",
         escape(&publication.refname),
         publication.expected_old_oid,
         publication.target_oid,
-        escape(&publication.rev_map_path.to_string_lossy()),
-        journal.original_record_count,
-        journal
-            .original_tail
-            .as_ref()
-            .map(encode_record)
-            .unwrap_or_else(|| "-".to_string()),
         append_path,
         journal.append_original_len,
         journal.append_original_sha256,
         journal.append_payload_len,
         journal.append_payload_sha256,
         append_payload,
-        publication.records.len()
+        publication.rev_maps.len()
     );
-    for record in &publication.records {
-        output.push_str(&format!("record\t{}\n", encode_record(record)));
+    for (update, original) in publication.rev_maps.iter().zip(&journal.original_rev_maps) {
+        output.push_str(&format!(
+            "rev_map_path\t{}\noriginal_record_count\t{}\noriginal_tail\t{}\nrecord_count\t{}\n",
+            escape(&update.path.to_string_lossy()),
+            original.record_count,
+            original
+                .tail
+                .as_ref()
+                .map(encode_record)
+                .unwrap_or_else(|| "-".to_string()),
+            update.records.len()
+        ));
+        for record in &update.records {
+            output.push_str(&format!("record\t{}\n", encode_record(record)));
+        }
     }
     output
 }
@@ -736,19 +793,24 @@ fn load(path: &Path) -> Result<Option<ImportJournal>, String> {
     let version = lines
         .next()
         .ok_or_else(|| "invalid import journal header".to_string())?;
-    if version != MAGIC && version != MAGIC_V1 {
+    if version != MAGIC && version != MAGIC_V2 && version != MAGIC_V1 {
         return Err("invalid import journal header".to_string());
     }
     let refname = unescape(field(&mut lines, "refname")?)?;
     let expected_old_oid = field(&mut lines, "expected_old_oid")?.to_string();
     let target_oid = field(&mut lines, "target_oid")?.to_string();
-    let rev_map_path = PathBuf::from(unescape(field(&mut lines, "rev_map_path")?)?);
-    let original_record_count = parse_usize(field(&mut lines, "original_record_count")?)?;
-    let tail = field(&mut lines, "original_tail")?;
-    let original_tail = if tail == "-" {
+    let legacy_rev_map = if version == MAGIC {
         None
     } else {
-        Some(decode_record(tail)?)
+        let path = PathBuf::from(unescape(field(&mut lines, "rev_map_path")?)?);
+        let record_count = parse_usize(field(&mut lines, "original_record_count")?)?;
+        let tail = field(&mut lines, "original_tail")?;
+        let tail = if tail == "-" {
+            None
+        } else {
+            Some(decode_record(tail)?)
+        };
+        Some((path, OriginalRevMapState { record_count, tail }))
     };
     let (
         append,
@@ -756,7 +818,7 @@ fn load(path: &Path) -> Result<Option<ImportJournal>, String> {
         append_original_sha256,
         append_payload_len,
         append_payload_sha256,
-    ) = if version == MAGIC {
+    ) = if version == MAGIC || version == MAGIC_V2 {
         let append_path = field(&mut lines, "append_path")?;
         let append_original_len = parse_usize(field(&mut lines, "append_original_len")?)?;
         let append_original_sha256 = field(&mut lines, "append_original_sha256")?.to_string();
@@ -783,11 +845,36 @@ fn load(path: &Path) -> Result<Option<ImportJournal>, String> {
     } else {
         (None, 0, sha256(&[]), 0, sha256(&[]))
     };
-    let record_count = parse_usize(field(&mut lines, "record_count")?)?;
-    let mut records = Vec::with_capacity(record_count);
-    for _ in 0..record_count {
-        records.push(decode_record(field(&mut lines, "record")?)?);
-    }
+    let (rev_maps, original_rev_maps) = if let Some((path, original)) = legacy_rev_map {
+        let record_count = parse_usize(field(&mut lines, "record_count")?)?;
+        let mut records = Vec::with_capacity(record_count);
+        for _ in 0..record_count {
+            records.push(decode_record(field(&mut lines, "record")?)?);
+        }
+        (vec![ImportRevMapUpdate { path, records }], vec![original])
+    } else {
+        let rev_map_count = parse_usize(field(&mut lines, "rev_map_count")?)?;
+        let mut rev_maps = Vec::with_capacity(rev_map_count);
+        let mut originals = Vec::with_capacity(rev_map_count);
+        for _ in 0..rev_map_count {
+            let path = PathBuf::from(unescape(field(&mut lines, "rev_map_path")?)?);
+            let record_count = parse_usize(field(&mut lines, "original_record_count")?)?;
+            let tail = field(&mut lines, "original_tail")?;
+            let tail = if tail == "-" {
+                None
+            } else {
+                Some(decode_record(tail)?)
+            };
+            let update_count = parse_usize(field(&mut lines, "record_count")?)?;
+            let mut records = Vec::with_capacity(update_count);
+            for _ in 0..update_count {
+                records.push(decode_record(field(&mut lines, "record")?)?);
+            }
+            rev_maps.push(ImportRevMapUpdate { path, records });
+            originals.push(OriginalRevMapState { record_count, tail });
+        }
+        (rev_maps, originals)
+    };
     if lines.next().is_some() {
         return Err("import journal contains trailing data".to_string());
     }
@@ -796,12 +883,10 @@ fn load(path: &Path) -> Result<Option<ImportJournal>, String> {
             refname,
             expected_old_oid,
             target_oid,
-            rev_map_path,
-            records,
+            rev_maps,
             append,
         },
-        original_record_count,
-        original_tail,
+        original_rev_maps,
         append_original_len,
         append_original_sha256,
         append_payload_len,
@@ -946,10 +1031,12 @@ mod tests {
             refname: f.refname.clone(),
             expected_old_oid: f.old.clone(),
             target_oid: f.target.clone(),
-            rev_map_path: f.rev_map.clone(),
-            records: vec![RevMapRecord {
-                revision: 1,
-                object_id_hex: f.target.clone(),
+            rev_maps: vec![ImportRevMapUpdate {
+                path: f.rev_map.clone(),
+                records: vec![RevMapRecord {
+                    revision: 1,
+                    object_id_hex: f.target.clone(),
+                }],
             }],
             append: None,
         }
@@ -958,13 +1045,32 @@ mod tests {
     fn journal_for(f: &Fixture) -> ImportJournal {
         ImportJournal {
             publication: publication(f),
-            original_record_count: 0,
-            original_tail: None,
+            original_rev_maps: vec![OriginalRevMapState {
+                record_count: 0,
+                tail: None,
+            }],
             append_original_len: 0,
             append_original_sha256: sha256(&[]),
             append_payload_len: 0,
             append_payload_sha256: sha256(&[]),
         }
+    }
+
+    fn two_map_journal(f: &Fixture) -> (ImportJournal, PathBuf) {
+        let mut journal = journal_for(f);
+        let second = f.rev_map.with_file_name(".rev_map.source-uuid");
+        journal.publication.rev_maps.push(ImportRevMapUpdate {
+            path: second.clone(),
+            records: vec![RevMapRecord {
+                revision: 10,
+                object_id_hex: f.target.clone(),
+            }],
+        });
+        journal.original_rev_maps.push(OriginalRevMapState {
+            record_count: 0,
+            tail: None,
+        });
+        (journal, second)
     }
 
     fn journal_with_append(f: &Fixture, original: &[u8], payload: &[u8]) -> ImportJournal {
@@ -975,8 +1081,10 @@ mod tests {
         });
         ImportJournal {
             publication,
-            original_record_count: 0,
-            original_tail: None,
+            original_rev_maps: vec![OriginalRevMapState {
+                record_count: 0,
+                tail: None,
+            }],
             append_original_len: original.len(),
             append_original_sha256: sha256(original),
             append_payload_len: payload.len(),
@@ -989,10 +1097,12 @@ mod tests {
             refname: f.refname.clone(),
             expected_old_oid: expected_oid.to_string(),
             target_oid: expected_oid.to_string(),
-            rev_map_path: f.rev_map.clone(),
-            records: vec![RevMapRecord {
-                revision,
-                object_id_hex: "0".repeat(40),
+            rev_maps: vec![ImportRevMapUpdate {
+                path: f.rev_map.clone(),
+                records: vec![RevMapRecord {
+                    revision,
+                    object_id_hex: "0".repeat(40),
+                }],
             }],
             append: None,
         }
@@ -1017,7 +1127,7 @@ mod tests {
     fn recovers_when_ref_is_already_target_and_map_is_partial() {
         let f = fixture();
         let mut journal = journal_for(&f);
-        journal.publication.records.push(RevMapRecord {
+        journal.publication.rev_maps[0].records.push(RevMapRecord {
             revision: 2,
             object_id_hex: f.other.clone(),
         });
@@ -1059,6 +1169,128 @@ mod tests {
             .records()
             .unwrap();
         assert_eq!(records.len(), 1);
+    }
+
+    #[test]
+    fn recovers_second_rev_map_after_first_map_was_published() {
+        let f = fixture();
+        let (journal, second) = two_map_journal(&f);
+        save(&journal_path(&f.git).unwrap(), &journal).unwrap();
+        f.git
+            .update_ref_expected(&f.refname, &f.target, &f.old)
+            .unwrap();
+        RevMap::open(&f.rev_map, ObjectFormat::Sha1)
+            .unwrap()
+            .append(1, &f.target)
+            .unwrap();
+
+        assert!(recover_pending(&f.git).unwrap());
+        assert_eq!(
+            RevMap::open_existing(&second, ObjectFormat::Sha1)
+                .unwrap()
+                .get(10)
+                .unwrap(),
+            Some(f.target.clone())
+        );
+        assert!(!recover_pending(&f.git).unwrap());
+        assert_eq!(
+            RevMap::open_existing(&f.rev_map, ObjectFormat::Sha1)
+                .unwrap()
+                .records()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn secondary_rev_map_may_end_before_the_primary_target() {
+        let f = fixture();
+        let mut publication = publication(&f);
+        publication.rev_maps[0].records.insert(
+            0,
+            RevMapRecord {
+                revision: 1,
+                object_id_hex: f.old.clone(),
+            },
+        );
+        publication.rev_maps[0].records[1].revision = 2;
+        let second = f.rev_map.with_file_name(".rev_map.source-uuid");
+        publication.rev_maps.push(ImportRevMapUpdate {
+            path: second.clone(),
+            records: vec![RevMapRecord {
+                revision: 10,
+                object_id_hex: f.old.clone(),
+            }],
+        });
+
+        complete(&f.git, publication).unwrap();
+
+        assert_eq!(current_ref_oid(&f.git, &f.refname).unwrap(), f.target);
+        assert_eq!(
+            RevMap::open_existing(second, ObjectFormat::Sha1)
+                .unwrap()
+                .get(10)
+                .unwrap(),
+            Some(f.old)
+        );
+    }
+
+    #[test]
+    fn tampered_second_rev_map_fails_closed_with_journal_preserved() {
+        let f = fixture();
+        let (journal, second) = two_map_journal(&f);
+        save(&journal_path(&f.git).unwrap(), &journal).unwrap();
+        f.git
+            .update_ref_expected(&f.refname, &f.target, &f.old)
+            .unwrap();
+        RevMap::open(&f.rev_map, ObjectFormat::Sha1)
+            .unwrap()
+            .append(1, &f.target)
+            .unwrap();
+        RevMap::open(&second, ObjectFormat::Sha1)
+            .unwrap()
+            .append(10, &f.other)
+            .unwrap();
+
+        let error = recover_pending(&f.git).unwrap_err();
+
+        assert!(error.contains("suffix does not match"));
+        assert!(journal_path(&f.git).unwrap().exists());
+        assert_eq!(current_ref_oid(&f.git, &f.refname).unwrap(), f.target);
+        assert_eq!(
+            RevMap::open_existing(&f.rev_map, ObjectFormat::Sha1)
+                .unwrap()
+                .get(1)
+                .unwrap(),
+            Some(f.target)
+        );
+    }
+
+    #[test]
+    fn loads_and_recovers_v2_single_map_journal() {
+        let f = fixture();
+        let empty_hash = sha256(&[]);
+        let text = format!(
+            "{MAGIC_V2}\nrefname\t{}\nexpected_old_oid\t{}\ntarget_oid\t{}\nrev_map_path\t{}\noriginal_record_count\t0\noriginal_tail\t-\nappend_path\t-\nappend_original_len\t0\nappend_original_sha256\t{empty_hash}\nappend_payload_len\t0\nappend_payload_sha256\t{empty_hash}\nappend_payload\t-\nrecord_count\t1\nrecord\t1:{}\n",
+            escape(&f.refname),
+            f.old,
+            f.target,
+            escape(&f.rev_map.to_string_lossy()),
+            f.target,
+        );
+        let path = journal_path(&f.git).unwrap();
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, text).unwrap();
+
+        assert!(recover_pending(&f.git).unwrap());
+        assert_eq!(
+            RevMap::open_existing(&f.rev_map, ObjectFormat::Sha1)
+                .unwrap()
+                .get(1)
+                .unwrap(),
+            Some(f.target)
+        );
     }
 
     #[test]
@@ -1105,20 +1337,24 @@ mod tests {
             refname: f.refname.clone(),
             expected_old_oid: f.old.clone(),
             target_oid: f.target.clone(),
-            rev_map_path: f.rev_map.clone(),
-            records: vec![RevMapRecord {
-                revision: 50,
-                object_id_hex: f.target.clone(),
+            rev_maps: vec![ImportRevMapUpdate {
+                path: f.rev_map.clone(),
+                records: vec![RevMapRecord {
+                    revision: 50,
+                    object_id_hex: f.target.clone(),
+                }],
             }],
             append: None,
         };
         let journal = ImportJournal {
             publication,
-            original_record_count: 2,
-            original_tail: Some(RevMapRecord {
-                revision: 100,
-                object_id_hex: zero,
-            }),
+            original_rev_maps: vec![OriginalRevMapState {
+                record_count: 2,
+                tail: Some(RevMapRecord {
+                    revision: 100,
+                    object_id_hex: zero,
+                }),
+            }],
             append_original_len: 0,
             append_original_sha256: sha256(&[]),
             append_payload_len: 0,
@@ -1149,26 +1385,30 @@ mod tests {
             refname: f.refname.clone(),
             expected_old_oid: f.old.clone(),
             target_oid: f.other.clone(),
-            rev_map_path: f.rev_map.clone(),
-            records: vec![
-                RevMapRecord {
-                    revision: 50,
-                    object_id_hex: f.target.clone(),
-                },
-                RevMapRecord {
-                    revision: 60,
-                    object_id_hex: f.other.clone(),
-                },
-            ],
+            rev_maps: vec![ImportRevMapUpdate {
+                path: f.rev_map.clone(),
+                records: vec![
+                    RevMapRecord {
+                        revision: 50,
+                        object_id_hex: f.target.clone(),
+                    },
+                    RevMapRecord {
+                        revision: 60,
+                        object_id_hex: f.other.clone(),
+                    },
+                ],
+            }],
             append: None,
         };
         let journal = ImportJournal {
             publication,
-            original_record_count: 2,
-            original_tail: Some(RevMapRecord {
-                revision: 100,
-                object_id_hex: zero,
-            }),
+            original_rev_maps: vec![OriginalRevMapState {
+                record_count: 2,
+                tail: Some(RevMapRecord {
+                    revision: 100,
+                    object_id_hex: zero,
+                }),
+            }],
             append_original_len: 0,
             append_original_sha256: sha256(&[]),
             append_payload_len: 0,

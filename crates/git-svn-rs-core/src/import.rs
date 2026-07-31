@@ -12,7 +12,7 @@ use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::glob_spec::GlobSpec;
 use crate::import_transaction::{
-    ImportAppend, ImportPublication, begin_or_resume_batch,
+    ImportAppend, ImportPublication, ImportRevMapUpdate, begin_or_resume_batch,
     complete as complete_import_publication, finish_batch_if_complete,
     mark_batch_mapping_completed,
 };
@@ -2086,10 +2086,12 @@ fn publish_scan_marker(
             refname: refname.to_string(),
             expected_old_oid: current_oid.clone(),
             target_oid: current_oid,
-            rev_map_path: rev_map_path(git, refname, uuid)?,
-            records: vec![RevMapRecord {
-                revision: scanned_end,
-                object_id_hex: zero,
+            rev_maps: vec![ImportRevMapUpdate {
+                path: rev_map_path(git, refname, uuid)?,
+                records: vec![RevMapRecord {
+                    revision: scanned_end,
+                    object_id_hex: zero,
+                }],
             }],
             append: None,
         },
@@ -2146,8 +2148,10 @@ fn publish_imported_revisions(
             refname: refname.to_string(),
             expected_old_oid,
             target_oid,
-            rev_map_path: rev_map_path(git, refname, uuid)?,
-            records,
+            rev_maps: vec![ImportRevMapUpdate {
+                path: rev_map_path(git, refname, uuid)?,
+                records,
+            }],
             append,
         },
     )
