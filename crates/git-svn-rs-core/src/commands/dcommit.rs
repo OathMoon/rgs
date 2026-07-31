@@ -21,7 +21,7 @@ use crate::git::{GitCli, GitCommitSummary};
 use crate::git_svn_id::GitSvnId;
 use crate::rev_map::RevMap;
 use crate::svn::CommitRecord;
-use crate::svn::auth::{AuthOperation, prompted_password};
+use crate::svn::auth::{AuthOperation, prompted_credentials};
 use crate::svn::mock::MockSvnBackend;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1183,14 +1183,16 @@ fn resolved_dcommit_svn_options(
     );
     if options.password.is_none()
         && crate::path_url::svn_url_profile(target_url) == crate::path_url::SvnUrlProfile::Svn
-    {
-        options.password = prompted_password(
+        && let Some(credentials) = prompted_credentials(
             target_url,
             options.username.as_deref(),
             options.config_dir.as_deref(),
             options.no_auth_cache,
             AuthOperation::Write,
-        )?;
+        )?
+    {
+        options.username = Some(credentials.username);
+        options.password = Some(credentials.password);
     }
     if target_url.starts_with("file://") {
         options.username = None;

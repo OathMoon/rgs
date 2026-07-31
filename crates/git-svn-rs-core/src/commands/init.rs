@@ -9,7 +9,7 @@ use crate::path_url::{
     SvnUrlProfile, canonicalize_url, join_paths, repository_relative_url_path, svn_url_profile,
     validate_fetch_url,
 };
-use crate::svn::auth::{AuthOperation, prompted_password};
+use crate::svn::auth::{AuthOperation, prompted_credentials};
 use crate::svn::cli::SvnCliBackend;
 
 pub fn run(args: InitArgs) -> Result<(), String> {
@@ -135,12 +135,12 @@ pub(crate) fn normalize_layout_args(
             if let Some(username) = &shared.username {
                 backend = backend.with_username(username);
             }
-            let askpass = if shared.password.is_none()
+            let prompted = if shared.password.is_none()
                 && matches!(
                     svn_url_profile(url),
                     SvnUrlProfile::Svn | SvnUrlProfile::Http
                 ) {
-                prompted_password(
+                prompted_credentials(
                     url,
                     shared.username.as_deref(),
                     shared.config_dir.as_deref(),
@@ -150,7 +150,16 @@ pub(crate) fn normalize_layout_args(
             } else {
                 None
             };
-            if let Some(password) = shared.password.as_ref().or(askpass.as_ref()) {
+            if shared.username.is_none()
+                && let Some(credentials) = prompted.as_ref()
+            {
+                backend = backend.with_username(&credentials.username);
+            }
+            if let Some(password) = shared
+                .password
+                .as_ref()
+                .or_else(|| prompted.as_ref().map(|credentials| &credentials.password))
+            {
                 backend = backend.with_password(password);
             }
             if let Some(config_dir) = &shared.config_dir {

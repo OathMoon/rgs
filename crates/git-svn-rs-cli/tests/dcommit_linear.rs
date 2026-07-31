@@ -1970,13 +1970,7 @@ fn dcommit_uses_git_askpass_for_authenticated_svnserve_write_and_fetch() {
         .current_dir(&work)
         .env("GIT_ASKPASS", &askpass)
         .env("GIT_SVN_RS_ASKPASS_LOG", &askpass_log)
-        .args([
-            "dcommit",
-            "--no-rebase",
-            "--username",
-            "alice",
-            "--no-auth-cache",
-        ])
+        .args(["dcommit", "--no-rebase", "--no-auth-cache"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("SVN askpass exited"))
@@ -1990,7 +1984,7 @@ fn dcommit_uses_git_askpass_for_authenticated_svnserve_write_and_fetch() {
 
     std::fs::write(
         &askpass,
-        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$GIT_SVN_RS_ASKPASS_LOG\"\nprintf 'secret\\n'\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$GIT_SVN_RS_ASKPASS_LOG\"\ncase \"$1\" in\n  Username*) printf 'alice\\n' ;;\n  *) printf 'secret\\n' ;;\nesac\n",
     )
     .unwrap();
     Command::cargo_bin("git-svn-rs")
@@ -1998,13 +1992,7 @@ fn dcommit_uses_git_askpass_for_authenticated_svnserve_write_and_fetch() {
         .current_dir(&work)
         .env("GIT_ASKPASS", &askpass)
         .env("GIT_SVN_RS_ASKPASS_LOG", &askpass_log)
-        .args([
-            "dcommit",
-            "--no-rebase",
-            "--username",
-            "alice",
-            "--no-auth-cache",
-        ])
+        .args(["dcommit", "--no-rebase", "--no-auth-cache"])
         .assert()
         .success()
         .stdout(predicate::str::contains("askpass authenticated dcommit"));
@@ -2017,8 +2005,21 @@ fn dcommit_uses_git_askpass_for_authenticated_svnserve_write_and_fetch() {
         "authenticated by askpass\n"
     );
     let prompts = std::fs::read_to_string(askpass_log).unwrap();
-    assert_eq!(prompts.lines().count(), 3);
-    assert!(prompts.lines().all(|line| line.contains("alice@svn://")));
+    assert_eq!(prompts.lines().count(), 5);
+    assert_eq!(
+        prompts
+            .lines()
+            .filter(|line| line.starts_with("Username"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        prompts
+            .lines()
+            .filter(|line| line.contains("alice@svn://"))
+            .count(),
+        2
+    );
     assert!(!prompts.contains("secret"));
     let git_config = std::fs::read_to_string(work.join(".git/config")).unwrap();
     assert!(!git_config.contains("secret"));

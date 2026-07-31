@@ -47,19 +47,18 @@ impl AskpassAuthPrompt {
 
 impl AuthPrompt for AskpassAuthPrompt {
     fn simple(&self, request: AuthRequest) -> Result<Credentials, String> {
-        let username = request.default_username.unwrap_or_default();
         let realm = request.realm.unwrap_or_else(|| "SVN".to_string());
-        let output = Command::new(&self.program)
-            .arg(format!("Password for '{username}@{realm}': "))
-            .output()
-            .map_err(|error| format!("SVN askpass failed to start: {error}"))?;
-        if !output.status.success() {
-            return Err(format!("SVN askpass exited with status {}", output.status));
-        }
-        let password = String::from_utf8(output.stdout)
-            .map_err(|_| "SVN askpass returned a non-UTF-8 password".to_string())?
-            .trim_end_matches(['\r', '\n'])
-            .to_string();
+        let username = match request.default_username {
+            Some(username) => username,
+            None => {
+                let username = self.answer(&format!("Username for '{realm}': "), "username")?;
+                if username.is_empty() {
+                    return Err("SVN askpass returned an empty username".to_string());
+                }
+                username
+            }
+        };
+        let password = self.answer(&format!("Password for '{username}@{realm}': "), "password")?;
         if password.is_empty() {
             return Err("SVN askpass returned an empty password".to_string());
         }
@@ -71,13 +70,37 @@ impl AuthPrompt for AskpassAuthPrompt {
     }
 }
 
+impl AskpassAuthPrompt {
+    fn answer(&self, prompt: &str, kind: &str) -> Result<String, String> {
+        let output = Command::new(&self.program)
+            .arg(prompt)
+            .output()
+            .map_err(|error| format!("SVN askpass failed to start: {error}"))?;
+        if !output.status.success() {
+            return Err(format!("SVN askpass exited with status {}", output.status));
+        }
+        String::from_utf8(output.stdout)
+            .map_err(|_| format!("SVN askpass returned a non-UTF-8 {kind}"))
+            .map(|answer| answer.trim_end_matches(['\r', '\n']).to_string())
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct TerminalAuthPrompt;
 
 impl AuthPrompt for TerminalAuthPrompt {
     fn simple(&self, request: AuthRequest) -> Result<Credentials, String> {
-        let username = request.default_username.unwrap_or_default();
         let realm = request.realm.unwrap_or_else(|| "SVN".to_string());
+        let username = match request.default_username {
+            Some(username) => username,
+            None => {
+                let username = read_terminal_username(&format!("Username for '{realm}': "))?;
+                if username.is_empty() {
+                    return Err("SVN terminal prompt returned an empty username".to_string());
+                }
+                username
+            }
+        };
         let password = read_terminal_password(&format!("Password for '{username}@{realm}': "))?;
         if password.is_empty() {
             return Err("SVN terminal prompt returned an empty password".to_string());
@@ -103,12 +126,20 @@ pub fn prompted_password(
     no_auth_cache: bool,
     operation: AuthOperation,
 ) -> Result<Option<String>, String> {
-    let Some(username) = username else {
-        return Ok(None);
-    };
+    prompted_credentials(realm, username, config_dir, no_auth_cache, operation)
+        .map(|credentials| credentials.map(|credentials| credentials.password))
+}
+
+pub fn prompted_credentials(
+    realm: &str,
+    username: Option<&str>,
+    config_dir: Option<&str>,
+    no_auth_cache: bool,
+    operation: AuthOperation,
+) -> Result<Option<Credentials>, String> {
     let askpass = AskpassAuthPrompt::from_environment();
     if let Some(askpass) = askpass.as_ref() {
-        return prompted_password_with(realm, username, no_auth_cache, Some(askpass), None);
+        return prompted_credentials_with(realm, username, no_auth_cache, Some(askpass), None);
     }
     if !terminal_prompt_enabled(
         std::io::stdin().is_terminal() && std::io::stderr().is_terminal(),
@@ -125,27 +156,27 @@ pub fn prompted_password(
         }
     }
     let terminal = TerminalAuthPrompt;
-    prompted_password_with(realm, username, no_auth_cache, None, Some(&terminal))
+    prompted_credentials_with(realm, username, no_auth_cache, None, Some(&terminal))
 }
 
-fn prompted_password_with(
+fn prompted_credentials_with(
     realm: &str,
-    username: &str,
+    username: Option<&str>,
     no_auth_cache: bool,
     askpass: Option<&dyn AuthPrompt>,
     terminal: Option<&dyn AuthPrompt>,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Credentials>, String> {
     let Some(prompt) = askpass.or(terminal) else {
         return Ok(None);
     };
     prompt
         .simple(AuthRequest {
             realm: Some(realm.to_string()),
-            default_username: Some(username.to_string()),
+            default_username: username.map(str::to_string),
             may_save: !no_auth_cache,
             no_auth_cache,
         })
-        .map(|credentials| Some(credentials.password))
+        .map(Some)
 }
 
 fn terminal_prompt_enabled(is_terminal: bool, setting: Option<&std::ffi::OsStr>) -> bool {
@@ -167,22 +198,22 @@ enum SvnReadProbe {
     Indeterminate,
 }
 
-fn probe_svn_read_access(realm: &str, username: &str, config_dir: Option<&str>) -> SvnReadProbe {
+fn probe_svn_read_access(
+    realm: &str,
+    username: Option<&str>,
+    config_dir: Option<&str>,
+) -> SvnReadProbe {
     let mut command = Command::new("svn");
     command.env("LC_ALL", "C").arg("--non-interactive");
     if let Some(config_dir) = config_dir {
         command.args(["--config-dir", config_dir]);
     }
+    if let Some(username) = username {
+        command.args(["--username", username]);
+    }
     let target = crate::svn::target_without_peg_revision(realm);
     let output = command
-        .args([
-            "--username",
-            username,
-            "info",
-            "--show-item",
-            "repos-root-url",
-            &target,
-        ])
+        .args(["info", "--show-item", "repos-root-url", &target])
         .output();
     match output {
         Ok(output) if output.status.success() => SvnReadProbe::Accessible,
@@ -205,6 +236,15 @@ fn is_svn_authentication_error(stderr: &[u8]) -> bool {
     ]
     .iter()
     .any(|needle| stderr.contains(needle))
+}
+
+fn read_terminal_username(prompt: &str) -> Result<String, String> {
+    write_terminal_prompt(prompt)?;
+    let mut username = String::new();
+    std::io::stdin()
+        .read_line(&mut username)
+        .map_err(|error| format!("failed to read SVN username from terminal: {error}"))?;
+    Ok(username.trim_end_matches(['\r', '\n']).to_string())
 }
 
 #[cfg(unix)]
@@ -377,7 +417,7 @@ impl AuthPrompt for MockAuthPrompt {
 #[cfg(test)]
 mod tests {
     use super::{
-        AskpassAuthPrompt, MockAuthPrompt, prompted_password_with, terminal_prompt_enabled,
+        AskpassAuthPrompt, MockAuthPrompt, prompted_credentials_with, terminal_prompt_enabled,
     };
     use std::ffi::{OsStr, OsString};
 
@@ -400,21 +440,41 @@ mod tests {
         let askpass = MockAuthPrompt::new().with_askpass_answer("askpass-secret");
         let terminal = MockAuthPrompt::new().with_password("terminal-secret");
         assert_eq!(
-            prompted_password_with("svn://repo", "alice", true, Some(&askpass), Some(&terminal),)
-                .unwrap()
-                .as_deref(),
-            Some("askpass-secret")
+            prompted_credentials_with(
+                "svn://repo",
+                Some("alice"),
+                true,
+                Some(&askpass),
+                Some(&terminal),
+            )
+            .unwrap()
+            .map(|credentials| credentials.password),
+            Some("askpass-secret".to_string())
         );
         assert_eq!(
-            prompted_password_with("svn://repo", "alice", true, None, Some(&terminal),)
+            prompted_credentials_with("svn://repo", Some("alice"), true, None, Some(&terminal),)
                 .unwrap()
-                .as_deref(),
-            Some("terminal-secret")
+                .map(|credentials| credentials.password),
+            Some("terminal-secret".to_string())
         );
         assert_eq!(
-            prompted_password_with("svn://repo", "alice", true, None, None).unwrap(),
+            prompted_credentials_with("svn://repo", Some("alice"), true, None, None).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn prompt_can_supply_a_missing_username() {
+        let prompt = MockAuthPrompt::new()
+            .with_username("alice")
+            .with_password("secret");
+        let credentials = prompted_credentials_with("svn://repo", None, false, Some(&prompt), None)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(credentials.username, "alice");
+        assert_eq!(credentials.password, "secret");
+        assert!(credentials.may_save);
     }
 
     #[test]

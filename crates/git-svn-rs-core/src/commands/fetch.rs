@@ -7,7 +7,7 @@ use crate::mapping::{MappingKind, RefMapping};
 use crate::path_url::{SvnUrlProfile, svn_url_profile};
 use crate::rev_map::RevMap;
 use crate::svn::SvnBackend;
-use crate::svn::auth::{AuthOperation, prompted_password};
+use crate::svn::auth::{AuthOperation, Credentials, prompted_credentials};
 use crate::svn::cli::SvnCliBackend;
 use crate::svn::mock::MockRaSession;
 use crate::svn::ra::RaSession;
@@ -406,19 +406,27 @@ fn configured_backend(
     config: &SvnRemoteConfig,
     shared: &SharedFetchArgs,
 ) -> Result<ConfiguredBackend, String> {
-    let password = configured_password(config, shared)?;
+    let prompted = prompted_fetch_credentials(config, shared)?;
+    let username = shared
+        .username
+        .as_ref()
+        .or(config.username.as_ref())
+        .or_else(|| prompted.as_ref().map(|credentials| &credentials.username));
+    let password = shared
+        .password
+        .as_ref()
+        .or_else(|| prompted.as_ref().map(|credentials| &credentials.password));
     #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
     {
         let mut backend = crate::svn::libsvn::LibSvnBackend::from_config(config);
         if let Some(config_dir) = &shared.config_dir {
             backend = backend.with_config_dir(config_dir);
         }
-        if let Some(username) = &shared.username {
+        if let Some(username) = username {
             backend = backend.with_username(username);
         }
-        if let Some(password) = &password {
-            backend = if let Some(username) = shared.username.as_ref().or(config.username.as_ref())
-            {
+        if let Some(password) = password {
+            backend = if let Some(username) = username {
                 backend.with_credentials(username, password)
             } else {
                 backend.with_password(password)
@@ -433,10 +441,10 @@ fn configured_backend(
     #[cfg(not(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked)))]
     {
         let mut backend = SvnCliBackend::from_config(config)?;
-        if let Some(username) = &shared.username {
+        if let Some(username) = username {
             backend = backend.with_username(username);
         }
-        if let Some(password) = &password {
+        if let Some(password) = password {
             backend = backend.with_password(password);
         }
         if let Some(config_dir) = &shared.config_dir {
@@ -449,12 +457,12 @@ fn configured_backend(
     }
 }
 
-fn configured_password(
+fn prompted_fetch_credentials(
     config: &SvnRemoteConfig,
     shared: &SharedFetchArgs,
-) -> Result<Option<String>, String> {
+) -> Result<Option<Credentials>, String> {
     if shared.password.is_some() {
-        return Ok(shared.password.clone());
+        return Ok(None);
     }
     if !matches!(
         svn_url_profile(&config.url),
@@ -462,7 +470,7 @@ fn configured_password(
     ) {
         return Ok(None);
     }
-    prompted_password(
+    prompted_credentials(
         &config.url,
         shared.username.as_deref().or(config.username.as_deref()),
         shared

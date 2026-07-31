@@ -1454,7 +1454,7 @@ fn clone_stdlayout_authenticated_svn_url_imports_with_password() {
 
 #[cfg(unix)]
 #[test]
-fn clone_and_fetch_authenticated_svn_url_use_git_askpass() {
+fn clone_and_fetch_authenticated_svn_url_prompt_for_username_and_password() {
     match require_svn_tools().and_then(|()| require_svnserve()) {
         Ok(()) => {}
         Err(SvnToolPolicy::Skip(message)) => {
@@ -1474,7 +1474,7 @@ fn clone_and_fetch_authenticated_svn_url_use_git_askpass() {
     let askpass_log = temp.path().join("askpass.log");
     std::fs::write(
         &askpass,
-        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$GIT_SVN_RS_ASKPASS_LOG\"\nprintf 'secret\\n'\n",
+        "#!/bin/sh\nprintf '%s\\n' \"$1\" >> \"$GIT_SVN_RS_ASKPASS_LOG\"\ncase \"$1\" in\n  Username*) printf 'alice\\n' ;;\n  *) printf 'secret\\n' ;;\nesac\n",
     )
     .unwrap();
     let mut permissions = std::fs::metadata(&askpass).unwrap().permissions();
@@ -1502,8 +1502,6 @@ fn clone_and_fetch_authenticated_svn_url_use_git_askpass() {
             &tags_url,
             "--prefix",
             "origin/",
-            "--username",
-            "alice",
             "--no-auth-cache",
         ])
         .assert()
@@ -1535,8 +1533,21 @@ fn clone_and_fetch_authenticated_svn_url_use_git_askpass() {
         "#!/bin/sh\necho askpass\n"
     );
     let prompts = std::fs::read_to_string(askpass_log).unwrap();
-    assert_eq!(prompts.lines().count(), 3);
-    assert!(prompts.lines().all(|line| line.contains("alice@svn://")));
+    assert_eq!(prompts.lines().count(), 6);
+    assert_eq!(
+        prompts
+            .lines()
+            .filter(|line| line.starts_with("Username"))
+            .count(),
+        3
+    );
+    assert_eq!(
+        prompts
+            .lines()
+            .filter(|line| line.contains("alice@svn://"))
+            .count(),
+        3
+    );
     assert!(!prompts.contains("secret"));
     let git_config = std::fs::read_to_string(work.join(".git/config")).unwrap();
     assert!(!git_config.contains("secret"));

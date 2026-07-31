@@ -67,6 +67,36 @@ fn askpass_program_receives_prompt_and_trims_only_line_endings() {
 
 #[cfg(unix)]
 #[test]
+fn askpass_requests_a_missing_username_before_the_password() {
+    let temp = tempfile::tempdir().unwrap();
+    let log = temp.path().join("prompts.log");
+    let script = write_askpass_script(
+        temp.path(),
+        "askpass-credentials",
+        &format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$1\" >> '{}'\ncase \"$1\" in\n  Username*) printf 'alice\\r\\n' ;;\n  *) printf 'secret\\n' ;;\nesac\n",
+            log.display()
+        ),
+    );
+    let creds = AskpassAuthPrompt::new(script)
+        .simple(AuthRequest {
+            realm: Some("svn://example/repo".to_string()),
+            default_username: None,
+            may_save: true,
+            no_auth_cache: false,
+        })
+        .unwrap();
+
+    assert_eq!(creds.username, "alice");
+    assert_eq!(creds.password, "secret");
+    assert_eq!(
+        std::fs::read_to_string(log).unwrap(),
+        "Username for 'svn://example/repo': \nPassword for 'alice@svn://example/repo': \n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn askpass_failure_and_empty_answer_are_secret_safe() {
     let temp = tempfile::tempdir().unwrap();
     let failing = write_askpass_script(
@@ -88,6 +118,16 @@ fn askpass_failure_and_empty_answer_are_secret_safe() {
             .unwrap_err()
             .contains("empty password")
     );
+
+    let empty_username =
+        write_askpass_script(temp.path(), "empty-username", "#!/bin/sh\nprintf '\\n'\n");
+    let error = AskpassAuthPrompt::new(empty_username)
+        .simple(AuthRequest {
+            default_username: None,
+            ..auth_request()
+        })
+        .unwrap_err();
+    assert!(error.contains("empty username"));
 }
 
 #[cfg(unix)]
