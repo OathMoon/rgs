@@ -769,6 +769,26 @@ pub fn run_with_pty_password(
     args: &[&str],
     password: &str,
 ) -> PtyCommandOutput {
+    run_with_pty(binary, current_dir, args, Some(password))
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub fn run_with_pty_without_prompt(
+    binary: &str,
+    current_dir: &Path,
+    args: &[&str],
+) -> PtyCommandOutput {
+    run_with_pty(binary, current_dir, args, None)
+}
+
+#[cfg(target_os = "linux")]
+fn run_with_pty(
+    binary: &str,
+    current_dir: &Path,
+    args: &[&str],
+    password: Option<&str>,
+) -> PtyCommandOutput {
     use std::io::{Read, Write};
     use std::process::Stdio;
     use std::time::Duration;
@@ -801,6 +821,10 @@ pub fn run_with_pty_password(
         if bytes[handled_through..].ends_with(b": ")
             && String::from_utf8_lossy(&bytes[handled_through..]).contains("Password for '")
         {
+            let Some(password) = password else {
+                child.kill().unwrap();
+                panic!("terminal password prompt was unexpectedly observed");
+            };
             std::thread::sleep(Duration::from_millis(50));
             writeln!(stdin, "{password}").unwrap();
             stdin.flush().unwrap();
@@ -816,9 +840,10 @@ pub fn run_with_pty_password(
         .unwrap()
         .read_to_end(&mut stderr)
         .unwrap();
-    assert!(
+    assert_eq!(
         handled_through > 0,
-        "terminal password prompt was not observed"
+        password.is_some(),
+        "terminal password prompt expectation was not met"
     );
     PtyCommandOutput {
         status,

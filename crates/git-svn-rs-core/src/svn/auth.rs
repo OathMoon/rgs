@@ -90,28 +90,42 @@ impl AuthPrompt for TerminalAuthPrompt {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AuthOperation {
+    Read,
+    Write,
+}
+
 pub fn prompted_password(
     realm: &str,
     username: Option<&str>,
+    config_dir: Option<&str>,
     no_auth_cache: bool,
+    operation: AuthOperation,
 ) -> Result<Option<String>, String> {
     let Some(username) = username else {
         return Ok(None);
     };
     let askpass = AskpassAuthPrompt::from_environment();
-    let terminal = terminal_prompt_enabled(
+    if let Some(askpass) = askpass.as_ref() {
+        return prompted_password_with(realm, username, no_auth_cache, Some(askpass), None);
+    }
+    if !terminal_prompt_enabled(
         std::io::stdin().is_terminal() && std::io::stderr().is_terminal(),
-        no_auth_cache,
         std::env::var_os("GIT_TERMINAL_PROMPT").as_deref(),
-    )
-    .then_some(TerminalAuthPrompt);
-    prompted_password_with(
-        realm,
-        username,
-        no_auth_cache,
-        askpass.as_ref().map(|prompt| prompt as &dyn AuthPrompt),
-        terminal.as_ref().map(|prompt| prompt as &dyn AuthPrompt),
-    )
+    ) {
+        return Ok(None);
+    }
+    if !no_auth_cache {
+        let probe = probe_svn_read_access(realm, username, config_dir);
+        match probe {
+            SvnReadProbe::Accessible if operation == AuthOperation::Read => return Ok(None),
+            SvnReadProbe::Indeterminate => return Ok(None),
+            SvnReadProbe::Accessible | SvnReadProbe::AuthenticationRequired => {}
+        }
+    }
+    let terminal = TerminalAuthPrompt;
+    prompted_password_with(realm, username, no_auth_cache, None, Some(&terminal))
 }
 
 fn prompted_password_with(
@@ -134,12 +148,8 @@ fn prompted_password_with(
         .map(|credentials| Some(credentials.password))
 }
 
-fn terminal_prompt_enabled(
-    is_terminal: bool,
-    no_auth_cache: bool,
-    setting: Option<&std::ffi::OsStr>,
-) -> bool {
-    if !is_terminal || !no_auth_cache {
+fn terminal_prompt_enabled(is_terminal: bool, setting: Option<&std::ffi::OsStr>) -> bool {
+    if !is_terminal {
         return false;
     }
     setting.is_none_or(|value| {
@@ -148,6 +158,53 @@ fn terminal_prompt_enabled(
             "0" | "false" | "no" | "off"
         )
     })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SvnReadProbe {
+    Accessible,
+    AuthenticationRequired,
+    Indeterminate,
+}
+
+fn probe_svn_read_access(realm: &str, username: &str, config_dir: Option<&str>) -> SvnReadProbe {
+    let mut command = Command::new("svn");
+    command.env("LC_ALL", "C").arg("--non-interactive");
+    if let Some(config_dir) = config_dir {
+        command.args(["--config-dir", config_dir]);
+    }
+    let target = crate::svn::target_without_peg_revision(realm);
+    let output = command
+        .args([
+            "--username",
+            username,
+            "info",
+            "--show-item",
+            "repos-root-url",
+            &target,
+        ])
+        .output();
+    match output {
+        Ok(output) if output.status.success() => SvnReadProbe::Accessible,
+        Ok(output) if is_svn_authentication_error(&output.stderr) => {
+            SvnReadProbe::AuthenticationRequired
+        }
+        Ok(_) | Err(_) => SvnReadProbe::Indeterminate,
+    }
+}
+
+fn is_svn_authentication_error(stderr: &[u8]) -> bool {
+    let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
+    [
+        "e170001",
+        "e215004",
+        "authentication failed",
+        "authorization failed",
+        "could not authenticate",
+        "can't get username or password",
+    ]
+    .iter()
+    .any(|needle| stderr.contains(needle))
 }
 
 #[cfg(unix)]
@@ -362,16 +419,25 @@ mod tests {
 
     #[test]
     fn terminal_prompt_requires_a_tty_and_honors_git_disable_values() {
-        assert!(!terminal_prompt_enabled(false, true, None));
-        assert!(!terminal_prompt_enabled(true, false, None));
-        assert!(terminal_prompt_enabled(true, true, None));
-        assert!(terminal_prompt_enabled(true, true, Some(OsStr::new("1"))));
+        assert!(!terminal_prompt_enabled(false, None));
+        assert!(terminal_prompt_enabled(true, None));
+        assert!(terminal_prompt_enabled(true, Some(OsStr::new("1"))));
         for value in ["0", "false", "NO", "Off"] {
-            assert!(!terminal_prompt_enabled(
-                true,
-                true,
-                Some(OsStr::new(value))
-            ));
+            assert!(!terminal_prompt_enabled(true, Some(OsStr::new(value))));
         }
+    }
+
+    #[test]
+    fn recognizes_svn_authentication_failures_without_matching_other_errors() {
+        for message in [
+            "svn: E170001: Can't get username or password",
+            "svn: E215004: Authentication failed and interactive prompting is disabled",
+            "Authorization failed",
+        ] {
+            assert!(super::is_svn_authentication_error(message.as_bytes()));
+        }
+        assert!(!super::is_svn_authentication_error(
+            b"svn: E170013: Unable to connect to a repository"
+        ));
     }
 }

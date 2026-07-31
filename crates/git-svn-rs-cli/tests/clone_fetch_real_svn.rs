@@ -7,13 +7,13 @@ use predicates::prelude::PredicateBooleanExt;
 #[path = "../../git-svn-rs-core/tests/support/svn_fixture.rs"]
 mod svn_fixture;
 
-#[cfg(target_os = "linux")]
-use svn_fixture::run_with_pty_password;
 #[cfg(unix)]
 use svn_fixture::{HttpDav, require_http_dav};
 use svn_fixture::{
     StandardSvnFixture, SvnServe, SvnToolPolicy, require_svn_tools, require_svnserve,
 };
+#[cfg(target_os = "linux")]
+use svn_fixture::{run_with_pty_password, run_with_pty_without_prompt};
 
 #[test]
 fn clone_and_fetch_peg_sensitive_file_url() {
@@ -1211,6 +1211,12 @@ fn clone_and_fetch_authenticated_svn_url_use_terminal_password_prompt() {
     }
 
     let temp = tempfile::tempdir().unwrap();
+    let clone_config = temp.path().join("clone-svn-config");
+    let fetch_config = temp.path().join("fetch-svn-config");
+    std::fs::create_dir(&clone_config).unwrap();
+    std::fs::create_dir(&fetch_config).unwrap();
+    let clone_config = clone_config.to_str().unwrap();
+    let fetch_config = fetch_config.to_str().unwrap();
     let fixture = StandardSvnFixture::create().unwrap();
     fixture.require_basic_auth("alice", "secret").unwrap();
     let server = SvnServe::start(fixture.root()).unwrap();
@@ -1224,7 +1230,8 @@ fn clone_and_fetch_authenticated_svn_url_use_terminal_password_prompt() {
             "--stdlayout",
             "--username",
             "alice",
-            "--no-auth-cache",
+            "--config-dir",
+            clone_config,
         ],
         "secret",
     );
@@ -1243,7 +1250,7 @@ fn clone_and_fetch_authenticated_svn_url_use_terminal_password_prompt() {
     let output = run_with_pty_password(
         env!("CARGO_BIN_EXE_git-svn-rs"),
         &work,
-        &["fetch", "--no-auth-cache"],
+        &["fetch", "--config-dir", fetch_config],
         "secret",
     );
     assert!(output.status.success(), "terminal fetch failed: {output:?}");
@@ -1255,6 +1262,46 @@ fn clone_and_fetch_authenticated_svn_url_use_terminal_password_prompt() {
     assert_ne!(before, after);
     let config = std::fs::read_to_string(work.join(".git/config")).unwrap();
     assert!(!config.contains("secret"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clone_public_svn_url_with_username_does_not_prompt_terminal() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    if std::process::Command::new("script")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("script(1) is unavailable; skipping terminal auth coverage");
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let output = run_with_pty_without_prompt(
+        env!("CARGO_BIN_EXE_git-svn-rs"),
+        temp.path(),
+        &[
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+        ],
+    );
+    assert!(output.status.success(), "public clone failed: {output:?}");
+    assert!(!output.stdout.contains("Password for '"));
+    assert!(!output.stderr.contains("Password for '"));
 }
 
 #[test]

@@ -1951,6 +1951,12 @@ fn dcommit_uses_terminal_password_without_leaking_or_writing_before_auth() {
     fixture.require_read_write_auth("alice", "secret").unwrap();
     let server = SvnServe::start(fixture.root()).unwrap();
     let parent = tempfile::tempdir().unwrap();
+    let clone_config = parent.path().join("clone-svn-config");
+    let dcommit_config = parent.path().join("dcommit-svn-config");
+    std::fs::create_dir(&clone_config).unwrap();
+    std::fs::create_dir(&dcommit_config).unwrap();
+    let clone_config = clone_config.to_str().unwrap();
+    let dcommit_config = dcommit_config.to_str().unwrap();
     let work = parent.path().join("work");
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -1964,7 +1970,8 @@ fn dcommit_uses_terminal_password_without_leaking_or_writing_before_auth() {
             "alice",
             "--password",
             "secret",
-            "--no-auth-cache",
+            "--config-dir",
+            clone_config,
         ])
         .assert()
         .success();
@@ -1990,7 +1997,8 @@ fn dcommit_uses_terminal_password_without_leaking_or_writing_before_auth() {
             "--no-rebase",
             "--username",
             "alice",
-            "--no-auth-cache",
+            "--config-dir",
+            dcommit_config,
         ],
         "wrong",
     );
@@ -2014,7 +2022,8 @@ fn dcommit_uses_terminal_password_without_leaking_or_writing_before_auth() {
             "--no-rebase",
             "--username",
             "alice",
-            "--no-auth-cache",
+            "--config-dir",
+            dcommit_config,
         ],
         "secret",
     );

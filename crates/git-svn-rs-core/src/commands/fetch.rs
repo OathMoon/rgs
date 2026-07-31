@@ -7,7 +7,7 @@ use crate::mapping::{MappingKind, RefMapping};
 use crate::path_url::{SvnUrlProfile, svn_url_profile};
 use crate::rev_map::RevMap;
 use crate::svn::SvnBackend;
-use crate::svn::auth::prompted_password;
+use crate::svn::auth::{AuthOperation, prompted_password};
 use crate::svn::cli::SvnCliBackend;
 use crate::svn::mock::MockRaSession;
 use crate::svn::ra::RaSession;
@@ -417,7 +417,12 @@ fn configured_password(
     prompted_password(
         &config.url,
         shared.username.as_deref().or(config.username.as_deref()),
+        shared
+            .config_dir
+            .as_deref()
+            .or(config.config_dir.as_deref()),
         shared.no_auth_cache || config.no_auth_cache,
+        AuthOperation::Read,
     )
 }
 
