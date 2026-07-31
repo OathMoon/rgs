@@ -552,6 +552,87 @@ fn info_prints_tracked_url_and_revision() {
 }
 
 #[test]
+fn info_reports_normal_file_and_directory_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "src/lib.rs"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Path: src/lib.rs\n"))
+        .stdout(predicate::str::contains("Name: lib.rs\n"))
+        .stdout(predicate::str::contains(
+            "URL: mock://repo/trunk/src/lib.rs\n",
+        ))
+        .stdout(predicate::str::contains("Revision: 2\n"))
+        .stdout(predicate::str::contains("Node Kind: file\n"))
+        .stdout(predicate::str::contains("Schedule: normal\n"));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "--url", "src"])
+        .assert()
+        .success()
+        .stdout("mock://repo/trunk/src\n");
+}
+
+#[test]
+fn info_path_rejects_untracked_and_staged_paths() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = clone_mock_repo(temp.path());
+    std::fs::write(work.join("untracked.txt"), "untracked\n").unwrap();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "untracked.txt"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("is not under version control"));
+
+    std::fs::write(work.join("src/lib.rs"), "staged\n").unwrap();
+    git(&work, ["add", "src/lib.rs"]);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "src/lib.rs"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("without staged changes"));
+
+    git(&work, ["reset", "--hard", "HEAD"]);
+    std::fs::remove_file(work.join("src/lib.rs")).unwrap();
+    std::fs::create_dir(work.join("src/lib.rs")).unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "src/lib.rs"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "worktree node kind differs from HEAD",
+        ));
+
+    git(&work, ["reset", "--hard", "HEAD"]);
+    git(&work, ["config", "user.name", "Test User"]);
+    git(&work, ["config", "user.email", "test@example.com"]);
+    commit_file(&work, "local-only.txt", "local\n", "local only");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "local-only.txt"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "paths present in the selected SVN revision",
+        ));
+}
+
+#[test]
 fn info_reports_the_detached_heads_svn_revision_not_the_rev_map_maximum() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path();

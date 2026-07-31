@@ -453,6 +453,11 @@ impl GitCli {
         parse_name_status(&raw)
     }
 
+    pub fn staged_name_status(&self, path: &str) -> Result<Vec<GitNameStatus>, String> {
+        let raw = self.run_bytes(["diff", "--cached", "--name-status", "-z", "--", path])?;
+        parse_name_status(&raw)
+    }
+
     pub fn show_file(&self, commit: &str, path: &str) -> Result<Vec<u8>, String> {
         let spec = format!("{commit}:{path}");
         self.run_bytes(["show", &spec])

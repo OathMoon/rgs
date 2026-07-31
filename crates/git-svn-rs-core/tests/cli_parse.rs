@@ -2,6 +2,15 @@ use clap::Parser;
 use git_svn_rs_core::cli::{Cli, Command};
 
 #[test]
+fn parses_info_path() {
+    let cli = Cli::parse_from(["git-svn-rs", "info", "src/lib.rs"]);
+    let Command::Info(args) = cli.command else {
+        panic!("expected info");
+    };
+    assert_eq!(args.path.as_deref(), Some("src/lib.rs"));
+}
+
+#[test]
 fn reset_parses_positional_revision_and_named_fallback() {
     let cli = Cli::parse_from(["git-svn-rs", "reset", "r7", "--revision", "r8"]);
     let Command::Reset(args) = cli.command else {

@@ -2672,7 +2672,13 @@ fn supported_find_rev_with_direction(
 fn supported_info_url(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
     let output = match tool {
         GoldenTool::Perl => run_text(work_tree, "git", &["svn", "info", "--url"])?,
-        GoldenTool::Rust => commands::info::run_in_work_tree(work_tree, InfoArgs { url: true })?,
+        GoldenTool::Rust => commands::info::run_in_work_tree(
+            work_tree,
+            InfoArgs {
+                url: true,
+                path: None,
+            },
+        )?,
     };
     Ok(output.trim().replace('\\', "/"))
 }
@@ -2680,7 +2686,13 @@ fn supported_info_url(work_tree: &Path, tool: GoldenTool) -> Result<String, Stri
 fn supported_info_summary(work_tree: &Path, tool: GoldenTool) -> Result<String, String> {
     let output = match tool {
         GoldenTool::Perl => run_text(work_tree, "git", &["svn", "info"])?,
-        GoldenTool::Rust => commands::info::run_in_work_tree(work_tree, InfoArgs { url: false })?,
+        GoldenTool::Rust => commands::info::run_in_work_tree(
+            work_tree,
+            InfoArgs {
+                url: false,
+                path: None,
+            },
+        )?,
     };
     Ok(normalize_info_summary(&output))
 }

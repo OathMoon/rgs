@@ -246,6 +246,7 @@ pub struct LogArgs {
 pub struct InfoArgs {
     #[arg(long)]
     pub url: bool,
+    pub path: Option<String>,
 }
 
 #[derive(Debug, Args)]
