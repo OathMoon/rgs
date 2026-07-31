@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `daf5508 Complete direct SVM replay and tracking`
+Committed HEAD at audit: `bdce0b3 Prompt for missing SVN usernames`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -85,10 +85,10 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
   the covered frozen Perl artifacts.
 - Copy-parent lookup and dependency ordering select the most specific overlapping
   mapping while retaining an empty root mapping as the final fallback.
-- Auth resolves explicit secrets, askpass, then no-echo TTY input without persistence.
-  Default reads probe the configured SVN cache/public access before prompting on an
-  authentication failure. Interactive writes confirm a secret before the first write;
-  non-TTY writes may use SVN's cache. Username prompting remains unimplemented.
+- Auth resolves explicit credentials, askpass, then TTY username/no-echo password
+  without persistence. Default reads probe SVN cache/public access before prompting;
+  interactive writes confirm credentials before the first write, while non-TTY writes
+  may use SVN's cache.
 - Full-URL and configured `svn+ssh` paths validate exact read/write invocation.
 - `useSvnsyncProps` validates byte-safe r0 source identity, atomically caches it,
   keeps mirror rev_maps separate from source footer/author/info identity, and works
@@ -237,9 +237,9 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 Verified on 2026-08-01:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 170/170; readonly follow-up 82/82
+- `cargo test --workspace`; core lib 171/171; readonly follow-up 82/82
 - dcommit linear 69/69; config mapping 17/17; real SVN default 47/47
-- linked core unit 202/202, backend 34/34, and real SVN CLI 47/47
+- linked core unit 203/203, backend 34/34, and real SVN CLI 47/47
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -281,12 +281,12 @@ Verified on 2026-08-01:
   svnsync CLI/config, revprops, and source identity.
 - `10ea719`, `a548b20`, `7f493af`: multi-map transactions, noMetadata limits,
   and byte-safe SVM CLI/config/identity discovery foundation.
-- `daf5508`: direct SVM replay, legal dual-map tracking/readonly, and mutation guards.
+- `daf5508`, `bdce0b3`: direct SVM dual-map flow and missing-username auth prompts.
 
 ## Next Steps
 
 1. Execute strict DAV/HTTPS/OpenSSH/write profiles in equipped environments.
-2. Dispatch hosted compatibility CI and retain its artifacts when credentials exist.
+2. Tighten legacy v0-v5 classification, then dispatch hosted CI when credentials exist.
 
 ## Handoff Notes
 

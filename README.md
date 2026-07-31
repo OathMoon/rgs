@@ -59,8 +59,8 @@ from HTTPS. HTTPS trust/authentication, real OpenSSH key/host-trust behavior, an
 HTTP(S) write-back are not claimed. Configured `svn+ssh://` external-tunnel
 reads/writes are covered without implying real OpenSSH key or host-trust support.
 SVM repositories are read-only: `dcommit` and `reset` fail before mutation until
-dual-map write/reset semantics are implemented. Password prompting is covered when
-a username is configured; interactive username discovery is not implemented.
+dual-map write/reset semantics are implemented. Missing usernames and passwords
+can be supplied through askpass or an enabled terminal prompt without persistence.
 
 ## `svn-libsvn` feature status
 
