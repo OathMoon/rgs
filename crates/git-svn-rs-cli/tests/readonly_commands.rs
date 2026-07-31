@@ -569,7 +569,25 @@ fn info_reports_normal_file_and_directory_paths() {
         ))
         .stdout(predicate::str::contains("Revision: 2\n"))
         .stdout(predicate::str::contains("Node Kind: file\n"))
-        .stdout(predicate::str::contains("Schedule: normal\n"));
+        .stdout(predicate::str::contains("Schedule: normal\n"))
+        .stdout(predicate::str::contains("Last Changed Author: bob\n"))
+        .stdout(predicate::str::contains("Last Changed Rev: 2\n"))
+        .stdout(predicate::str::contains("Last Changed Date: "))
+        .stdout(predicate::str::contains("Text Last Updated: "))
+        .stdout(predicate::str::contains(
+            "Checksum: 0e0ddbdb0a003bc8b612b2c340d0ed1f\n",
+        ));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["info", "src"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Node Kind: directory\n"))
+        .stdout(predicate::str::contains("Last Changed Rev: 2\n"))
+        .stdout(predicate::str::contains("Text Last Updated:").not())
+        .stdout(predicate::str::contains("Checksum:").not());
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -578,6 +596,92 @@ fn info_reports_normal_file_and_directory_paths() {
         .assert()
         .success()
         .stdout("mock://repo/trunk/src\n");
+}
+
+#[test]
+fn info_path_last_changed_is_scoped_below_the_selected_svn_revision() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    git(work, ["config", "user.name", "First Author"]);
+    let rev1 = commit_file(
+        work,
+        "target.txt",
+        "one\n",
+        "target at r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+    );
+    git(work, ["config", "user.name", "Second Author"]);
+    let rev2 = commit_file(
+        work,
+        "other.txt",
+        "other\n",
+        "other at r2\n\ngit-svn-id: mock://repo/trunk@2 mock-uuid",
+    );
+    write_rev_map(work, &[&rev1, &rev2]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev2]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "target.txt"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Revision: 2\n"))
+        .stdout(predicate::str::contains(
+            "Last Changed Author: First Author\n",
+        ))
+        .stdout(predicate::str::contains("Last Changed Rev: 1\n"))
+        .stdout(predicate::str::contains(
+            "Checksum: 5bbf5a52328e7439ae6e719dfe712200\n",
+        ));
+
+    std::fs::write(work.join("target.txt"), "two\n").unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "target.txt"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Revision: 2\n"))
+        .stdout(predicate::str::contains("Last Changed Rev: 1\n"))
+        .stdout(predicate::str::contains(
+            "Checksum: c193497a1a06b2c72230e6146ff47080\n",
+        ));
+}
+
+#[cfg(unix)]
+#[test]
+fn info_path_uses_the_frozen_symlink_checksum() {
+    use std::os::unix::fs::symlink;
+
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path();
+    init_git_svn_work_tree(work);
+    std::fs::write(work.join("target.txt"), "target contents\n").unwrap();
+    symlink("target.txt", work.join("link")).unwrap();
+    git(work, ["add", "target.txt", "link"]);
+    git(
+        work,
+        [
+            "commit",
+            "-m",
+            "links at r1\n\ngit-svn-id: mock://repo/trunk@1 mock-uuid",
+        ],
+    );
+    let rev1 = git_output(work, ["rev-parse", "HEAD"]).trim().to_string();
+    write_rev_map(work, &[&rev1]);
+    git(work, ["update-ref", "refs/remotes/git-svn", &rev1]);
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(work)
+        .args(["info", "link"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Node Kind: file\n"))
+        .stdout(predicate::str::contains(
+            "Checksum: 2865a91b547e18088eda2a1bfed9e454\n",
+        ));
 }
 
 #[test]

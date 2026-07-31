@@ -240,14 +240,14 @@ fn svn_author(authors: Option<&AuthorResolver>, name: &str, email: &str) -> Stri
         .unwrap_or_else(|| name.trim().to_string())
 }
 
-fn author_timezone(author_date: &str) -> Result<&str, String> {
+pub(super) fn author_timezone(author_date: &str) -> Result<&str, String> {
     author_date
         .split_whitespace()
         .next_back()
         .ok_or_else(|| format!("invalid Git author date: {author_date}"))
 }
 
-fn format_svn_date(epoch: &str, timezone: &str) -> Result<String, String> {
+pub(super) fn format_svn_date(epoch: &str, timezone: &str) -> Result<String, String> {
     let epoch = epoch
         .parse::<i64>()
         .map_err(|_| format!("invalid Git author timestamp: {epoch}"))?;
@@ -291,7 +291,7 @@ fn format_verbose_change(change: &crate::git::GitNameStatus) -> Option<String> {
         .then(|| format!("{} {}", change.status, change.path))
 }
 
-fn split_git_svn_footer(message: &str) -> Option<(GitSvnId, String)> {
+pub(super) fn split_git_svn_footer(message: &str) -> Option<(GitSvnId, String)> {
     let footer_end = message.trim_end_matches(char::is_whitespace).len();
     let footer_start = message[..footer_end]
         .rfind('\n')
