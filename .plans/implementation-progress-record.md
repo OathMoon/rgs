@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `a548b20 Align noMetadata queries and stage SVM mode`
+Committed HEAD at audit: `7f493af Discover and cache SVM source identity`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -93,8 +93,8 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 - `useSvnsyncProps` validates byte-safe r0 source identity, atomically caches it,
   keeps mirror rev_maps separate from source footer/author/info identity, and works
   for direct/stdlayout replay; malformed/partial props publish no state.
-- `useSvmProps` CLI/config/conflicts persist with Git booleans; import fails closed
-  before mutation until dual identity replay lands.
+- `useSvmProps` discovers latest-revision ancestor identity byte-safely, atomically
+  caches private source/replace/UUID keys, then fails closed until dual replay lands.
 - Plain HTTP reads are separated from HTTPS and enabled through the common
   adapters. A loopback Apache DAV Basic-auth fixture covers denied no-credential
   clone, secret-safe errors, authenticated clone, and incremental fetch; strict CI
@@ -236,9 +236,9 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 Verified on 2026-08-01:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 158/158; readonly follow-up 82/82
-- dcommit linear 69/69; config mapping 15/15; real SVN default 46/46
-- linked core unit 190/190, backend 34/34, and real SVN CLI 46/46
+- `cargo test --workspace`; core lib 164/164; readonly follow-up 82/82
+- dcommit linear 69/69; config mapping 17/17; real SVN default 47/47
+- linked core unit 196/196, backend 34/34, and real SVN CLI 47/47
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -279,13 +279,13 @@ Verified on 2026-08-01:
 - `2bfac94`, `5265ad9`, `62aa49c`, `4799765`, `f69dcdd`: safety/readonly batch.
 - `c8f2eb0`…`5c21e68`: GC/targets/info/auth; `504a3f1`, `9544578`, `0efb075`:
   svnsync CLI/config, revprops, and source identity.
-- `10ea719`, `a548b20`: multi-rev_map import transactions, noMetadata readonly
-  limits, and fail-closed SVM CLI/config foundation.
+- `10ea719`, `a548b20`, `7f493af`: multi-map transactions, noMetadata limits,
+  and byte-safe SVM CLI/config/identity discovery foundation.
 
 ## Next Steps
 
-1. Implement SVM identity discovery/cache and valid `svm:headrev` parsing.
-2. Wire direct replay to transport/source revisions and the dual-map transaction.
+1. Parse per-revision `svm:headrev` and wire direct transport/source replay.
+2. Teach tracking/resolver/readonly paths to validate and select legal dual maps.
 3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
 
 ## Handoff Notes
