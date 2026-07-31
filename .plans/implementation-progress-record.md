@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-07-31
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `5fc16dd Honor persisted dcommit target URLs`
+Committed HEAD at audit: `25e7df4 Add normal-path info queries`
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -152,7 +152,7 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   frozen Perl; strict golden comparison now retains both identity lines.
 - Rebase permits untracked-only worktrees while dcommit retains strict cleanliness,
   and validates tracking identity before dry-run, fetch, cleanliness checks, or
-  mutation. Info derives HEAD's mapped revision and reports rewriteRoot metadata URLs.
+  mutation. Info supports validated normal file/directory paths and encoded URLs.
 - Rebase command-local verbosity and `--fetch-all/--all` match the frozen order.
   Fetch-all is confined to the initially resolved svn-remote's mappings, ignores
   unrelated remotes, and retains the original upstream identity after fetch.
@@ -238,7 +238,7 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 Verified on 2026-07-31:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 144/144; readonly follow-up 78/78
+- `cargo test --workspace`; core lib 144/144; readonly follow-up 80/80
 - dcommit linear 67/67; config mapping 15/15; real SVN default 42/42
 - linked-feature core unit 165/165 and linked backend integration 33/33
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
@@ -278,7 +278,7 @@ Verified on 2026-07-31:
 - `e5eb148`, `5e0ea43`: semantic tracking validation at command safety boundaries.
 - `4143f8f`, `7b3f335`: cross-remote ref preflight and reset compatibility.
 - `2bfac94`, `5265ad9`, `62aa49c`, `4799765`, `f69dcdd`: safety/readonly batch.
-- `c8f2eb0`, `5fc16dd`: crash-safe GC and persisted dcommit write targets.
+- `c8f2eb0`, `5fc16dd`, `25e7df4`: GC, dcommit targets, and normal-path info.
 
 ## Next Steps
 
