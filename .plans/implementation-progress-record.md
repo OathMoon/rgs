@@ -1,14 +1,9 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `0efb075 Implement svnsync source metadata identity`
-Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
-ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
-
-## Status Vocabulary
-
-`not-started` → `in-progress` → `structural-pass` → `behavior-pass` → `release-pass`.
-Do not use unqualified “complete”/“supported”; skipped checks cannot release-pass.
+Committed HEAD at audit: `a548b20 Align noMetadata queries and stage SVM mode`
+Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
+`.plans/00-git-svn-rs-review-and-roadmap.md`.
 
 ## Current Overall State
 
@@ -98,6 +93,8 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 - `useSvnsyncProps` validates byte-safe r0 source identity, atomically caches it,
   keeps mirror rev_maps separate from source footer/author/info identity, and works
   for direct/stdlayout replay; malformed/partial props publish no state.
+- `useSvmProps` CLI/config/conflicts persist with Git booleans; import fails closed
+  before mutation until dual identity replay lands.
 - Plain HTTP reads are separated from HTTPS and enabled through the common
   adapters. A loopback Apache DAV Basic-auth fixture covers denied no-credential
   clone, secret-safe errors, authenticated clone, and incremental fetch; strict CI
@@ -119,6 +116,7 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 
 - `find-rev` selects one validated mapping identity rather than flattening all
   rev_maps, and ignores trailing zero scan markers for before/after searches.
+- noMetadata rejects metadata-dependent queries without mutation; hash lookup is empty.
 - `info`, supported SVN-style `log` ranges/modes/pathspecs, conservative `gc`,
   recoverable `reset`, and current-parent selective `rebase` are implemented.
 - The compatibility parser preserves explicit `log -- <pathspec>` boundaries, so
@@ -238,9 +236,9 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 Verified on 2026-08-01:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 153/153; readonly follow-up 82/82
+- `cargo test --workspace`; core lib 158/158; readonly follow-up 82/82
 - dcommit linear 69/69; config mapping 15/15; real SVN default 46/46
-- linked core unit 185/185, backend 34/34, and real SVN CLI 46/46
+- linked core unit 190/190, backend 34/34, and real SVN CLI 46/46
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -253,7 +251,7 @@ Verified on 2026-08-01:
 
 ### P1
 
-- `useSvmProps`: per-revision identities, differing revisions, and atomic dual rev_maps.
+- `useSvmProps` identity discovery and dual-domain replay; v3 multi-map recovery is ready.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
 
@@ -281,11 +279,13 @@ Verified on 2026-08-01:
 - `2bfac94`, `5265ad9`, `62aa49c`, `4799765`, `f69dcdd`: safety/readonly batch.
 - `c8f2eb0`…`5c21e68`: GC/targets/info/auth; `504a3f1`, `9544578`, `0efb075`:
   svnsync CLI/config, revprops, and source identity.
+- `10ea719`, `a548b20`: multi-rev_map import transactions, noMetadata readonly
+  limits, and fail-closed SVM CLI/config foundation.
 
 ## Next Steps
 
-1. Design `useSvmProps` dual-revision/dual-rev_map publication before coding.
-2. Finish remaining noMetadata/Log.pm compatibility edges that are independent.
+1. Implement SVM identity discovery/cache and valid `svm:headrev` parsing.
+2. Wire direct replay to transport/source revisions and the dual-map transaction.
 3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
 
 ## Handoff Notes
