@@ -1,9 +1,7 @@
 # git-svn-rs Implementation Progress Record
-
-Last audited: 2026-07-30
+Last audited: 2026-07-31
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `f69dcdd Validate tracking state before reset`
-
+Committed HEAD at audit: `5fc16dd Honor persisted dcommit target URLs`
 Product requirements live in `.plans/git-svn-rs-plan.md`; architecture and
 ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -14,7 +12,6 @@ ordering live in `.plans/00-git-svn-rs-review-and-roadmap.md`.
 - `structural-pass`
 - `behavior-pass`
 - `release-pass`
-
 Do not use an unqualified “complete” or “supported”. Skipped external checks cannot
 produce `release-pass`.
 
@@ -171,6 +168,7 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   fail closed while recovery is pending, and reset validates tracking before execution.
 - GC and migration walkers skip root and nested symlinks, preventing metadata
   inspection, deletion, or compression from escaping `.git/svn`.
+- GC compression recovers synced Unix unlink or Windows tombstone crashes without duplicate appends.
 
 ### Dcommit
 
@@ -220,6 +218,8 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
   overlap checks, and refuses active/pending recovery without lock, journal,
   checkout, fetch, rebase, reset, sink calls, or metadata mutation. Real SVN
   targets also receive read-only remote UUID and base-revision validation.
+- Dcommit target precedence is CLI `--commit-url`, persisted `commiturl`, `pushurl`
+  plus mapping, then read URL; full URLs bind ref/rev_map/footer through recovery.
 
 ### Golden and release evidence
 
@@ -235,11 +235,11 @@ preview: strict DAV, HTTPS/real OpenSSH, HTTP remote writes, and hosted CI await
 
 ## Current Verification
 
-Verified on 2026-07-30:
+Verified on 2026-07-31:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 133/133; readonly follow-up 78/78
-- dcommit linear 66/66; clone/fetch smoke 19/19; real SVN default 42/42
+- `cargo test --workspace`; core lib 144/144; readonly follow-up 78/78
+- dcommit linear 67/67; config mapping 15/15; real SVN default 42/42
 - linked-feature core unit 165/165 and linked backend integration 33/33
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
@@ -257,7 +257,6 @@ Verified on 2026-07-30:
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
 
 ## Important Commit Anchors
-
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
 - `9d354f6`, `e3b8cf9`, `4bf9205`, `8405e79`: shared replay and durable
   dcommit/import coordinators.
@@ -278,14 +277,15 @@ Verified on 2026-07-30:
 - `c399274`, `debfc31`: stable authors-file paths and Git-compatible booleans.
 - `e5eb148`, `5e0ea43`: semantic tracking validation at command safety boundaries.
 - `4143f8f`, `7b3f335`: cross-remote ref preflight and reset compatibility.
-- `2bfac94`, `5265ad9`, `62aa49c`, `4799765`, `f69dcdd`: latest safety/readonly batch.
+- `2bfac94`, `5265ad9`, `62aa49c`, `4799765`, `f69dcdd`: safety/readonly batch.
+- `c8f2eb0`, `5fc16dd`: crash-safe GC and persisted dcommit write targets.
 
 ## Next Steps
 
 Continue in this order unless new verification changes priority:
 
-1. Phase 6: make GC compression replacement crash-safe and atomic.
-2. Expand the next frozen-compatible `info [path]` subset.
+1. Expand the next frozen-compatible `info [path]` subset.
+2. Audit terminal-auth fallback and `useSvmProps`/`useSvnsyncProps` compatibility.
 3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
 
 ## Handoff Notes
