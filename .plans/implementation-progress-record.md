@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `bdce0b3 Prompt for missing SVN usernames`
+Committed HEAD at audit: `754c57b Classify legacy metadata migrations precisely`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -15,7 +15,7 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, ref sanitization, svnsync identity config | remaining encoding/platform edge semantics |
-| 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, named-remote identity resolution, transactional recovery | broader migration policy |
+| 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, exact v0-v5 rejection | automatic migration/typed errors |
 | 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | shared replay, audited FFI, byte-safe revprops, cache-first TTY auth, svn+ssh E2E | username prompt, equipped HTTP, HTTPS, real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
@@ -42,8 +42,8 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 - SHA-1/SHA-256 rev_maps support zero records, non-creating reads, append ordering,
   OS locks, fsync, reset, gitfiles, and commondir. All read/write entry points
   reject non-monotonic revisions and non-trailing zero OIDs before mutation.
-- Legacy rev_db/v0-v2/mixed layouts and multi-UUID ambiguity fail closed without
-  mutation.
+- Legacy v0-v5, rev_db, missing/partial config, mixed layouts, and multi-UUID
+  ambiguity receive exact actionable rejection without mutation.
 - New metadata uses `.git/svn/<full-ref>`; an existing flattened layout remains
   readable, while mixed canonical/legacy identity is rejected.
 - Fetch, normal info, and dcommit validate ref tip, nonzero rev_map record, and
@@ -281,12 +281,12 @@ Verified on 2026-08-01:
   svnsync CLI/config, revprops, and source identity.
 - `10ea719`, `a548b20`, `7f493af`: multi-map transactions, noMetadata limits,
   and byte-safe SVM CLI/config/identity discovery foundation.
-- `daf5508`, `bdce0b3`: direct SVM dual-map flow and missing-username auth prompts.
+- `daf5508`, `bdce0b3`, `754c57b`: SVM dual maps, username prompts, v0-v5 policy.
 
 ## Next Steps
 
 1. Execute strict DAV/HTTPS/OpenSSH/write profiles in equipped environments.
-2. Tighten legacy v0-v5 classification, then dispatch hosted CI when credentials exist.
+2. Dispatch hosted compatibility CI and retain artifacts when credentials exist.
 
 ## Handoff Notes
 
