@@ -45,6 +45,8 @@ The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 - author identities, commit timestamps, messages, refs, commit graphs, and
   `git-svn-id` metadata;
 - `.rev_map` object IDs and transactional trailing-zero scan markers;
+- direct `useSvmProps` clone/fetch with source-zero skips, sparse source/transport
+  rev maps, mirror fallback revisions, and source-aware readonly queries;
 - covered `find-rev`, `info`, `log`, `gc`, `reset`, and rebase behavior;
 - deterministic local `file://`, authenticated local `svn://`, and configured
   non-interactive `svn+ssh://` tunnel dcommit;
@@ -56,6 +58,9 @@ Plain HTTP reads have a loopback Apache DAV fixture and are enabled separately
 from HTTPS. HTTPS trust/authentication, real OpenSSH key/host-trust behavior, and
 HTTP(S) write-back are not claimed. Configured `svn+ssh://` external-tunnel
 reads/writes are covered without implying real OpenSSH key or host-trust support.
+SVM repositories are read-only: `dcommit` and `reset` fail before mutation until
+dual-map write/reset semantics are implemented. Password prompting is covered when
+a username is configured; interactive username discovery is not implemented.
 
 ## `svn-libsvn` feature status
 
