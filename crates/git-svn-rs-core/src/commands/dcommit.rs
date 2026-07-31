@@ -70,12 +70,8 @@ pub fn run_in_work_tree(
         .max_record()?
         .map(|record| record.revision)
         .unwrap_or(0);
-    let target_url = args.commit_url.as_deref().unwrap_or(&tracked.config.url);
-    if !args.dry_run && args.commit_url.is_some() && tracked.config.url.starts_with("mock://") {
-        return Err(
-            "--commit-url is not supported for mock:// dcommit write-back in v1".to_string(),
-        );
-    }
+    let target = resolve_dcommit_target(&tracked, args.commit_url.as_deref())?;
+    let target_url = target.commit_url.as_str();
     if !args.dry_run {
         if crate::path_url::svn_url_profile(target_url) == crate::path_url::SvnUrlProfile::SvnSsh
             && args
@@ -175,62 +171,38 @@ pub fn run_in_work_tree(
             );
         }
         if is_svn_cli_write_back_url(target_url) && is_svn_cli_write_back_url(&tracked.config.url) {
-            let commit_svn_path = if args.commit_url.is_some() {
-                ""
-            } else {
-                &tracked.svn_path
-            };
-            let commit_mapping = if args.commit_url.is_some() {
-                let svn_path = commit_url_path(&tracked.config.url, target_url)?;
-                Some(resolve_tracked_svn_path(&tracked, &svn_path)?)
-            } else {
-                None
-            };
-            let mapping_ref = commit_mapping
-                .as_ref()
-                .map_or(tracked.refname.as_str(), |mapping| mapping.refname.as_str());
-            let mapping_svn_path = commit_mapping
-                .as_ref()
-                .map_or(tracked.svn_path.as_str(), |mapping| {
-                    mapping.svn_path.as_str()
-                });
-            let mapping_rev_map_path = commit_mapping
-                .as_ref()
-                .map_or(tracked.rev_map_path.as_path(), |mapping| {
-                    mapping.rev_map_path.as_path()
-                });
             let svn_options = resolved_dcommit_svn_options(&tracked, &args, target_url)?;
             let post_commit_fetch_config =
                 fetch::effective_fetch_config(tracked.config.clone(), &args.shared, revision)?;
             return dcommit_file_svn(
                 FileSvnDcommit {
                     git: &tracked.git,
-                    svn_root_url: target_url,
-                    svn_path: commit_svn_path,
+                    svn_root_url: &target.repository_root,
+                    svn_path: &target.svn_path,
                     uuid: &tracked.uuid,
                     source_refname: &tracked.refname,
-                    mapping_ref,
+                    mapping_ref: &target.mapping_ref,
                     no_rebase: args.no_rebase,
                     mergeinfo: args.mergeinfo.as_deref(),
                     svn_options,
                     post_commit_fetch_shared: args.shared.clone(),
                     post_commit_fetch_config,
                     remote_id: &tracked.config.name,
-                    rev_map_path: mapping_rev_map_path,
+                    rev_map_path: &target.rev_map_path,
                     expected_footer_url: svn_checkout_url(
                         tracked
                             .config
                             .rewrite_root
                             .as_deref()
                             .unwrap_or(&tracked.config.url),
-                        mapping_svn_path,
+                        &target.mapping_svn_path,
                     ),
                     expected_footer_uuid: tracked
                         .config
                         .rewrite_uuid
                         .clone()
                         .unwrap_or_else(|| tracked.uuid.clone()),
-                    commit_url_override: args.commit_url.is_some(),
+                    commit_url_override: target.commit_url_override,
                     adopt_revision: args.adopt_revision,
                 },
                 commits,
@@ -254,7 +226,7 @@ pub fn run_in_work_tree(
         ));
     }
     reject_completed_ledger_overlap(discovery.as_ref(), &commits)?;
-    dcommit_dry_run(&tracked, &args, &commits)
+    dcommit_dry_run(&tracked, &args, &target, &commits)
 }
 
 fn reject_completed_ledger_overlap(
@@ -286,19 +258,22 @@ struct DcommitPlanningContext<'a> {
     mergeinfo: Option<&'a str>,
 }
 
-struct DryRunTarget {
+struct ResolvedDcommitTarget {
     repository_root: String,
     commit_url: String,
+    svn_path: String,
     mapping_ref: String,
+    mapping_svn_path: String,
     rev_map_path: PathBuf,
+    commit_url_override: bool,
 }
 
 fn dcommit_dry_run(
     tracked: &crate::commands::resolver::TrackedSvn,
     args: &DcommitArgs,
+    target: &ResolvedDcommitTarget,
     commits: &[GitCommitSummary],
 ) -> Result<String, String> {
-    let target = resolve_dry_run_target(tracked, args.commit_url.as_deref())?;
     let (base_revision, _) = if is_svn_cli_write_back_url(&target.commit_url)
         && is_svn_cli_write_back_url(&tracked.config.url)
     {
@@ -367,30 +342,66 @@ fn dcommit_dry_run(
     Ok(out)
 }
 
-fn resolve_dry_run_target(
+fn resolve_dcommit_target(
     tracked: &crate::commands::resolver::TrackedSvn,
     commit_url: Option<&str>,
-) -> Result<DryRunTarget, String> {
+) -> Result<ResolvedDcommitTarget, String> {
     if let Some(commit_url) = commit_url {
         if tracked.config.url.starts_with("mock://") {
             return Err(
                 "--commit-url is not supported for mock:// dcommit write-back in v1".to_string(),
             );
         }
-        let svn_path = commit_url_path(&tracked.config.url, commit_url)?;
-        let mapping = resolve_tracked_svn_path(tracked, &svn_path)?;
-        return Ok(DryRunTarget {
-            repository_root: commit_url.to_string(),
-            commit_url: commit_url.to_string(),
-            mapping_ref: mapping.refname,
-            rev_map_path: mapping.rev_map_path,
-        });
+        return resolve_full_commit_url_target(tracked, commit_url);
     }
-    Ok(DryRunTarget {
-        repository_root: tracked.config.url.clone(),
-        commit_url: svn_checkout_url(&tracked.config.url, &tracked.svn_path),
+
+    if let Some(commit_url) = &tracked.config.commit_url {
+        if tracked.config.url.starts_with("mock://") {
+            return Err(
+                "svn-remote.<name>.commiturl is not supported for mock:// dcommit write-back in v1"
+                    .to_string(),
+            );
+        }
+        return resolve_full_commit_url_target(tracked, commit_url);
+    }
+
+    if tracked.config.push_url.is_some() && tracked.config.url.starts_with("mock://") {
+        return Err(
+            "svn-remote.<name>.pushurl is not supported for mock:// dcommit write-back in v1"
+                .to_string(),
+        );
+    }
+    let repository_root = tracked
+        .config
+        .push_url
+        .as_ref()
+        .unwrap_or(&tracked.config.url)
+        .clone();
+    Ok(ResolvedDcommitTarget {
+        commit_url: svn_checkout_url(&repository_root, &tracked.svn_path),
+        repository_root,
+        svn_path: tracked.svn_path.clone(),
         mapping_ref: tracked.refname.clone(),
+        mapping_svn_path: tracked.svn_path.clone(),
         rev_map_path: tracked.rev_map_path.clone(),
+        commit_url_override: false,
+    })
+}
+
+fn resolve_full_commit_url_target(
+    tracked: &crate::commands::resolver::TrackedSvn,
+    commit_url: &str,
+) -> Result<ResolvedDcommitTarget, String> {
+    let svn_path = commit_url_path(&tracked.config.url, commit_url)?;
+    let mapping = resolve_tracked_svn_path(tracked, &svn_path)?;
+    Ok(ResolvedDcommitTarget {
+        repository_root: commit_url.to_string(),
+        commit_url: commit_url.to_string(),
+        svn_path: String::new(),
+        mapping_ref: mapping.refname,
+        mapping_svn_path: mapping.svn_path,
+        rev_map_path: mapping.rev_map_path,
+        commit_url_override: true,
     })
 }
 

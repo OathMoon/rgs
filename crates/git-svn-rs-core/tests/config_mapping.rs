@@ -107,9 +107,11 @@ fn invalid_multi_wildcard_layouts_are_rejected() {
 #[test]
 fn serializes_svn_remote_config_keys() {
     let mappings = build_standard_layout("svn/");
-    let config = SvnRemoteConfig::new("svn", "file:///repo", mappings)
+    let mut config = SvnRemoteConfig::new("svn", "file:///repo", mappings)
         .with_ignore_paths("^vendor/")
         .with_include_paths("^(trunk|branches/main)/");
+    config.commit_url = Some("file:///write/trunk".to_string());
+    config.push_url = Some("file:///write".to_string());
 
     let entries = config.to_git_config_entries();
 
@@ -134,6 +136,56 @@ fn serializes_svn_remote_config_keys() {
         "svn-remote.svn.include-paths".to_string(),
         "^(trunk|branches/main)/".to_string()
     )));
+    assert!(entries.contains(&(
+        "svn-remote.svn.commiturl".to_string(),
+        "file:///write/trunk".to_string()
+    )));
+    assert!(entries.contains(&(
+        "svn-remote.svn.pushurl".to_string(),
+        "file:///write".to_string()
+    )));
+}
+
+#[test]
+fn reads_dcommit_target_urls() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = GitCli::new(temp.path());
+    git.init().unwrap();
+    git.config_set("svn-remote.svn.url", "file:///read")
+        .unwrap();
+    git.config_set("svn-remote.svn.commiturl", "file:///write/trunk")
+        .unwrap();
+    git.config_set("svn-remote.svn.pushurl", "file:///write")
+        .unwrap();
+
+    let config = read_svn_remote_config(&git, "svn").unwrap();
+    assert_eq!(config.commit_url.as_deref(), Some("file:///write/trunk"));
+    assert_eq!(config.push_url.as_deref(), Some("file:///write"));
+}
+
+#[test]
+fn rejects_duplicate_dcommit_target_urls() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = GitCli::new(temp.path());
+    git.init().unwrap();
+    git.config_set("svn-remote.svn.url", "file:///read")
+        .unwrap();
+    git.config_add("svn-remote.svn.commiturl", "file:///one")
+        .unwrap();
+    git.config_add("svn-remote.svn.commiturl", "file:///two")
+        .unwrap();
+
+    let error = read_svn_remote_config(&git, "svn").unwrap_err();
+    assert!(error.contains("multiple values for svn-remote.svn.commiturl"));
+
+    git.run_for_test(["config", "--unset-all", "svn-remote.svn.commiturl"])
+        .unwrap();
+    git.config_add("svn-remote.svn.pushurl", "file:///one")
+        .unwrap();
+    git.config_add("svn-remote.svn.pushurl", "file:///two")
+        .unwrap();
+    let error = read_svn_remote_config(&git, "svn").unwrap_err();
+    assert!(error.contains("multiple values for svn-remote.svn.pushurl"));
 }
 
 #[test]

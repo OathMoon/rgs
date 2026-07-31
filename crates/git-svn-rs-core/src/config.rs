@@ -5,6 +5,8 @@ use crate::mapping::{LayoutMappings, MappingKind, RefMapping};
 pub struct SvnRemoteConfig {
     pub name: String,
     pub url: String,
+    pub commit_url: Option<String>,
+    pub push_url: Option<String>,
     pub fetch: Vec<RefMapping>,
     pub branches: Vec<RefMapping>,
     pub tags: Vec<RefMapping>,
@@ -30,6 +32,8 @@ impl SvnRemoteConfig {
         Self {
             name: name.into(),
             url: url.into(),
+            commit_url: None,
+            push_url: None,
             fetch: mappings.fetch,
             branches: mappings.branches,
             tags: mappings.tags,
@@ -160,6 +164,13 @@ impl SvnRemoteConfig {
         let prefix = format!("svn-remote.{}", self.name);
         let mut entries = vec![(format!("{prefix}.url"), self.url.clone())];
 
+        if let Some(value) = &self.commit_url {
+            entries.push((format!("{prefix}.commiturl"), value.clone()));
+        }
+        if let Some(value) = &self.push_url {
+            entries.push((format!("{prefix}.pushurl"), value.clone()));
+        }
+
         entries.extend(self.fetch.iter().map(|m| {
             (
                 format!("{prefix}.fetch"),
@@ -257,6 +268,8 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
     Ok(SvnRemoteConfig {
         name: remote.to_string(),
         url,
+        commit_url: read("commiturl")?,
+        push_url: read("pushurl")?,
         fetch: mappings,
         branches: branch_mappings,
         tags: tag_mappings,

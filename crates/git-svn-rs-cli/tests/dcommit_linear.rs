@@ -2311,6 +2311,101 @@ fn dcommit_auth_failure_stops_before_journal_or_svn_write() {
 }
 
 #[test]
+fn dcommit_target_url_precedence_matches_git_svn_when_tools_exist() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["clone", &fixture.url(), "work", "--stdlayout"])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    make_commit(&work, "local.txt", "local\n", "target precedence");
+    let revision_before = fixture.latest_revision();
+    let missing_root = format!(
+        "file://{}",
+        temp.path().join("missing-write-root").display()
+    );
+
+    run_git(&work, &["config", "svn-remote.svn.pushurl", &missing_root]);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(format!("{missing_root}/trunk")));
+    assert_eq!(fixture.latest_revision(), revision_before);
+
+    let trunk_url = format!("{}/trunk", fixture.url());
+    run_git(&work, &["config", "svn-remote.svn.commiturl", &trunk_url]);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Dcommit dry-run against {trunk_url}"
+        )));
+
+    run_git(
+        &work,
+        &["config", "svn-remote.svn.commiturl", &missing_root],
+    );
+    let branch_url = format!("{}/branches/main", fixture.url());
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--dry-run", "--commit-url", &branch_url])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(format!(
+            "Dcommit dry-run against {branch_url}"
+        )));
+    assert_eq!(fixture.latest_revision(), revision_before);
+    assert!(
+        !work
+            .join(".git/svn/refs/remotes/origin/trunk/dcommit-journal")
+            .exists()
+    );
+
+    run_git(&work, &["config", "svn-remote.svn.commiturl", &branch_url]);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("target precedence"));
+    assert_eq!(fixture.latest_revision(), revision_before + 1);
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{branch_url}/local.txt")]),
+        "local\n"
+    );
+    let journal = JournalStore::new(find_dcommit_journal(&work))
+        .load()
+        .unwrap()
+        .expect("completed persisted commiturl journal");
+    assert_eq!(journal.target.commit_url, branch_url);
+    assert_eq!(journal.target.mapping_ref, "refs/remotes/origin/main");
+}
+
+#[test]
 fn dcommit_writes_to_explicit_file_svn_commit_url_when_tools_exist() {
     match require_svn_tools() {
         Ok(()) => {}
