@@ -21,6 +21,7 @@ pub struct SvnRemoteConfig {
     pub config_dir: Option<String>,
     pub no_auth_cache: bool,
     pub no_metadata: bool,
+    pub use_svnsync_props: bool,
     pub rewrite_root: Option<String>,
     pub rewrite_uuid: Option<String>,
     pub preserve_empty_dirs: bool,
@@ -48,6 +49,7 @@ impl SvnRemoteConfig {
             config_dir: None,
             no_auth_cache: false,
             no_metadata: false,
+            use_svnsync_props: false,
             rewrite_root: None,
             rewrite_uuid: None,
             preserve_empty_dirs: false,
@@ -110,6 +112,11 @@ impl SvnRemoteConfig {
         self
     }
 
+    pub fn with_svnsync_props(mut self) -> Self {
+        self.use_svnsync_props = true;
+        self
+    }
+
     pub fn with_rewrite_root(mut self, value: impl Into<String>) -> Self {
         self.rewrite_root = Some(value.into());
         self
@@ -149,6 +156,7 @@ impl SvnRemoteConfig {
     }
 
     pub fn validate_mapping_destinations(&self) -> Result<(), String> {
+        self.validate_metadata_options()?;
         for mapping in self
             .fetch
             .iter()
@@ -158,6 +166,17 @@ impl SvnRemoteConfig {
             crate::mapping::sanitize_refname(&mapping.git_ref)?;
         }
         Ok(())
+    }
+
+    pub fn validate_metadata_options(&self) -> Result<(), String> {
+        MetadataOptions {
+            no_metadata: self.no_metadata,
+            use_svm_props: false,
+            use_svnsync_props: self.use_svnsync_props,
+            rewrite_root: self.rewrite_root.clone(),
+            rewrite_uuid: self.rewrite_uuid.clone(),
+        }
+        .validate()
     }
 
     pub fn to_git_config_entries(&self) -> Vec<(String, String)> {
@@ -223,6 +242,9 @@ impl SvnRemoteConfig {
         if self.no_metadata {
             entries.push((format!("{prefix}.noMetadata"), "true".to_string()));
         }
+        if self.use_svnsync_props {
+            entries.push((format!("{prefix}.useSvnsyncProps"), "true".to_string()));
+        }
         if let Some(value) = &self.rewrite_root {
             entries.push((format!("{prefix}.rewriteRoot"), value.clone()));
         }
@@ -265,7 +287,7 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
     let branch_mappings = read_mappings(git, &prefix, "branches", MappingKind::Branches)?;
     let tag_mappings = read_mappings(git, &prefix, "tags", MappingKind::Tags)?;
 
-    Ok(SvnRemoteConfig {
+    let config = SvnRemoteConfig {
         name: remote.to_string(),
         url,
         commit_url: read("commiturl")?,
@@ -290,12 +312,15 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
         config_dir: read("config-dir")?,
         no_auth_cache: read_bool("no-auth-cache")?.unwrap_or(false),
         no_metadata: read_bool("noMetadata")?.unwrap_or(false),
+        use_svnsync_props: read_bool("useSvnsyncProps")?.unwrap_or(false),
         rewrite_root: read("rewriteRoot")?,
         rewrite_uuid: read("rewriteUUID")?,
         preserve_empty_dirs: read_bool("preserve-empty-dirs")?.unwrap_or(false),
         placeholder_filename: read("placeholder-filename")?
             .unwrap_or_else(|| ".gitignore".to_string()),
-    })
+    };
+    config.validate_metadata_options()?;
+    Ok(config)
 }
 
 fn read_single_config(git: &GitCli, key: &str) -> Result<Option<String>, String> {
@@ -363,6 +388,16 @@ impl MetadataOptions {
         }
         if self.use_svm_props && self.rewrite_uuid.is_some() {
             return Err("Can't have both 'useSvmProps' and 'rewriteUUID' options set".to_string());
+        }
+        if self.use_svnsync_props && self.rewrite_root.is_some() {
+            return Err(
+                "Can't have both 'useSvnsyncProps' and 'rewriteRoot' options set".to_string(),
+            );
+        }
+        if self.use_svnsync_props && self.rewrite_uuid.is_some() {
+            return Err(
+                "Can't have both 'useSvnsyncProps' and 'rewriteUUID' options set".to_string(),
+            );
         }
         Ok(())
     }

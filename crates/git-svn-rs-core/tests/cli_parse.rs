@@ -87,6 +87,37 @@ fn parses_clone_with_standard_layout() {
 }
 
 #[test]
+fn parses_svnsync_property_option_spellings() {
+    let cli = Cli::parse_from([
+        "git-svn-rs",
+        "init",
+        "file:///tmp/repo",
+        "--use-svnsync-props",
+    ]);
+    let Command::Init(args) = cli.command else {
+        panic!("expected init");
+    };
+    assert!(args.shared.use_svnsync_props);
+
+    let cli = Cli::parse_from([
+        "git-svn-rs",
+        "clone",
+        "file:///tmp/repo",
+        "--useSvnsyncProps",
+    ]);
+    let Command::Clone(args) = cli.command else {
+        panic!("expected clone");
+    };
+    assert!(args.shared.use_svnsync_props);
+
+    let cli = Cli::parse_from(["git-svn-rs", "fetch", "--useSvnsyncProps"]);
+    let Command::Fetch(args) = cli.command else {
+        panic!("expected fetch");
+    };
+    assert!(args.shared.use_svnsync_props);
+}
+
+#[test]
 fn parses_dcommit_dry_run_commit_url() {
     let cli = Cli::parse_from([
         "git-svn-rs",

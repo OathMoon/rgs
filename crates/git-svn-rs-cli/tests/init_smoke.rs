@@ -21,6 +21,7 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             "--config-dir",
             "svn-config",
             "--no-auth-cache",
+            "--use-svnsync-props",
             "--log-window-size",
             "42",
         ])
@@ -82,6 +83,12 @@ fn init_creates_git_repo_and_writes_svn_remote_config() {
             .as_deref(),
         Some("42")
     );
+    assert_eq!(
+        git.config_get("svn-remote.svn.useSvnsyncProps")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
 }
 
 #[test]
@@ -120,6 +127,29 @@ fn init_rejects_fetch_only_or_secret_options_before_mutation() {
             .assert()
             .failure()
             .stderr(predicate::str::contains(message));
+        assert!(!work.exists());
+    }
+}
+
+#[test]
+fn init_rejects_svnsync_metadata_rewrites_before_mutation() {
+    for option in ["--rewrite-root", "--rewrite-uuid"] {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "init",
+                "file:///svn/repo",
+                "work",
+                "--use-svnsync-props",
+                option,
+                "replacement",
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("useSvnsyncProps"));
         assert!(!work.exists());
     }
 }

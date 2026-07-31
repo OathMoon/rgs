@@ -204,6 +204,10 @@ pub(crate) fn effective_fetch_config(
         reject_identity_change(base_revision, "--no-metadata")?;
         config.no_metadata = true;
     }
+    if shared.use_svnsync_props && !config.use_svnsync_props {
+        reject_identity_change(base_revision, "--use-svnsync-props")?;
+        config.use_svnsync_props = true;
+    }
     if config.no_metadata && base_revision > 0 {
         return Err("fetch is unavailable after a --no-metadata one-shot import".to_string());
     }
@@ -223,6 +227,7 @@ pub(crate) fn effective_fetch_config(
         config.preserve_empty_dirs = true;
         config.placeholder_filename = shared.placeholder_filename.clone();
     }
+    config.validate_metadata_options()?;
     Ok(config)
 }
 
@@ -1025,6 +1030,24 @@ mod tests {
     }
 
     #[test]
+    fn svnsync_props_can_only_be_enabled_before_import() {
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
+        let mut shared = default_shared_args();
+        shared.use_svnsync_props = true;
+
+        assert!(
+            effective_fetch_config(config.clone(), &shared, 0)
+                .unwrap()
+                .use_svnsync_props
+        );
+        assert!(
+            effective_fetch_config(config, &shared, 1)
+                .unwrap_err()
+                .contains("--use-svnsync-props cannot change")
+        );
+    }
+
+    #[test]
     fn log_window_size_overlays_the_persisted_fetch_config() {
         let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path(""));
         let mut shared = default_shared_args();
@@ -1049,6 +1072,7 @@ mod tests {
             log_window_size: None,
             localtime: false,
             no_metadata: false,
+            use_svnsync_props: false,
             rewrite_root: None,
             rewrite_uuid: None,
             username: None,

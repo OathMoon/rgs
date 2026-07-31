@@ -109,7 +109,8 @@ fn serializes_svn_remote_config_keys() {
     let mappings = build_standard_layout("svn/");
     let mut config = SvnRemoteConfig::new("svn", "file:///repo", mappings)
         .with_ignore_paths("^vendor/")
-        .with_include_paths("^(trunk|branches/main)/");
+        .with_include_paths("^(trunk|branches/main)/")
+        .with_svnsync_props();
     config.commit_url = Some("file:///write/trunk".to_string());
     config.push_url = Some("file:///write".to_string());
 
@@ -143,6 +144,10 @@ fn serializes_svn_remote_config_keys() {
     assert!(entries.contains(&(
         "svn-remote.svn.pushurl".to_string(),
         "file:///write".to_string()
+    )));
+    assert!(entries.contains(&(
+        "svn-remote.svn.useSvnsyncProps".to_string(),
+        "true".to_string()
     )));
 }
 
@@ -220,20 +225,30 @@ fn remote_boolean_config_uses_git_compatible_spellings() {
     git.config_set("svn-remote.svn.localtime", "yes").unwrap();
     git.config_set("svn-remote.svn.no-auth-cache", "on")
         .unwrap();
-    git.config_set("svn-remote.svn.noMetadata", "1").unwrap();
+    git.config_set("svn-remote.svn.noMetadata", "0").unwrap();
+    git.config_set("svn-remote.svn.useSvnsyncProps", "yes")
+        .unwrap();
     git.config_set("svn-remote.svn.preserve-empty-dirs", "TRUE")
         .unwrap();
 
     let enabled = read_svn_remote_config(&git, "svn").unwrap();
     assert!(enabled.localtime);
     assert!(enabled.no_auth_cache);
-    assert!(enabled.no_metadata);
+    assert!(!enabled.no_metadata);
+    assert!(enabled.use_svnsync_props);
     assert!(enabled.preserve_empty_dirs);
+
+    git.config_set("svn-remote.svn.noMetadata", "1").unwrap();
+    git.config_set("svn-remote.svn.useSvnsyncProps", "off")
+        .unwrap();
+    assert!(read_svn_remote_config(&git, "svn").unwrap().no_metadata);
 
     git.config_set("svn-remote.svn.localtime", "no").unwrap();
     git.config_set("svn-remote.svn.no-auth-cache", "off")
         .unwrap();
     git.config_set("svn-remote.svn.noMetadata", "0").unwrap();
+    git.config_set("svn-remote.svn.useSvnsyncProps", "off")
+        .unwrap();
     git.config_set("svn-remote.svn.preserve-empty-dirs", "FALSE")
         .unwrap();
 
@@ -241,6 +256,7 @@ fn remote_boolean_config_uses_git_compatible_spellings() {
     assert!(!disabled.localtime);
     assert!(!disabled.no_auth_cache);
     assert!(!disabled.no_metadata);
+    assert!(!disabled.use_svnsync_props);
     assert!(!disabled.preserve_empty_dirs);
 }
 
@@ -250,6 +266,7 @@ fn remote_boolean_config_rejects_invalid_and_duplicate_values() {
         "localtime",
         "no-auth-cache",
         "noMetadata",
+        "useSvnsyncProps",
         "preserve-empty-dirs",
     ] {
         let temp = tempfile::tempdir().unwrap();
@@ -272,4 +289,13 @@ fn remote_boolean_config_rejects_invalid_and_duplicate_values() {
     git.config_add("svn-remote.svn.localtime", "off").unwrap();
     let error = read_svn_remote_config(&git, "svn").unwrap_err();
     assert!(error.contains("multiple values for svn-remote.svn.localtime"));
+
+    git.run_for_test(["config", "--unset-all", "svn-remote.svn.localtime"])
+        .unwrap();
+    git.config_add("svn-remote.svn.useSvnsyncProps", "yes")
+        .unwrap();
+    git.config_add("svn-remote.svn.useSvnsyncProps", "off")
+        .unwrap();
+    let error = read_svn_remote_config(&git, "svn").unwrap_err();
+    assert!(error.contains("multiple values for svn-remote.svn.useSvnsyncProps"));
 }

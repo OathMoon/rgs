@@ -1338,6 +1338,7 @@ fn default_shared_args() -> crate::cli::SharedFetchArgs {
         log_window_size: None,
         localtime: false,
         no_metadata: false,
+        use_svnsync_props: false,
         rewrite_root: None,
         rewrite_uuid: None,
         username: None,

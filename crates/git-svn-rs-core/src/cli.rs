@@ -122,6 +122,8 @@ pub struct SharedFetchArgs {
     pub localtime: bool,
     #[arg(long = "no-metadata")]
     pub no_metadata: bool,
+    #[arg(long = "use-svnsync-props", alias = "useSvnsyncProps")]
+    pub use_svnsync_props: bool,
     #[arg(long = "rewrite-root")]
     pub rewrite_root: Option<String>,
     #[arg(long = "rewrite-uuid")]
