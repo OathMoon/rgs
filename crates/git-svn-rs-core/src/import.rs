@@ -411,7 +411,10 @@ fn import_revisions_for_mapping(
         uuid,
         existing_parent_ref.as_deref(),
         &staging_ref,
-        &imported_revisions,
+        ImportedRevisionMaps {
+            transport: &imported_revisions,
+            source: None,
+        },
         None,
     )?;
 
@@ -430,6 +433,7 @@ fn import_ra_revisions_for_mapping(
     let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
     let mut stream = FastImportStream::new();
     let mut imported_revisions = Vec::new();
+    let mut source_revisions = Vec::new();
     let mut unhandled_revisions = Vec::new();
     let max_imported_revision = max_imported_revision(git, &mapping.git_ref, uuid)?;
     let mut owned_placeholders = if config.preserve_empty_dirs {
@@ -442,13 +446,17 @@ fn import_ra_revisions_for_mapping(
         .ok()
         .map(|commit| commit.trim().to_string());
     let authors = author_mapper(config)?;
-    let metadata_uuid = config.metadata_uuid(uuid)?;
     let staging_ref = next_import_staging_ref();
 
     for revision in revisions {
         if revision.revision <= max_imported_revision {
             continue;
         }
+
+        let Some(identity) = import_revision_identity(config, uuid, mapping, revision, session)?
+        else {
+            continue;
+        };
 
         let parent_mark =
             (!imported_revisions.is_empty()).then_some(imported_revisions.len() as u32);
@@ -468,11 +476,11 @@ fn import_ra_revisions_for_mapping(
         let plan = FetchCommitPlan {
             mark: imported_revisions.len() as u32 + 1,
             refname: staging_ref.clone(),
-            author: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
-            committer: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
+            author: author_ident(&revision.author, &identity.uuid, Some(&authors))?,
+            committer: author_ident(&revision.author, &identity.uuid, Some(&authors))?,
             timestamp: timestamp.seconds,
             timezone_offset: timestamp.offset,
-            message: commit_message(config, revision, uuid, &mapping.svn_path)?,
+            message: commit_message_with_identity(config, revision, &identity)?,
             parent_mark,
             parent_ref,
         };
@@ -535,6 +543,7 @@ fn import_ra_revisions_for_mapping(
         }
 
         imported_revisions.push(revision.revision);
+        source_revisions.push(identity.source_revision);
         unhandled_revisions.push((revision.revision, result.unhandled));
         stream = stream.commit(&commit);
     }
@@ -551,7 +560,13 @@ fn import_ra_revisions_for_mapping(
         uuid,
         existing_parent_ref.as_deref(),
         &staging_ref,
-        &imported_revisions,
+        ImportedRevisionMaps {
+            transport: &imported_revisions,
+            source: config
+                .svm_uuid
+                .as_deref()
+                .zip(Some(source_revisions.as_slice())),
+        },
         append,
     )?;
 
@@ -1665,6 +1680,89 @@ fn import_path(path: &str, strip_prefix: &str) -> Option<String> {
     (!relative.is_empty()).then(|| relative.to_string())
 }
 
+struct ImportRevisionIdentity {
+    url: String,
+    revision: u32,
+    uuid: String,
+    source_revision: Option<u32>,
+}
+
+struct ImportedRevisionMaps<'a> {
+    transport: &'a [u32],
+    source: Option<(&'a str, &'a [Option<u32>])>,
+}
+
+fn import_revision_identity(
+    config: &SvnRemoteConfig,
+    transport_uuid: &str,
+    mapping: &RefMapping,
+    revision: &RevisionEvent,
+    session: &impl RaSession,
+) -> Result<Option<ImportRevisionIdentity>, String> {
+    let mirror = || -> Result<ImportRevisionIdentity, String> {
+        Ok(ImportRevisionIdentity {
+            url: config.metadata_url(&mapping.svn_path)?,
+            revision: revision.revision,
+            uuid: config.metadata_uuid(transport_uuid)?.to_string(),
+            source_revision: None,
+        })
+    };
+    if !config.use_svm_props {
+        return mirror().map(Some);
+    }
+    let properties = session.rev_properties(revision.revision)?;
+    let Some(value) = properties.get("svm:headrev") else {
+        return mirror().map(Some);
+    };
+    let value = std::str::from_utf8(value)
+        .map_err(|_| format!("svm:headrev at r{} is not valid UTF-8", revision.revision))?
+        .trim_end_matches(['\r', '\n']);
+    let (source_uuid, source_revision) = value
+        .split_once(':')
+        .ok_or_else(|| format!("invalid svm:headrev at r{}: {value:?}", revision.revision))?;
+    crate::config::validate_svm_uuid(source_uuid)?;
+    let expected_uuid = config.svm_uuid.as_deref().ok_or_else(|| {
+        format!(
+            "svn-remote.{} uses useSvmProps but has no validated SVM identity",
+            config.name
+        )
+    })?;
+    if source_uuid != expected_uuid {
+        return Err(format!(
+            "UUID mismatch on SVM path: expected {expected_uuid}, got {source_uuid}"
+        ));
+    }
+    let source_revision = source_revision
+        .parse::<u32>()
+        .map_err(|_| format!("invalid svm:headrev at r{}: {value:?}", revision.revision))?;
+    if source_revision == 0 {
+        return Ok(None);
+    }
+    Ok(Some(ImportRevisionIdentity {
+        url: crate::tracking_state::svm_metadata_url(config, &mapping.svn_path)?,
+        revision: source_revision,
+        uuid: source_uuid.to_string(),
+        source_revision: Some(source_revision),
+    }))
+}
+
+fn commit_message_with_identity(
+    config: &SvnRemoteConfig,
+    revision: &RevisionEvent,
+    identity: &ImportRevisionIdentity,
+) -> Result<String, String> {
+    if config.no_metadata {
+        return Ok(revision.message.clone());
+    }
+    let footer = GitSvnId {
+        url: identity.url.clone(),
+        revision: identity.revision,
+        uuid: identity.uuid.clone(),
+    }
+    .to_footer();
+    Ok(format!("{}\n\n{}\n", revision.message, footer))
+}
+
 fn commit_message(
     config: &SvnRemoteConfig,
     revision: &RevisionEvent,
@@ -2104,15 +2202,15 @@ fn publish_imported_revisions(
     uuid: &str,
     expected_old_oid: Option<&str>,
     staging_ref: &str,
-    revisions: &[u32],
+    revisions: ImportedRevisionMaps<'_>,
     append: Option<ImportAppend>,
 ) -> Result<(), String> {
     let history = git.first_parent_history(staging_ref)?;
-    if history.len() < revisions.len() {
+    if history.len() < revisions.transport.len() {
         return Err("import staging ref does not contain every imported revision".to_string());
     }
     if let Some(expected_old_oid) = expected_old_oid
-        && history.get(revisions.len()).map(String::as_str) != Some(expected_old_oid)
+        && history.get(revisions.transport.len()).map(String::as_str) != Some(expected_old_oid)
     {
         return Err(
             "import staging history does not descend from the expected ref tip".to_string(),
@@ -2120,13 +2218,14 @@ fn publish_imported_revisions(
     }
     let mut object_ids = history
         .into_iter()
-        .take(revisions.len())
+        .take(revisions.transport.len())
         .collect::<Vec<_>>();
     object_ids.reverse();
     let records = revisions
+        .transport
         .iter()
         .copied()
-        .zip(object_ids)
+        .zip(object_ids.iter().cloned())
         .map(|(revision, object_id_hex)| RevMapRecord {
             revision,
             object_id_hex,
@@ -2142,16 +2241,38 @@ fn publish_imported_revisions(
     let expected_old_oid = expected_old_oid
         .map(str::to_string)
         .unwrap_or_else(|| "0".repeat(object_format.hex_len()));
+    let mut rev_maps = vec![ImportRevMapUpdate {
+        path: rev_map_path(git, refname, uuid)?,
+        records,
+    }];
+    if let Some((source_uuid, source_revisions)) = revisions.source {
+        if source_revisions.len() != object_ids.len() {
+            return Err("SVM source revision count does not match imported commits".to_string());
+        }
+        let source_records = source_revisions
+            .iter()
+            .zip(&object_ids)
+            .filter_map(|(revision, object_id_hex)| {
+                revision.map(|revision| RevMapRecord {
+                    revision,
+                    object_id_hex: object_id_hex.clone(),
+                })
+            })
+            .collect::<Vec<_>>();
+        if !source_records.is_empty() {
+            rev_maps.push(ImportRevMapUpdate {
+                path: rev_map_path(git, refname, source_uuid)?,
+                records: source_records,
+            });
+        }
+    }
     complete_import_publication(
         git,
         ImportPublication {
             refname: refname.to_string(),
             expected_old_oid,
             target_oid,
-            rev_maps: vec![ImportRevMapUpdate {
-                path: rev_map_path(git, refname, uuid)?,
-                records,
-            }],
+            rev_maps,
             append,
         },
     )

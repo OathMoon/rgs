@@ -8,6 +8,25 @@ use crate::mapping::{RefMapping, desanitize_refname, sanitize_refname};
 use crate::metadata::svn_metadata_dir;
 use crate::rev_map::{RevMap, RevMapRecord};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SelectedRevMaps {
+    pub transport_uuid: String,
+    pub transport_path: PathBuf,
+    pub source: Option<(String, PathBuf)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TrackingIdentityKind {
+    Transport,
+    Source,
+}
+
+pub(crate) struct IdentityRevMaps<'a> {
+    pub transport_uuid: &'a str,
+    pub transport_record: &'a RevMapRecord,
+    pub source_path: Option<&'a Path>,
+}
+
 pub(crate) fn validate_existing_tracking_state(
     git: &GitCli,
     config: &SvnRemoteConfig,
@@ -16,9 +35,35 @@ pub(crate) fn validate_existing_tracking_state(
     uuid: &str,
     rev_map_path: &Path,
 ) -> Result<Option<RevMapRecord>, String> {
+    let metadata_dir = rev_map_path.parent().ok_or_else(|| {
+        format!(
+            "rev_map path has no metadata directory: {}",
+            rev_map_path.display()
+        )
+    })?;
+    let selected = select_existing_rev_maps(git, config, metadata_dir)?
+        .ok_or_else(|| format!("missing .rev_map in {}", metadata_dir.display()))?;
+    if selected.transport_uuid != uuid || selected.transport_path != rev_map_path {
+        return Err(corrupt_error(
+            refname,
+            rev_map_path,
+            "configured transport UUID does not select the requested rev_map",
+        ));
+    }
+    validate_selected_rev_maps(git, config, svn_path, &selected)?;
     let state = read_existing_tracking_state(git, config, refname, rev_map_path)?;
     if let Some(record) = &state.record
-        && !tracking_identity_matches(config, svn_path, uuid, record, state.identity.as_ref())?
+        && !tracking_identity_matches(
+            git,
+            config,
+            svn_path,
+            IdentityRevMaps {
+                transport_uuid: uuid,
+                transport_record: record,
+                source_path: selected.source.as_ref().map(|(_, path)| path.as_path()),
+            },
+            state.identity.as_ref(),
+        )?
     {
         return Err(identity_mismatch_error(
             config,
@@ -54,10 +99,12 @@ pub(crate) fn validate_candidate_mappings(
     let mut validated = Vec::new();
     for (refname, candidates) in by_ref {
         let metadata_dir = svn_metadata_dir(&metadata_root, &refname)?;
-        let Some((uuid, rev_map_path)) = find_existing_rev_map(&metadata_dir)? else {
+        let Some(selected) = select_existing_rev_maps(git, config, &metadata_dir)? else {
             validated.extend(candidates);
             continue;
         };
+        let uuid = selected.transport_uuid;
+        let rev_map_path = selected.transport_path;
         let state = read_existing_tracking_state(git, config, &refname, &rev_map_path)?;
         let Some(record) = state.record.as_ref() else {
             if candidates.len() > 1 {
@@ -71,10 +118,14 @@ pub(crate) fn validate_candidate_mappings(
         let mut matches = Vec::new();
         for mapping in &candidates {
             if tracking_identity_matches(
+                git,
                 config,
                 &mapping.svn_path,
-                &uuid,
-                record,
+                IdentityRevMaps {
+                    transport_uuid: &uuid,
+                    transport_record: record,
+                    source_path: selected.source.as_ref().map(|(_, path)| path.as_path()),
+                },
                 state.identity.as_ref(),
             )? {
                 matches.push(mapping.clone());
@@ -145,9 +196,11 @@ fn is_importer_auxiliary_ref(
     }
 
     let base_metadata_dir = svn_metadata_dir(metadata_root, base_ref)?;
-    let Some((base_uuid, base_rev_map_path)) = find_existing_rev_map(&base_metadata_dir)? else {
+    let Some(base_selected) = select_existing_rev_maps(git, config, &base_metadata_dir)? else {
         return Ok(false);
     };
+    let base_uuid = base_selected.transport_uuid;
+    let base_rev_map_path = base_selected.transport_path;
     if base_uuid != uuid {
         return Ok(false);
     }
@@ -291,22 +344,134 @@ fn read_existing_tracking_state(
     })
 }
 
-fn tracking_identity_matches(
+pub(crate) fn tracking_identity_matches(
+    git: &GitCli,
     config: &SvnRemoteConfig,
     svn_path: &str,
-    uuid: &str,
-    record: &RevMapRecord,
+    maps: IdentityRevMaps<'_>,
     identity: Option<&GitSvnId>,
 ) -> Result<bool, String> {
+    Ok(classify_tracking_identity(git, config, svn_path, maps, identity)?.is_some())
+}
+
+pub(crate) fn classify_tracking_identity(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    svn_path: &str,
+    maps: IdentityRevMaps<'_>,
+    identity: Option<&GitSvnId>,
+) -> Result<Option<TrackingIdentityKind>, String> {
     if config.no_metadata {
-        return Ok(true);
+        return Ok(Some(TrackingIdentityKind::Transport));
     }
     let Some(identity) = identity else {
-        return Ok(false);
+        return Ok(None);
     };
-    Ok(identity.revision == record.revision
+    if identity.revision == maps.transport_record.revision
         && identity.url == config.metadata_url(svn_path)?
-        && identity.uuid == config.metadata_uuid(uuid)?)
+        && identity.uuid == config.metadata_uuid(maps.transport_uuid)?
+    {
+        return Ok(Some(TrackingIdentityKind::Transport));
+    }
+    let Some(source_path) = maps.source_path else {
+        return Ok(None);
+    };
+    let Some(source_uuid) = config.svm_uuid.as_deref() else {
+        return Ok(None);
+    };
+    if identity.uuid != source_uuid || identity.url != svm_metadata_url(config, svn_path)? {
+        return Ok(None);
+    }
+    Ok(RevMap::open_existing(source_path, git.object_format()?)?
+        .records()?
+        .iter()
+        .any(|source_record| {
+            source_record.revision == identity.revision
+                && source_record.object_id_hex == maps.transport_record.object_id_hex
+                && !source_record.has_zero_object_id()
+        })
+        .then_some(TrackingIdentityKind::Source))
+}
+
+pub(crate) fn svm_metadata_url(config: &SvnRemoteConfig, svn_path: &str) -> Result<String, String> {
+    let transport_url = config.metadata_url(svn_path)?;
+    let replace = config.svm_replace.as_deref().ok_or_else(|| {
+        format!(
+            "svn-remote.{} uses useSvmProps but has no validated svm-replace",
+            config.name
+        )
+    })?;
+    let source = config.svm_source.as_deref().ok_or_else(|| {
+        format!(
+            "svn-remote.{} uses useSvmProps but has no validated svm-source",
+            config.name
+        )
+    })?;
+    let suffix = transport_url.strip_prefix(replace).ok_or_else(|| {
+        format!("SVM replacement URL {replace:?} does not prefix {transport_url:?}")
+    })?;
+    if !suffix.is_empty() && !suffix.starts_with('/') {
+        return Err(format!(
+            "SVM replacement URL {replace:?} is not a path-boundary prefix of {transport_url:?}"
+        ));
+    }
+    Ok(format!("{}{}", source.trim_end_matches('/'), suffix))
+}
+
+pub(crate) fn validate_selected_rev_maps(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    svn_path: &str,
+    selected: &SelectedRevMaps,
+) -> Result<(), String> {
+    let Some((source_uuid, source_path)) = &selected.source else {
+        return Ok(());
+    };
+    let transport_records =
+        RevMap::open_existing(&selected.transport_path, git.object_format()?)?.records()?;
+    let expected_url = svm_metadata_url(config, svn_path)?;
+    for record in RevMap::open_existing(source_path, git.object_format()?)?.records()? {
+        if record.has_zero_object_id() {
+            continue;
+        }
+        if !transport_records
+            .iter()
+            .any(|transport| transport.object_id_hex == record.object_id_hex)
+        {
+            return Err(format!(
+                "source rev_map {} r{} points to {}, which is absent from transport rev_map {}",
+                source_path.display(),
+                record.revision,
+                record.object_id_hex,
+                selected.transport_path.display()
+            ));
+        }
+        let message = git.commit_message(&record.object_id_hex)?;
+        let identity = message
+            .lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .and_then(|line| GitSvnId::parse(line.trim_end_matches('\r')).ok())
+            .ok_or_else(|| {
+                format!(
+                    "source rev_map {} r{} points to a commit without a valid git-svn-id footer",
+                    source_path.display(),
+                    record.revision
+                )
+            })?;
+        if identity.revision != record.revision
+            || identity.uuid != *source_uuid
+            || identity.url != expected_url
+        {
+            return Err(format!(
+                "source rev_map {} r{} disagrees with {}",
+                source_path.display(),
+                record.revision,
+                identity.to_footer()
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn identity_mismatch_error(
@@ -340,12 +505,74 @@ fn identity_mismatch_error(
     )
 }
 
-pub(crate) fn find_existing_rev_map(
+pub(crate) fn select_existing_rev_maps(
+    git: &GitCli,
+    config: &SvnRemoteConfig,
     metadata_dir: &Path,
-) -> Result<Option<(String, PathBuf)>, String> {
+) -> Result<Option<SelectedRevMaps>, String> {
+    let candidates = rev_map_candidates(metadata_dir)?;
+    if candidates.is_empty() {
+        return Ok(None);
+    }
+    if !config.use_svm_props {
+        return match candidates.as_slice() {
+            [(uuid, path)] => Ok(Some(SelectedRevMaps {
+                transport_uuid: uuid.clone(),
+                transport_path: path.clone(),
+                source: None,
+            })),
+            _ => Err(ambiguous_rev_maps(metadata_dir, &candidates)),
+        };
+    }
+    let prefix = format!("svn-remote.{}", config.name);
+    let transport_uuid = git
+        .git_svn_metadata_get(&format!("{prefix}.uuid"))?
+        .ok_or_else(|| format!("missing private {prefix}.uuid for useSvmProps tracking"))?;
+    let source_uuid = config.svm_uuid.clone().ok_or_else(|| {
+        format!(
+            "svn-remote.{} uses useSvmProps but has no validated svm-uuid",
+            config.name
+        )
+    })?;
+    if transport_uuid == source_uuid {
+        return Err("SVM transport UUID and source UUID select the same rev_map".to_string());
+    }
+    let unexpected = candidates
+        .iter()
+        .filter(|(uuid, _)| uuid != &transport_uuid && uuid != &source_uuid)
+        .collect::<Vec<_>>();
+    if !unexpected.is_empty() {
+        return Err(ambiguous_rev_maps(metadata_dir, &candidates));
+    }
+    let path_for = |uuid: &str| {
+        candidates
+            .iter()
+            .find(|(candidate, _)| candidate == uuid)
+            .map(|(_, path)| path.clone())
+            .ok_or_else(|| {
+                format!(
+                    "missing configured .rev_map.{uuid} in {}",
+                    metadata_dir.display()
+                )
+            })
+    };
+    let transport_path = path_for(&transport_uuid)?;
+    let source = candidates
+        .iter()
+        .any(|(candidate, _)| candidate == &source_uuid)
+        .then(|| path_for(&source_uuid).map(|path| (source_uuid.clone(), path)))
+        .transpose()?;
+    Ok(Some(SelectedRevMaps {
+        transport_uuid: transport_uuid.clone(),
+        transport_path,
+        source,
+    }))
+}
+
+fn rev_map_candidates(metadata_dir: &Path) -> Result<Vec<(String, PathBuf)>, String> {
     let entries = match std::fs::read_dir(metadata_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
         Err(error) => return Err(error.to_string()),
     };
     let mut candidates = Vec::new();
@@ -362,19 +589,19 @@ pub(crate) fn find_existing_rev_map(
         }
     }
     candidates.sort_by(|left, right| left.1.cmp(&right.1));
-    match candidates.len() {
-        0 => Ok(None),
-        1 => Ok(candidates.pop()),
-        _ => Err(format!(
-            "ambiguous .rev_map files in {}: {}",
-            metadata_dir.display(),
-            candidates
-                .iter()
-                .map(|(_, path)| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
-    }
+    Ok(candidates)
+}
+
+fn ambiguous_rev_maps(metadata_dir: &Path, candidates: &[(String, PathBuf)]) -> String {
+    format!(
+        "ambiguous .rev_map files in {}: {}",
+        metadata_dir.display(),
+        candidates
+            .iter()
+            .map(|(_, path)| path.display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn current_ref_oid(git: &GitCli, refname: &str) -> Result<Option<String>, String> {
@@ -394,7 +621,9 @@ fn corrupt_error(refname: &str, rev_map_path: &Path, detail: impl std::fmt::Disp
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_candidate_mappings, validate_existing_tracking_state};
+    use super::{
+        select_existing_rev_maps, validate_candidate_mappings, validate_existing_tracking_state,
+    };
     use crate::config::SvnRemoteConfig;
     use crate::git::GitCli;
     use crate::mapping::{LayoutMappings, MappingKind, RefMapping, build_single_path};
@@ -522,6 +751,130 @@ mod tests {
         rev_map.append(1, &fixture.oid).unwrap();
 
         validate(&fixture, "repo-uuid").unwrap();
+    }
+
+    #[test]
+    fn accepts_configured_svm_transport_and_source_rev_maps() {
+        const TRANSPORT: &str = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        const SOURCE: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let mut fixture = fixture(&format!(
+            "import\n\ngit-svn-id: file:///source/trunk@105 {SOURCE}"
+        ));
+        fixture.config = fixture
+            .config
+            .with_svm_identity("file:///source", "file:///repo", SOURCE);
+        fixture
+            .git
+            .git_svn_metadata_set("svn-remote.svn.uuid", TRANSPORT)
+            .unwrap();
+        fixture.rev_map_path = fixture
+            .rev_map_path
+            .with_file_name(format!(".rev_map.{TRANSPORT}"));
+        RevMap::open(&fixture.rev_map_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(11, &fixture.oid)
+            .unwrap();
+        let source_path = fixture
+            .rev_map_path
+            .with_file_name(format!(".rev_map.{SOURCE}"));
+        RevMap::open(&source_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(105, &fixture.oid)
+            .unwrap();
+
+        validate(&fixture, TRANSPORT).unwrap();
+        let selected = select_existing_rev_maps(
+            &fixture.git,
+            &fixture.config,
+            fixture.rev_map_path.parent().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(selected.transport_path, fixture.rev_map_path);
+        assert_eq!(selected.source, Some((SOURCE.to_string(), source_path)));
+    }
+
+    #[test]
+    fn accepts_transport_only_svm_map_before_first_source_revision() {
+        const TRANSPORT: &str = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        const SOURCE: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let mut fixture = fixture(&format!(
+            "import\n\ngit-svn-id: file:///repo/trunk@11 {TRANSPORT}"
+        ));
+        fixture.config =
+            fixture
+                .config
+                .with_svm_identity("file:///source/trunk", "file:///repo/trunk", SOURCE);
+        fixture
+            .git
+            .git_svn_metadata_set("svn-remote.svn.uuid", TRANSPORT)
+            .unwrap();
+        fixture.rev_map_path = fixture
+            .rev_map_path
+            .with_file_name(format!(".rev_map.{TRANSPORT}"));
+        RevMap::open(&fixture.rev_map_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(11, &fixture.oid)
+            .unwrap();
+
+        validate(&fixture, TRANSPORT).unwrap();
+        let selected = select_existing_rev_maps(
+            &fixture.git,
+            &fixture.config,
+            fixture.rev_map_path.parent().unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert!(selected.source.is_none());
+    }
+
+    #[test]
+    fn rejects_source_footer_without_map_and_extra_or_tampered_source_maps() {
+        const TRANSPORT: &str = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        const SOURCE: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let mut fixture = fixture(&format!(
+            "import\n\ngit-svn-id: file:///source/trunk@105 {SOURCE}"
+        ));
+        fixture.config = fixture
+            .config
+            .with_svm_identity("file:///source", "file:///repo", SOURCE);
+        fixture
+            .git
+            .git_svn_metadata_set("svn-remote.svn.uuid", TRANSPORT)
+            .unwrap();
+        fixture.rev_map_path = fixture
+            .rev_map_path
+            .with_file_name(format!(".rev_map.{TRANSPORT}"));
+        RevMap::open(&fixture.rev_map_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(11, &fixture.oid)
+            .unwrap();
+
+        let missing = validate(&fixture, TRANSPORT).unwrap_err();
+        assert!(missing.contains("rev_map r11 expects"), "{missing}");
+
+        let source_path = fixture
+            .rev_map_path
+            .with_file_name(format!(".rev_map.{SOURCE}"));
+        RevMap::open(&source_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(105, &"c".repeat(40))
+            .unwrap();
+        let tampered = validate(&fixture, TRANSPORT).unwrap_err();
+        assert!(
+            tampered.contains("absent from transport rev_map"),
+            "{tampered}"
+        );
+
+        RevMap::open(
+            fixture.rev_map_path.with_file_name(".rev_map.unexpected"),
+            ObjectFormat::Sha1,
+        )
+        .unwrap()
+        .append(1, &fixture.oid)
+        .unwrap();
+        let extra = validate(&fixture, TRANSPORT).unwrap_err();
+        assert!(extra.contains("ambiguous .rev_map files"), "{extra}");
     }
 
     #[test]

@@ -19,7 +19,7 @@ const SVNSYNC_SOURCE_URL: &str = "https://origin.example/svn/source";
 const SVNSYNC_SOURCE_UUID: &str = "11111111-2222-3333-4444-555555555555";
 
 #[test]
-fn fetch_discovers_and_privately_caches_svm_identity_before_import_rejection() {
+fn direct_svm_clone_and_fetch_publish_transport_and_source_history() {
     match require_svn_tools() {
         Ok(()) => {}
         Err(SvnToolPolicy::Skip(message)) => {
@@ -30,39 +30,86 @@ fn fetch_discovers_and_privately_caches_svm_identity_before_import_rejection() {
     }
     let temp = tempfile::tempdir().unwrap();
     let fixture = StandardSvnFixture::create().unwrap();
-    fixture
+    let source_property_revision = fixture
         .set_trunk_dir_property(
             "svm:source",
             "https://user@origin.example/svn/source!/nested///",
         )
         .unwrap();
-    fixture
+    let uuid_property_revision = fixture
         .set_trunk_dir_property("svm:uuid", SVNSYNC_SOURCE_UUID)
         .unwrap();
+    fixture
+        .set_revision_property(
+            1,
+            "svm:headrev",
+            format!("{SVNSYNC_SOURCE_UUID}:0").as_bytes(),
+        )
+        .unwrap();
+    fixture
+        .set_revision_property(
+            2,
+            "svm:headrev",
+            format!("{SVNSYNC_SOURCE_UUID}:42").as_bytes(),
+        )
+        .unwrap();
+    for revision in [source_property_revision, uuid_property_revision] {
+        fixture
+            .set_revision_property(
+                revision,
+                "svm:headrev",
+                format!("{SVNSYNC_SOURCE_UUID}:0").as_bytes(),
+            )
+            .unwrap();
+    }
     let work = temp.path().join("work");
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(temp.path())
         .args([
-            "init",
+            "clone",
             &format!("{}/trunk", fixture.url()),
             "work",
             "--useSvmProps",
         ])
         .assert()
         .success();
-    Command::cargo_bin("git-svn-rs")
-        .unwrap()
-        .current_dir(&work)
-        .arg("fetch")
-        .assert()
-        .failure()
-        .stderr(predicates::str::contains(
-            "useSvmProps import is not yet implemented",
-        ));
 
     let git = git_svn_rs_core::git::GitCli::new(&work);
+    let mirror_uuid = svn_stdout(&["info", "--show-item", "repos-uuid", fixture.url().as_str()]);
+    let mirror_uuid = mirror_uuid.trim();
+    let metadata_dir = work.join(".git/svn/refs/remotes/git-svn");
+    let transport_map = RevMap::open_existing(
+        metadata_dir.join(format!(".rev_map.{mirror_uuid}")),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    let source_map = RevMap::open_existing(
+        metadata_dir.join(format!(".rev_map.{SVNSYNC_SOURCE_UUID}")),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    let cloned_oid = git.rev_parse("refs/remotes/git-svn").unwrap();
+    assert_eq!(transport_map.get(1).unwrap(), None);
+    assert_eq!(
+        transport_map.get(2).unwrap().as_deref(),
+        Some(cloned_oid.trim())
+    );
+    assert_eq!(transport_map.get(source_property_revision).unwrap(), None);
+    assert_eq!(transport_map.get(uuid_property_revision).unwrap(), None);
+    assert_eq!(
+        source_map.get(42).unwrap().as_deref(),
+        Some(cloned_oid.trim())
+    );
+    assert_eq!(source_map.get(0).unwrap(), None);
+    let cloned_commit = git
+        .run_for_test(["show", "-s", "--format=%B%n%ae", cloned_oid.trim()])
+        .unwrap();
+    assert!(cloned_commit.contains(&format!(
+        "git-svn-id: {SVNSYNC_SOURCE_URL}/nested@42 {SVNSYNC_SOURCE_UUID}"
+    )));
+    assert!(cloned_commit.contains(&format!("@{SVNSYNC_SOURCE_UUID}")));
     assert_eq!(
         git.git_svn_metadata_get("svn-remote.svn.svm-source")
             .unwrap()
@@ -82,7 +129,69 @@ fn fetch_discovers_and_privately_caches_svm_identity_before_import_rejection() {
         Some(SVNSYNC_SOURCE_UUID)
     );
     assert_eq!(git.config_get("svn-remote.svn.svm-source").unwrap(), None);
-    assert!(git.rev_parse("refs/remotes/git-svn").is_err());
+
+    let mirror_revision = fixture
+        .modify_run_script_content("#!/bin/sh\necho mirror fallback\n")
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+    let mirror_oid = git.rev_parse("refs/remotes/git-svn").unwrap();
+    assert_ne!(mirror_oid, cloned_oid);
+    assert_eq!(
+        transport_map.get(mirror_revision).unwrap().as_deref(),
+        Some(mirror_oid.trim())
+    );
+    assert_eq!(
+        source_map.get(42).unwrap().as_deref(),
+        Some(cloned_oid.trim())
+    );
+    let mirror_commit = git
+        .run_for_test(["show", "-s", "--format=%B%n%ae", mirror_oid.trim()])
+        .unwrap();
+    assert!(mirror_commit.contains(&format!(
+        "git-svn-id: {}/trunk@{mirror_revision} {mirror_uuid}",
+        fixture.url()
+    )));
+    assert!(mirror_commit.contains(&format!("@{mirror_uuid}")));
+
+    let source_revision = fixture
+        .modify_run_script_content("#!/bin/sh\necho source incremental\n")
+        .unwrap();
+    fixture
+        .set_revision_property(
+            source_revision,
+            "svm:headrev",
+            format!("{SVNSYNC_SOURCE_UUID}:43").as_bytes(),
+        )
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+    let source_oid = git.rev_parse("refs/remotes/git-svn").unwrap();
+    assert_ne!(source_oid, mirror_oid);
+    assert_eq!(
+        transport_map.get(source_revision).unwrap().as_deref(),
+        Some(source_oid.trim())
+    );
+    assert_eq!(
+        source_map.get(43).unwrap().as_deref(),
+        Some(source_oid.trim())
+    );
+    assert_eq!(source_map.get(mirror_revision).unwrap(), None);
+    let source_commit = git
+        .run_for_test(["show", "-s", "--format=%B%n%ae", source_oid.trim()])
+        .unwrap();
+    assert!(source_commit.contains(&format!(
+        "git-svn-id: {SVNSYNC_SOURCE_URL}/nested@43 {SVNSYNC_SOURCE_UUID}"
+    )));
+    assert!(source_commit.contains(&format!("@{SVNSYNC_SOURCE_UUID}")));
 }
 
 #[test]

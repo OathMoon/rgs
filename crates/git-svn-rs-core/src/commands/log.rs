@@ -37,9 +37,32 @@ pub fn run_in_work_tree(
     let exact_revision = revision_filter
         .as_ref()
         .and_then(RevisionFilter::exact_revision);
+    let namespace_treeish = treeish.as_deref().unwrap_or(&tracked.refname);
+    let transport_records = tracked.records()?;
+    let (namespace_records, namespace_kind) = if tracked.config.use_svm_props {
+        let records = super::find_rev::active_revision_records(&tracked, namespace_treeish)?;
+        let kind = tracked
+            .git
+            .first_parent_history(namespace_treeish)?
+            .iter()
+            .filter(|commit| {
+                transport_records.iter().any(|record| {
+                    record.object_id_hex == commit.as_str() && !record.has_zero_object_id()
+                })
+            })
+            .find_map(|commit| {
+                super::info::validated_commit_identity(&tracked, &transport_records, commit).ok()
+            })
+            .ok_or_else(|| {
+                format!("unable to determine an SVN revision from {namespace_treeish} history")
+            })?
+            .kind;
+        (records, Some(kind))
+    } else {
+        (transport_records.clone(), None)
+    };
     let log_target = if let Some(filter) = revision_filter.as_ref() {
-        tracked
-            .records()?
+        namespace_records
             .into_iter()
             .filter(|record| filter.contains(record.revision) && !record.has_zero_object_id())
             .max_by_key(|record| record.revision)
@@ -82,6 +105,19 @@ pub fn run_in_work_tree(
         }
         let Some((id, message)) = split_git_svn_footer(fields[6]) else {
             continue;
+        };
+        let id = if let Some(namespace_kind) = namespace_kind {
+            let Ok(identity) =
+                super::info::validated_commit_identity(&tracked, &transport_records, fields[0])
+            else {
+                continue;
+            };
+            if identity.kind != namespace_kind {
+                continue;
+            }
+            identity.id
+        } else {
+            id
         };
         if last_revision == Some(id.revision) {
             continue;

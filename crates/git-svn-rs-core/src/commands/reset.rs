@@ -1,6 +1,7 @@
 use crate::cli::ResetArgs;
 use crate::commands::reset_transaction;
 use crate::commands::resolver::resolve_tracked_svn;
+use crate::config::{read_svn_remote_config, svn_remote_names};
 use crate::dcommit::journal_registry::{RepositoryDcommitLock, discover_repository_journals};
 use crate::git::GitCli;
 
@@ -15,6 +16,7 @@ pub fn run_in_work_tree(
     let revision = requested_revision(&args)?;
     let work_tree = work_tree.into();
     let git = GitCli::new(&work_tree);
+    reject_configured_svm_reset(&git)?;
     let svn_metadata_root = git.work_tree().join(git.git_dir()?).join("svn");
     let _lock =
         RepositoryDcommitLock::acquire(&svn_metadata_root).map_err(|error| error.to_string())?;
@@ -69,6 +71,18 @@ pub fn run_in_work_tree(
     ))
 }
 
+fn reject_configured_svm_reset(git: &GitCli) -> Result<(), String> {
+    for remote in svn_remote_names(git)? {
+        if read_svn_remote_config(git, &remote)?.use_svm_props {
+            return Err(
+                "reset is unavailable for useSvmProps mirrors until both revision maps can be reset atomically"
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
+}
+
 fn requested_revision(args: &ResetArgs) -> Result<u32, String> {
     args.revision
         .as_deref()
@@ -83,4 +97,42 @@ fn parse_revision(value: &str) -> Result<u32, String> {
         .unwrap_or(value)
         .parse::<u32>()
         .map_err(|_| format!("invalid SVN revision: {value}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn svm_reset_rejects_before_lock_or_pending_reset_recovery() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        git.config_set("svn-remote.svn.url", "mock://repo").unwrap();
+        git.config_set("svn-remote.svn.fetch", "trunk:refs/remotes/git-svn")
+            .unwrap();
+        git.config_set("svn-remote.svn.useSvmProps", "true")
+            .unwrap();
+        let metadata_root = temp.path().join(".git/svn");
+        std::fs::create_dir_all(&metadata_root).unwrap();
+        let pending = metadata_root.join("reset-journal");
+        std::fs::write(&pending, b"pending reset must remain untouched").unwrap();
+        let _lock = RepositoryDcommitLock::acquire(&metadata_root).unwrap();
+
+        let error = run_in_work_tree(
+            temp.path(),
+            ResetArgs {
+                revision: Some("1".to_string()),
+                revision_option: None,
+                parent: false,
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("useSvmProps"), "{error}");
+        assert_eq!(
+            std::fs::read(pending).unwrap(),
+            b"pending reset must remain untouched"
+        );
+    }
 }

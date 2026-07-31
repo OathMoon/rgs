@@ -1,6 +1,7 @@
 use crate::cli::FindRevArgs;
 use crate::commands::resolver::{resolve_tracked_svn, resolve_tracked_svn_at};
 use crate::rev_map::RevMapRecord;
+use crate::tracking_state::TrackingIdentityKind;
 
 pub fn run(args: FindRevArgs) -> Result<String, String> {
     run_in_work_tree(".", args)
@@ -22,7 +23,12 @@ pub fn run_in_work_tree(
                     .to_string(),
             );
         }
-        let records = tracked.open_rev_map()?.records()?;
+        let records = if tracked.config.use_svm_props {
+            let scope = args.treeish.as_deref().unwrap_or("HEAD");
+            active_revision_records(&tracked, scope)?
+        } else {
+            tracked.records()?
+        };
         let record = select_revision_record(&records, revision, args.before, args.after);
         let Some(record) = record else {
             return Ok(String::new());
@@ -39,13 +45,53 @@ pub fn run_in_work_tree(
             return Ok(String::new());
         }
         let commit = commit.trim();
-        let revision = tracked
-            .open_rev_map()?
-            .records()?
-            .into_iter()
-            .find(|record| record.object_id_hex == commit)
-            .map(|record| record.revision);
+        let transport_records = tracked.records()?;
+        let revision = if tracked.config.use_svm_props {
+            transport_records
+                .iter()
+                .any(|record| record.object_id_hex == commit && !record.has_zero_object_id())
+                .then(|| {
+                    super::info::validated_commit_identity(&tracked, &transport_records, commit)
+                        .map(|identity| identity.record.revision)
+                })
+                .transpose()?
+        } else {
+            transport_records
+                .into_iter()
+                .find(|record| record.object_id_hex == commit)
+                .map(|record| record.revision)
+        };
         Ok(revision.map(|rev| format!("{rev}\n")).unwrap_or_default())
+    }
+}
+
+pub(crate) fn active_revision_records(
+    tracked: &crate::commands::resolver::TrackedSvn,
+    treeish: &str,
+) -> Result<Vec<RevMapRecord>, String> {
+    let transport_records = tracked.records()?;
+    let history = tracked.git.first_parent_history(treeish)?;
+    let identity = history
+        .iter()
+        .filter(|commit| {
+            transport_records.iter().any(|record| {
+                record.object_id_hex == commit.as_str() && !record.has_zero_object_id()
+            })
+        })
+        .find_map(|commit| {
+            super::info::validated_commit_identity(tracked, &transport_records, commit).ok()
+        })
+        .ok_or_else(|| format!("unable to determine an SVN revision from {treeish} history"))?;
+    match identity.kind {
+        TrackingIdentityKind::Transport => Ok(transport_records),
+        TrackingIdentityKind::Source => {
+            let source = tracked
+                .source_rev_map
+                .as_ref()
+                .ok_or_else(|| "SVM source rev_map is missing".to_string())?;
+            crate::rev_map::RevMap::open_existing(&source.path, tracked.git.object_format()?)?
+                .records()
+        }
     }
 }
 

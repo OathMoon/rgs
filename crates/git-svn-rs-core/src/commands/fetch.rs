@@ -105,7 +105,6 @@ fn fetch_config(
         let session = MockRaSession::standard_fixture("mock-uuid");
         let base_revision = imported_base_revision(git, &config, "mock-uuid", selected_ref)?;
         let mut config = effective_fetch_config(config, shared, base_revision)?;
-        reject_unimplemented_svm_import(&config)?;
         hydrate_svnsync_identity(git, &mut config, || session.rev_properties(0))?;
         let start_revision = base_revision.saturating_add(1);
         let head_revision = session.latest_revnum()?;
@@ -141,7 +140,9 @@ fn fetch_config(
         head_revision,
         |path, revision| backend.node_property_bytes(&repos_root, path, revision),
     )?;
-    reject_unimplemented_svm_import(&config)?;
+    if config.use_svm_props {
+        persist_repository_identity(git, &config, &repos_root, &uuid)?;
+    }
     hydrate_svnsync_identity(git, &mut config, || backend.rev_properties(0))?;
     let start_revision = base_revision.saturating_add(1);
     let import_options = import_options(start_revision, head_revision, shared.revision.as_deref())?;
@@ -262,15 +263,6 @@ fn reject_identity_change(base_revision: u32, option: &str) -> Result<(), String
         Err(format!(
             "{option} cannot change after SVN history has been imported"
         ))
-    }
-}
-
-fn reject_unimplemented_svm_import(config: &SvnRemoteConfig) -> Result<(), String> {
-    if config.use_svm_props {
-        Err("useSvmProps import is not yet implemented; refusing to write incorrect revision metadata"
-            .to_string())
-    } else {
-        Ok(())
     }
 }
 
@@ -1293,15 +1285,6 @@ mod tests {
                 .unwrap_err()
                 .contains("--use-svnsync-props cannot change")
         );
-    }
-
-    #[test]
-    fn svm_mode_fails_closed_until_dual_revision_import_is_available() {
-        let config =
-            SvnRemoteConfig::new("svn", "file:///repo", build_single_path("")).with_svm_props();
-
-        let error = reject_unimplemented_svm_import(&config).unwrap_err();
-        assert!(error.contains("refusing to write incorrect revision metadata"));
     }
 
     fn svm_config(url: &str, svn_path: &str) -> SvnRemoteConfig {

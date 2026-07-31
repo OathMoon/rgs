@@ -8,6 +8,12 @@ use crate::mapping::{RefMapping, desanitize_refname, sanitize_refname};
 use crate::metadata::svn_metadata_dir;
 use crate::rev_map::{RevMap, RevMapRecord};
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrackedRevMap {
+    pub uuid: String,
+    pub path: PathBuf,
+}
+
 pub struct TrackedSvn {
     pub git: GitCli,
     pub config: SvnRemoteConfig,
@@ -15,6 +21,7 @@ pub struct TrackedSvn {
     pub svn_path: String,
     pub uuid: String,
     pub rev_map_path: PathBuf,
+    pub source_rev_map: Option<TrackedRevMap>,
 }
 
 impl TrackedSvn {
@@ -248,6 +255,7 @@ fn same_tracking_target(left: &TrackedSvn, right: &TrackedSvn) -> bool {
         && left.svn_path == right.svn_path
         && left.uuid == right.uuid
         && left.rev_map_path == right.rev_map_path
+        && left.source_rev_map == right.source_rev_map
 }
 
 fn is_missing_tracking_metadata_error(error: &str) -> bool {
@@ -274,7 +282,14 @@ fn tracked_from_mapping(
 ) -> Result<TrackedSvn, String> {
     let refname = mapping.git_ref.clone();
     let svn_path = mapping.svn_path.clone();
-    let (uuid, rev_map_path) = find_rev_map(metadata_dir)?;
+    let selected = crate::tracking_state::select_existing_rev_maps(git, config, metadata_dir)?
+        .ok_or_else(|| format!("missing .rev_map in {}", metadata_dir.display()))?;
+    crate::tracking_state::validate_selected_rev_maps(git, config, &svn_path, &selected)?;
+    let uuid = selected.transport_uuid;
+    let rev_map_path = selected.transport_path;
+    let source_rev_map = selected
+        .source
+        .map(|(uuid, path)| TrackedRevMap { uuid, path });
 
     Ok(TrackedSvn {
         git: git.clone(),
@@ -283,6 +298,7 @@ fn tracked_from_mapping(
         svn_path,
         uuid,
         rev_map_path,
+        source_rev_map,
     })
 }
 
@@ -319,11 +335,20 @@ fn tracking_identity_matches(
     let Ok(identity) = GitSvnId::parse(footer.trim_end_matches('\r')) else {
         return Ok(false);
     };
-    let expected_url = tracked.config.metadata_url(&tracked.svn_path)?;
-    let expected_uuid = tracked.config.metadata_uuid(&tracked.uuid)?;
-    Ok(identity.url == expected_url
-        && identity.uuid == expected_uuid
-        && identity.revision == record.revision)
+    crate::tracking_state::tracking_identity_matches(
+        &tracked.git,
+        &tracked.config,
+        &tracked.svn_path,
+        crate::tracking_state::IdentityRevMaps {
+            transport_uuid: &tracked.uuid,
+            transport_record: record,
+            source_path: tracked
+                .source_rev_map
+                .as_ref()
+                .map(|source| source.path.as_path()),
+        },
+        Some(&identity),
+    )
 }
 
 pub(crate) fn tracked_candidate_mappings(
@@ -370,39 +395,56 @@ fn expand_ref_mapping(mapping: &RefMapping, refs: &[String]) -> Vec<RefMapping> 
         .collect()
 }
 
-fn find_rev_map(metadata_dir: &Path) -> Result<(String, PathBuf), String> {
-    let entries = std::fs::read_dir(metadata_dir).map_err(|error| {
-        if error.kind() == std::io::ErrorKind::NotFound {
-            format!("missing SVN metadata directory {}", metadata_dir.display())
-        } else {
-            error.to_string()
-        }
-    })?;
-    let mut candidates = Vec::new();
-    for entry in entries {
-        let path = entry.map_err(|e| e.to_string())?.path();
-        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-            continue;
+#[cfg(test)]
+mod tests {
+    use super::tracked_from_mapping;
+    use crate::config::SvnRemoteConfig;
+    use crate::git::GitCli;
+    use crate::mapping::{MappingKind, RefMapping, build_single_path};
+    use crate::rev_map::{ObjectFormat, RevMap};
+
+    #[test]
+    fn resolves_configured_svm_dual_rev_maps_without_ambiguity() {
+        const TRANSPORT: &str = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        const SOURCE: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        git.run_for_test(["config", "user.name", "Test"]).unwrap();
+        git.run_for_test(["config", "user.email", "test@example.com"])
+            .unwrap();
+        git.run_for_test([
+            "commit",
+            "--allow-empty",
+            "-m",
+            &format!("import\n\ngit-svn-id: file:///source/trunk@105 {SOURCE}"),
+        ])
+        .unwrap();
+        let oid = git.rev_parse("HEAD").unwrap().trim().to_string();
+        git.git_svn_metadata_set("svn-remote.svn.uuid", TRANSPORT)
+            .unwrap();
+        let metadata_dir = temp.path().join(".git/svn/refs/remotes/git-svn");
+        let transport_path = metadata_dir.join(format!(".rev_map.{TRANSPORT}"));
+        let source_path = metadata_dir.join(format!(".rev_map.{SOURCE}"));
+        RevMap::open(&transport_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(11, &oid)
+            .unwrap();
+        RevMap::open(&source_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(105, &oid)
+            .unwrap();
+        let config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path("trunk"))
+            .with_svm_identity("file:///source", "file:///repo", SOURCE);
+        let mapping = RefMapping {
+            kind: MappingKind::Fetch,
+            svn_path: "trunk".to_string(),
+            git_ref: "refs/remotes/git-svn".to_string(),
         };
-        if let Some(uuid) = name.strip_prefix(".rev_map.")
-            && !uuid.ends_with(".lock")
-            && path.is_file()
-        {
-            candidates.push((uuid.to_string(), path));
-        }
-    }
-    candidates.sort_by(|left, right| left.1.cmp(&right.1));
-    match candidates.len() {
-        0 => Err(format!("missing .rev_map in {}", metadata_dir.display())),
-        1 => Ok(candidates.pop().expect("one rev_map candidate")),
-        _ => Err(format!(
-            "ambiguous .rev_map files in {}: {}",
-            metadata_dir.display(),
-            candidates
-                .iter()
-                .map(|(_, path)| path.display().to_string())
-                .collect::<Vec<_>>()
-                .join(", ")
-        )),
+
+        let tracked = tracked_from_mapping(&git, &config, &mapping, &metadata_dir).unwrap();
+        assert_eq!(tracked.uuid, TRANSPORT);
+        assert_eq!(tracked.rev_map_path, transport_path);
+        assert_eq!(tracked.source_rev_map.unwrap().path, source_path);
     }
 }

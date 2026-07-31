@@ -1,7 +1,10 @@
 use crate::cli::InfoArgs;
+use crate::commands::resolver::TrackedSvn;
 use crate::commands::resolver::resolve_tracked_svn;
 use crate::git::GitCli;
+use crate::git_svn_id::GitSvnId;
 use crate::rev_map::RevMapRecord;
+use crate::tracking_state::{IdentityRevMaps, TrackingIdentityKind};
 use md5::{Digest, Md5};
 use std::path::{Component, Path};
 use std::time::UNIX_EPOCH;
@@ -28,7 +31,41 @@ pub fn run_in_work_tree(
         );
     }
     let relative_path = args.path.as_deref().map(normalize_info_path).transpose()?;
-    let base_url = tracked.config.metadata_url(&tracked.svn_path)?;
+    if args.url && !tracked.config.use_svm_props {
+        let base_url = tracked.config.metadata_url(&tracked.svn_path)?;
+        let url = relative_path
+            .as_deref()
+            .map(|path| add_info_path_to_url(&base_url, path))
+            .transpose()?
+            .unwrap_or(base_url);
+        if let Some(path) = relative_path.as_deref() {
+            validate_normal_info_path(&tracked.git, path)?;
+        }
+        return Ok(format!("{url}\n"));
+    }
+    crate::tracking_state::validate_existing_tracking_state(
+        &tracked.git,
+        &tracked.config,
+        &tracked.refname,
+        &tracked.svn_path,
+        &tracked.uuid,
+        &tracked.rev_map_path,
+    )?;
+    let transport_records = tracked.records()?;
+    let first_parent_history = tracked.git.first_parent_history("HEAD")?;
+    let transport_record = record_for_first_parent(&transport_records, &first_parent_history)
+        .ok_or_else(|| {
+            format!(
+                "unable to determine an SVN revision from HEAD history for {}",
+                tracked.refname
+            )
+        })?;
+    let identity = validated_commit_identity(
+        &tracked,
+        &transport_records,
+        &transport_record.object_id_hex,
+    )?;
+    let base_url = identity.id.url.clone();
     let url = relative_path
         .as_deref()
         .map(|path| add_info_path_to_url(&base_url, path))
@@ -40,28 +77,12 @@ pub fn run_in_work_tree(
     if args.url {
         return Ok(format!("{url}\n"));
     }
-    crate::tracking_state::validate_existing_tracking_state(
-        &tracked.git,
-        &tracked.config,
-        &tracked.refname,
-        &tracked.svn_path,
-        &tracked.uuid,
-        &tracked.rev_map_path,
-    )?;
-    let records = tracked.records()?;
-    let first_parent_history = tracked.git.first_parent_history("HEAD")?;
-    let svn_record = record_for_first_parent(&records, &first_parent_history).ok_or_else(|| {
-        format!(
-            "unable to determine an SVN revision from HEAD history for {}",
-            tracked.refname
-        )
-    })?;
-    let revision = svn_record.revision.to_string();
+    let revision = identity.record.revision.to_string();
     let repository_root = tracked
         .git
         .git_svn_metadata_get(&format!("svn-remote.{}.reposRoot", tracked.config.name))?
         .unwrap_or_else(|| tracked.config.url.clone());
-    let metadata_uuid = tracked.config.metadata_uuid(&tracked.uuid)?;
+    let metadata_uuid = identity.id.uuid.as_str();
 
     if let (Some(path_arg), Some(path)) = (args.path.as_deref(), relative_path.as_deref()) {
         let entry = if path.is_empty() {
@@ -69,7 +90,7 @@ pub fn run_in_work_tree(
         } else {
             let entry = tracked
                 .git
-                .ls_tree_file(&svn_record.object_id_hex, path)
+                .ls_tree_file(&transport_record.object_id_hex, path)
                 .map_err(|_| {
                     format!(
                         "info [path] currently supports only paths present in the selected SVN revision: {path}"
@@ -94,12 +115,10 @@ pub fn run_in_work_tree(
             .map(|name| format!("Name: {name}\n"))
             .unwrap_or_default();
         let last_changed = path_last_changed(
-            &tracked.git,
-            &records,
-            &svn_record.object_id_hex,
+            &tracked,
+            &transport_records,
+            &transport_record.object_id_hex,
             path,
-            &tracked.config.metadata_url(&tracked.svn_path)?,
-            metadata_uuid,
         )?;
         let file_details = entry
             .as_ref()
@@ -120,13 +139,12 @@ pub fn run_in_work_tree(
 }
 
 fn path_last_changed(
-    git: &GitCli,
-    records: &[RevMapRecord],
+    tracked: &TrackedSvn,
+    transport_records: &[RevMapRecord],
     selected_commit: &str,
     path: &str,
-    expected_url: &str,
-    expected_uuid: &str,
 ) -> Result<PathLastChanged, String> {
+    let git = &tracked.git;
     let pathspec = if path.is_empty() { "." } else { path };
     let raw = git.log_records(
         selected_commit,
@@ -145,29 +163,72 @@ fn path_last_changed(
             "unable to determine last changed Git record for info path {pathspec}"
         ));
     }
-    let revision = records
-        .iter()
-        .find(|record| record.object_id_hex == fields[0])
-        .map(|record| record.revision)
-        .ok_or_else(|| {
+    let identity =
+        validated_commit_identity(tracked, transport_records, fields[0]).map_err(|_| {
             format!(
-                "last changed commit for info path {pathspec} is absent from the selected rev_map: {}",
-                fields[0]
+                "last changed commit for info path {pathspec} disagrees with its rev_map identity"
             )
         })?;
-    let (footer, _) = super::log::split_git_svn_footer(fields[6]).ok_or_else(|| {
-        format!("last changed commit for info path {pathspec} has no valid git-svn-id footer")
-    })?;
-    if footer.revision != revision || footer.url != expected_url || footer.uuid != expected_uuid {
-        return Err(format!(
-            "last changed commit for info path {pathspec} disagrees with its rev_map identity"
-        ));
-    }
     Ok(PathLastChanged {
         author: fields[2].to_string(),
-        revision,
+        revision: identity.record.revision,
         date: super::log::format_svn_date(fields[4], super::log::author_timezone(fields[5])?)?,
     })
+}
+
+pub(crate) struct ValidatedCommitIdentity {
+    pub kind: TrackingIdentityKind,
+    pub record: RevMapRecord,
+    pub id: GitSvnId,
+}
+
+pub(crate) fn validated_commit_identity(
+    tracked: &TrackedSvn,
+    transport_records: &[RevMapRecord],
+    commit: &str,
+) -> Result<ValidatedCommitIdentity, String> {
+    let transport_record = transport_records
+        .iter()
+        .find(|record| record.object_id_hex == commit && !record.has_zero_object_id())
+        .ok_or_else(|| format!("commit {commit} is absent from the transport rev_map"))?;
+    let message = tracked.git.commit_message(commit)?;
+    let footer = message
+        .lines()
+        .rev()
+        .find(|line| !line.trim().is_empty())
+        .ok_or_else(|| format!("commit {commit} has no git-svn-id footer"))?;
+    let id = GitSvnId::parse(footer.trim_end_matches('\r'))
+        .map_err(|_| format!("commit {commit} has no valid git-svn-id footer"))?;
+    let kind = crate::tracking_state::classify_tracking_identity(
+        &tracked.git,
+        &tracked.config,
+        &tracked.svn_path,
+        IdentityRevMaps {
+            transport_uuid: &tracked.uuid,
+            transport_record,
+            source_path: tracked
+                .source_rev_map
+                .as_ref()
+                .map(|source| source.path.as_path()),
+        },
+        Some(&id),
+    )?
+    .ok_or_else(|| format!("commit {commit} disagrees with its rev_map identity"))?;
+    let record = match kind {
+        TrackingIdentityKind::Transport => transport_record.clone(),
+        TrackingIdentityKind::Source => tracked
+            .source_rev_map
+            .as_ref()
+            .ok_or_else(|| "SVM source rev_map is missing".to_string())
+            .and_then(|source| {
+                crate::rev_map::RevMap::open_existing(&source.path, tracked.git.object_format()?)
+            })?
+            .records()?
+            .into_iter()
+            .find(|record| record.object_id_hex == commit && record.revision == id.revision)
+            .ok_or_else(|| format!("commit {commit} is absent from the SVM source rev_map"))?,
+    };
+    Ok(ValidatedCommitIdentity { kind, record, id })
 }
 
 fn file_info_details(git: &GitCli, path: &str, mode: &str) -> Result<String, String> {
@@ -273,8 +334,13 @@ fn record_for_first_parent<'a>(
 
 #[cfg(test)]
 mod tests {
-    use super::{add_info_path_to_url, record_for_first_parent};
-    use crate::rev_map::RevMapRecord;
+    use super::{add_info_path_to_url, record_for_first_parent, validated_commit_identity};
+    use crate::commands::resolver::{TrackedRevMap, TrackedSvn};
+    use crate::config::SvnRemoteConfig;
+    use crate::git::GitCli;
+    use crate::mapping::build_single_path;
+    use crate::rev_map::{ObjectFormat, RevMap, RevMapRecord};
+    use crate::tracking_state::TrackingIdentityKind;
 
     #[test]
     fn revision_uses_the_nearest_rev_map_record_in_first_parent_history() {
@@ -294,6 +360,57 @@ mod tests {
                 .map(|record| record.revision),
             Some(1)
         );
+    }
+
+    #[test]
+    fn svm_commit_uses_source_revision_identity() {
+        const TRANSPORT: &str = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        const SOURCE: &str = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        git.run_for_test(["config", "user.name", "Test"]).unwrap();
+        git.run_for_test(["config", "user.email", "test@example.com"])
+            .unwrap();
+        git.run_for_test([
+            "commit",
+            "--allow-empty",
+            "-m",
+            &format!("import\n\ngit-svn-id: file:///source/trunk@105 {SOURCE}"),
+        ])
+        .unwrap();
+        let oid = git.rev_parse("HEAD").unwrap().trim().to_string();
+        let metadata_dir = temp.path().join(".git/svn/refs/remotes/git-svn");
+        let transport_path = metadata_dir.join(format!(".rev_map.{TRANSPORT}"));
+        let source_path = metadata_dir.join(format!(".rev_map.{SOURCE}"));
+        RevMap::open(&transport_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(11, &oid)
+            .unwrap();
+        RevMap::open(&source_path, ObjectFormat::Sha1)
+            .unwrap()
+            .append(105, &oid)
+            .unwrap();
+        let tracked = TrackedSvn {
+            git,
+            config: SvnRemoteConfig::new("svn", "file:///repo", build_single_path("trunk"))
+                .with_svm_identity("file:///source", "file:///repo", SOURCE),
+            refname: "refs/remotes/git-svn".to_string(),
+            svn_path: "trunk".to_string(),
+            uuid: TRANSPORT.to_string(),
+            rev_map_path: transport_path,
+            source_rev_map: Some(TrackedRevMap {
+                uuid: SOURCE.to_string(),
+                path: source_path,
+            }),
+        };
+
+        let identity = validated_commit_identity(&tracked, &tracked.records().unwrap(), &oid)
+            .expect("valid SVM source identity");
+
+        assert_eq!(identity.kind, TrackingIdentityKind::Source);
+        assert_eq!(identity.record.revision, 105);
+        assert_eq!(identity.id.url, "file:///source/trunk");
     }
 
     #[test]

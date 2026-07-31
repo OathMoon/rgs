@@ -48,12 +48,7 @@ pub fn run_in_work_tree(
     let git = GitCli::new(&work_tree);
     if !args.dry_run && crate::import_transaction::has_pending_batch(&git)? {
         let pending = resolve_tracked_svn_allow_import_batch(&work_tree)?;
-        if pending.config.use_svnsync_props {
-            return Err(
-                "dcommit is unavailable for useSvnsyncProps mirrors; refusing to recover an import batch before rejecting mirror write-back"
-                    .to_string(),
-            );
-        }
+        reject_read_mirror_dcommit(&pending.config, true)?;
         crate::path_url::validate_fetch_url(&pending.config.url)?;
         let refnames = crate::import_transaction::pending_batch_refnames(&git)?;
         for refname in refnames {
@@ -69,12 +64,7 @@ pub fn run_in_work_tree(
     if tracked.config.no_metadata {
         return Err("dcommit is unavailable for --no-metadata one-shot imports".to_string());
     }
-    if tracked.config.use_svnsync_props {
-        return Err(
-            "dcommit is unavailable for useSvnsyncProps mirrors; refusing to write through a read mirror"
-                .to_string(),
-        );
-    }
+    reject_read_mirror_dcommit(&tracked.config, false)?;
     if tracked.git.range_has_merges(&tracked.refname, "HEAD")? {
         return Err("dcommit does not support merge commits in the local commit range".to_string());
     }
@@ -239,6 +229,31 @@ pub fn run_in_work_tree(
     }
     reject_completed_ledger_overlap(discovery.as_ref(), &commits)?;
     dcommit_dry_run(&tracked, &args, &target, &commits)
+}
+
+fn reject_read_mirror_dcommit(
+    config: &crate::config::SvnRemoteConfig,
+    before_import_recovery: bool,
+) -> Result<(), String> {
+    let mode = if config.use_svm_props {
+        Some("useSvmProps")
+    } else if config.use_svnsync_props {
+        Some("useSvnsyncProps")
+    } else {
+        None
+    };
+    let Some(mode) = mode else {
+        return Ok(());
+    };
+    if before_import_recovery {
+        Err(format!(
+            "dcommit is unavailable for {mode} mirrors; refusing to recover an import batch before rejecting mirror write-back"
+        ))
+    } else {
+        Err(format!(
+            "dcommit is unavailable for {mode} mirrors; refusing to write through a read mirror"
+        ))
+    }
 }
 
 fn reject_completed_ledger_overlap(
@@ -1366,6 +1381,23 @@ fn default_shared_args() -> crate::cli::SharedFetchArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svm_dcommit_rejects_normal_and_pending_import_paths() {
+        let config = crate::config::SvnRemoteConfig::new(
+            "svn",
+            "mock://repo",
+            crate::mapping::build_single_path(""),
+        )
+        .with_svm_props();
+
+        let pending = reject_read_mirror_dcommit(&config, true).unwrap_err();
+        assert!(pending.contains("useSvmProps"));
+        assert!(pending.contains("before rejecting mirror write-back"));
+        let normal = reject_read_mirror_dcommit(&config, false).unwrap_err();
+        assert!(normal.contains("useSvmProps"));
+        assert!(normal.contains("refusing to write through"));
+    }
 
     #[test]
     fn dcommit_svn_options_apply_command_line_auth_overrides() {

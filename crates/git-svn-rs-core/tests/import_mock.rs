@@ -721,6 +721,194 @@ fn imports_ra_session_update_into_git_and_rev_map() {
     );
 }
 
+const SVM_UUID: &str = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+
+fn direct_svm_session() -> PathFilteringRaSession {
+    let mut session = PathFilteringRaSession::new();
+    session.revisions[1].changed_paths = vec![ChangedPath {
+        path: "/trunk/src/lib.rs".to_string(),
+        action: ChangeAction::Modify,
+        copy_from_path: None,
+        copy_from_rev: None,
+        kind: NodeKind::File,
+        properties_modified: false,
+        content_modified: true,
+        properties: BTreeMap::new(),
+        content: None,
+    }];
+    session
+}
+
+fn svm_config() -> SvnRemoteConfig {
+    SvnRemoteConfig::new("svn", "mock://repo", build_standard_layout("")).with_svm_identity(
+        "https://source.example/repo",
+        "mock://repo",
+        SVM_UUID,
+    )
+}
+
+#[test]
+fn svm_source_revision_zero_is_skipped_before_editor_replay() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let mut session = direct_svm_session();
+    session.revision_properties.insert(
+        2,
+        BTreeMap::from([(
+            "svm:headrev".to_string(),
+            format!("{SVM_UUID}:0").into_bytes(),
+        )]),
+    );
+    session.revision_properties.insert(
+        3,
+        BTreeMap::from([(
+            "svm:headrev".to_string(),
+            format!("{SVM_UUID}:10").into_bytes(),
+        )]),
+    );
+
+    let summary = import_ra_revisions_for_ref(
+        &session,
+        &git,
+        &svm_config(),
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(3),
+        },
+        Some("refs/remotes/origin/trunk"),
+    )
+    .unwrap();
+
+    assert_eq!(summary.imported_revisions, vec![3]);
+    assert_eq!(
+        session.update_calls.borrow().as_slice(),
+        &[(
+            "trunk".to_string(),
+            UpdateRequest {
+                target_revision: 3,
+                base_revision: None,
+            },
+        )]
+    );
+    let transport = RevMap::open_existing(
+        dir.path()
+            .join(".git/svn/refs/remotes/origin/trunk/.rev_map.mock-uuid"),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    let source = RevMap::open_existing(
+        dir.path().join(format!(
+            ".git/svn/refs/remotes/origin/trunk/.rev_map.{SVM_UUID}"
+        )),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    let oid = transport.get(3).unwrap().unwrap();
+    assert_eq!(source.get(10).unwrap(), Some(oid.clone()));
+    let message = git
+        .run_for_test(["show", "-s", "--format=%B", &oid])
+        .unwrap();
+    assert!(message.contains(&format!(
+        "git-svn-id: https://source.example/repo/trunk@10 {SVM_UUID}"
+    )));
+    assert_eq!(
+        git.run_for_test(["show", "-s", "--format=%ae", &oid])
+            .unwrap()
+            .trim(),
+        format!("bob@{SVM_UUID}")
+    );
+}
+
+#[test]
+fn svm_missing_headrev_keeps_mirror_identity_and_source_map_sparse() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    let mut session = direct_svm_session();
+    session.revision_properties.insert(
+        2,
+        BTreeMap::from([(
+            "svm:headrev".to_string(),
+            format!("{SVM_UUID}:10").into_bytes(),
+        )]),
+    );
+
+    let summary = import_ra_revisions_for_ref(
+        &session,
+        &git,
+        &svm_config(),
+        ImportOptions {
+            start_revision: 2,
+            end_revision: Some(3),
+        },
+        Some("refs/remotes/origin/trunk"),
+    )
+    .unwrap();
+
+    assert_eq!(summary.imported_revisions, vec![2, 3]);
+    let transport = RevMap::open_existing(
+        dir.path()
+            .join(".git/svn/refs/remotes/origin/trunk/.rev_map.mock-uuid"),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    let source = RevMap::open_existing(
+        dir.path().join(format!(
+            ".git/svn/refs/remotes/origin/trunk/.rev_map.{SVM_UUID}"
+        )),
+        ObjectFormat::Sha1,
+    )
+    .unwrap();
+    let source_oid = source.get(10).unwrap().unwrap();
+    assert_eq!(transport.get(2).unwrap(), Some(source_oid));
+    assert_eq!(source.records().unwrap().len(), 1);
+    let mirror_oid = transport.get(3).unwrap().unwrap();
+    let message = git
+        .run_for_test(["show", "-s", "--format=%B", &mirror_oid])
+        .unwrap();
+    assert!(message.contains("git-svn-id: mock://repo/trunk@3 mock-uuid"));
+}
+
+#[test]
+fn svm_headrev_rejects_binary_malformed_and_mismatched_values_before_replay() {
+    for value in [
+        vec![0xff],
+        b"not-a-headrev".to_vec(),
+        b"bbbbbbbb-cccc-dddd-eeee-ffffffffffff:10".to_vec(),
+    ] {
+        let dir = tempdir().unwrap();
+        let git = GitCli::new(dir.path());
+        git.init().unwrap();
+        let mut session = direct_svm_session();
+        session
+            .revision_properties
+            .insert(2, BTreeMap::from([("svm:headrev".to_string(), value)]));
+
+        let error = import_ra_revisions_for_ref(
+            &session,
+            &git,
+            &svm_config(),
+            ImportOptions {
+                start_revision: 2,
+                end_revision: Some(2),
+            },
+            Some("refs/remotes/origin/trunk"),
+        )
+        .unwrap_err();
+
+        assert!(
+            error.contains("svm:headrev") || error.contains("UUID mismatch"),
+            "{error}"
+        );
+        assert!(session.update_calls.borrow().is_empty());
+        assert!(git.rev_parse("refs/remotes/origin/trunk").is_err());
+        let metadata = dir.path().join(".git/svn/refs/remotes/origin/trunk");
+        assert!(!metadata.join(".rev_map.mock-uuid").exists());
+        assert!(!metadata.join(format!(".rev_map.{SVM_UUID}")).exists());
+    }
+}
+
 #[test]
 fn ra_import_filters_revisions_per_mapping_before_replay() {
     let dir = tempdir().unwrap();
@@ -953,6 +1141,7 @@ fn revisions() -> Vec<RevisionEvent> {
 
 struct PathFilteringRaSession {
     revisions: Vec<RevisionEvent>,
+    revision_properties: BTreeMap<u32, BTreeMap<String, Vec<u8>>>,
     update_calls: RefCell<Vec<(String, UpdateRequest)>>,
 }
 
@@ -1019,6 +1208,7 @@ impl PathFilteringRaSession {
                     }],
                 },
             ],
+            revision_properties: BTreeMap::new(),
             update_calls: RefCell::new(Vec::new()),
         }
     }
@@ -1041,8 +1231,12 @@ impl RaSession for PathFilteringRaSession {
         Ok(3)
     }
 
-    fn rev_properties(&self, _revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String> {
-        Ok(BTreeMap::new())
+    fn rev_properties(&self, revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        Ok(self
+            .revision_properties
+            .get(&revision)
+            .cloned()
+            .unwrap_or_default())
     }
 
     fn check_path(&self, _path: &str, _revision: u32) -> Result<Option<SvnNodeKind>, String> {
