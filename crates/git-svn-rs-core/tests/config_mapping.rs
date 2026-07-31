@@ -152,6 +152,18 @@ fn serializes_svn_remote_config_keys() {
 }
 
 #[test]
+fn serializes_svm_property_mode() {
+    let config =
+        SvnRemoteConfig::new("svn", "file:///repo", build_standard_layout("svn/")).with_svm_props();
+
+    assert!(
+        config
+            .to_git_config_entries()
+            .contains(&("svn-remote.svn.useSvmProps".to_string(), "true".to_string()))
+    );
+}
+
+#[test]
 fn reads_dcommit_target_urls() {
     let temp = tempfile::tempdir().unwrap();
     let git = GitCli::new(temp.path());
@@ -226,7 +238,8 @@ fn remote_boolean_config_uses_git_compatible_spellings() {
     git.config_set("svn-remote.svn.no-auth-cache", "on")
         .unwrap();
     git.config_set("svn-remote.svn.noMetadata", "0").unwrap();
-    git.config_set("svn-remote.svn.useSvnsyncProps", "yes")
+    git.config_set("svn-remote.svn.useSvmProps", "yes").unwrap();
+    git.config_set("svn-remote.svn.useSvnsyncProps", "off")
         .unwrap();
     git.config_set("svn-remote.svn.preserve-empty-dirs", "TRUE")
         .unwrap();
@@ -235,12 +248,14 @@ fn remote_boolean_config_uses_git_compatible_spellings() {
     assert!(enabled.localtime);
     assert!(enabled.no_auth_cache);
     assert!(!enabled.no_metadata);
-    assert!(enabled.use_svnsync_props);
+    assert!(enabled.use_svm_props);
+    assert!(!enabled.use_svnsync_props);
     assert!(enabled.preserve_empty_dirs);
 
     git.config_set("svn-remote.svn.noMetadata", "1").unwrap();
     git.config_set("svn-remote.svn.useSvnsyncProps", "off")
         .unwrap();
+    git.config_set("svn-remote.svn.useSvmProps", "off").unwrap();
     assert!(read_svn_remote_config(&git, "svn").unwrap().no_metadata);
 
     git.config_set("svn-remote.svn.localtime", "no").unwrap();
@@ -256,6 +271,7 @@ fn remote_boolean_config_uses_git_compatible_spellings() {
     assert!(!disabled.localtime);
     assert!(!disabled.no_auth_cache);
     assert!(!disabled.no_metadata);
+    assert!(!disabled.use_svm_props);
     assert!(!disabled.use_svnsync_props);
     assert!(!disabled.preserve_empty_dirs);
 }
@@ -266,6 +282,7 @@ fn remote_boolean_config_rejects_invalid_and_duplicate_values() {
         "localtime",
         "no-auth-cache",
         "noMetadata",
+        "useSvmProps",
         "useSvnsyncProps",
         "preserve-empty-dirs",
     ] {

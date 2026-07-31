@@ -21,6 +21,7 @@ pub struct SvnRemoteConfig {
     pub config_dir: Option<String>,
     pub no_auth_cache: bool,
     pub no_metadata: bool,
+    pub use_svm_props: bool,
     pub use_svnsync_props: bool,
     pub svnsync_url: Option<String>,
     pub svnsync_uuid: Option<String>,
@@ -51,6 +52,7 @@ impl SvnRemoteConfig {
             config_dir: None,
             no_auth_cache: false,
             no_metadata: false,
+            use_svm_props: false,
             use_svnsync_props: false,
             svnsync_url: None,
             svnsync_uuid: None,
@@ -118,6 +120,11 @@ impl SvnRemoteConfig {
 
     pub fn with_svnsync_props(mut self) -> Self {
         self.use_svnsync_props = true;
+        self
+    }
+
+    pub fn with_svm_props(mut self) -> Self {
+        self.use_svm_props = true;
         self
     }
 
@@ -210,7 +217,7 @@ impl SvnRemoteConfig {
     pub fn validate_metadata_options(&self) -> Result<(), String> {
         MetadataOptions {
             no_metadata: self.no_metadata,
-            use_svm_props: false,
+            use_svm_props: self.use_svm_props,
             use_svnsync_props: self.use_svnsync_props,
             rewrite_root: self.rewrite_root.clone(),
             rewrite_uuid: self.rewrite_uuid.clone(),
@@ -294,6 +301,9 @@ impl SvnRemoteConfig {
         }
         if self.no_metadata {
             entries.push((format!("{prefix}.noMetadata"), "true".to_string()));
+        }
+        if self.use_svm_props {
+            entries.push((format!("{prefix}.useSvmProps"), "true".to_string()));
         }
         if self.use_svnsync_props {
             entries.push((format!("{prefix}.useSvnsyncProps"), "true".to_string()));
@@ -406,6 +416,7 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
         config_dir: read("config-dir")?,
         no_auth_cache: read_bool("no-auth-cache")?.unwrap_or(false),
         no_metadata: read_bool("noMetadata")?.unwrap_or(false),
+        use_svm_props: read_bool("useSvmProps")?.unwrap_or(false),
         use_svnsync_props: read_bool("useSvnsyncProps")?.unwrap_or(false),
         svnsync_url: git.git_svn_metadata_get(&format!("{prefix}.svnsync-url"))?,
         svnsync_uuid: git.git_svn_metadata_get(&format!("{prefix}.svnsync-uuid"))?,

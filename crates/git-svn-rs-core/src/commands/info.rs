@@ -21,6 +21,12 @@ pub fn run_in_work_tree(
     args: InfoArgs,
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
+    if tracked.config.no_metadata {
+        return Err(
+            "info is unavailable for --no-metadata imports because working-tree history has no git-svn-id metadata"
+                .to_string(),
+        );
+    }
     let relative_path = args.path.as_deref().map(normalize_info_path).transpose()?;
     let base_url = tracked.config.metadata_url(&tracked.svn_path)?;
     let url = relative_path

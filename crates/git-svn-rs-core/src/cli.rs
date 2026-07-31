@@ -120,8 +120,10 @@ pub struct SharedFetchArgs {
     pub log_window_size: Option<u32>,
     #[arg(long)]
     pub localtime: bool,
-    #[arg(long = "no-metadata")]
+    #[arg(long = "no-metadata", alias = "noMetadata")]
     pub no_metadata: bool,
+    #[arg(long = "use-svm-props", alias = "useSvmProps")]
+    pub use_svm_props: bool,
     #[arg(long = "use-svnsync-props", alias = "useSvnsyncProps")]
     pub use_svnsync_props: bool,
     #[arg(long = "rewrite-root")]

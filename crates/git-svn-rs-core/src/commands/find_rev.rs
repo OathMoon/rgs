@@ -16,6 +16,12 @@ pub fn run_in_work_tree(
             Some(treeish) => resolve_tracked_svn_at(&work_tree, treeish)?,
             None => resolve_tracked_svn(&work_tree)?,
         };
+        if tracked.config.no_metadata {
+            return Err(
+                "find-rev is unavailable for --no-metadata imports when resolving SVN revisions"
+                    .to_string(),
+            );
+        }
         let records = tracked.open_rev_map()?.records()?;
         let record = select_revision_record(&records, revision, args.before, args.after);
         let Some(record) = record else {
@@ -29,6 +35,9 @@ pub fn run_in_work_tree(
         let tracked = resolve_tracked_svn_at(&work_tree, &args.rev_or_commit)
             .or_else(|_| resolve_tracked_svn(&work_tree))?;
         let commit = tracked.git.rev_parse(&args.rev_or_commit)?;
+        if tracked.config.no_metadata {
+            return Ok(String::new());
+        }
         let commit = commit.trim();
         let revision = tracked
             .open_rev_map()?

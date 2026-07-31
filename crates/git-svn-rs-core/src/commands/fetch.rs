@@ -105,6 +105,7 @@ fn fetch_config(
         let session = MockRaSession::standard_fixture("mock-uuid");
         let base_revision = imported_base_revision(git, &config, "mock-uuid", selected_ref)?;
         let mut config = effective_fetch_config(config, shared, base_revision)?;
+        reject_unimplemented_svm_import(&config)?;
         hydrate_svnsync_identity(git, &mut config, || session.rev_properties(0))?;
         let start_revision = base_revision.saturating_add(1);
         let head_revision = session.latest_revnum()?;
@@ -131,6 +132,7 @@ fn fetch_config(
     let repos_root = backend.repository_root()?;
     let base_revision = imported_base_revision(git, &config, &uuid, selected_ref)?;
     let mut config = effective_fetch_config(config, shared, base_revision)?;
+    reject_unimplemented_svm_import(&config)?;
     hydrate_svnsync_identity(git, &mut config, || backend.rev_properties(0))?;
     let start_revision = base_revision.saturating_add(1);
     let head_revision = backend.latest_revnum()?;
@@ -206,6 +208,10 @@ pub(crate) fn effective_fetch_config(
         reject_identity_change(base_revision, "--no-metadata")?;
         config.no_metadata = true;
     }
+    if shared.use_svm_props && !config.use_svm_props {
+        reject_identity_change(base_revision, "--use-svm-props")?;
+        config.use_svm_props = true;
+    }
     if shared.use_svnsync_props && !config.use_svnsync_props {
         reject_identity_change(base_revision, "--use-svnsync-props")?;
         config.use_svnsync_props = true;
@@ -248,6 +254,15 @@ fn reject_identity_change(base_revision: u32, option: &str) -> Result<(), String
         Err(format!(
             "{option} cannot change after SVN history has been imported"
         ))
+    }
+}
+
+fn reject_unimplemented_svm_import(config: &SvnRemoteConfig) -> Result<(), String> {
+    if config.use_svm_props {
+        Err("useSvmProps import is not yet implemented; refusing to write incorrect revision metadata"
+            .to_string())
+    } else {
+        Ok(())
     }
 }
 
@@ -1099,6 +1114,15 @@ mod tests {
     }
 
     #[test]
+    fn svm_mode_fails_closed_until_dual_revision_import_is_available() {
+        let config =
+            SvnRemoteConfig::new("svn", "file:///repo", build_single_path("")).with_svm_props();
+
+        let error = reject_unimplemented_svm_import(&config).unwrap_err();
+        assert!(error.contains("refusing to write incorrect revision metadata"));
+    }
+
+    #[test]
     fn svnsync_identity_is_validated_then_cached_in_private_metadata() {
         let temp = tempfile::tempdir().unwrap();
         let git = GitCli::new(temp.path());
@@ -1221,6 +1245,7 @@ mod tests {
             log_window_size: None,
             localtime: false,
             no_metadata: false,
+            use_svm_props: false,
             use_svnsync_props: false,
             rewrite_root: None,
             rewrite_uuid: None,

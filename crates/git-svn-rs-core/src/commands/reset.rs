@@ -27,6 +27,12 @@ pub fn run_in_work_tree(
     }
     reset_transaction::recover_pending(&git)?;
     let tracked = resolve_tracked_svn(work_tree)?;
+    if tracked.config.no_metadata {
+        return Err(
+            "reset is unavailable for --no-metadata imports because history has no git-svn-id metadata"
+                .to_string(),
+        );
+    }
     crate::tracking_state::validate_existing_tracking_state(
         &tracked.git,
         &tracked.config,

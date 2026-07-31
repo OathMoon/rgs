@@ -118,6 +118,48 @@ fn parses_svnsync_property_option_spellings() {
 }
 
 #[test]
+fn parses_svm_property_option_spellings() {
+    let cli = Cli::parse_from(["git-svn-rs", "init", "file:///tmp/repo", "--use-svm-props"]);
+    let Command::Init(args) = cli.command else {
+        panic!("expected init");
+    };
+    assert!(args.shared.use_svm_props);
+
+    let cli = Cli::parse_from(["git-svn-rs", "clone", "file:///tmp/repo", "--useSvmProps"]);
+    let Command::Clone(args) = cli.command else {
+        panic!("expected clone");
+    };
+    assert!(args.shared.use_svm_props);
+
+    let cli = Cli::parse_from(["git-svn-rs", "fetch", "--useSvmProps"]);
+    let Command::Fetch(args) = cli.command else {
+        panic!("expected fetch");
+    };
+    assert!(args.shared.use_svm_props);
+}
+
+#[test]
+fn parses_no_metadata_property_option_spellings() {
+    let cli = Cli::parse_from(["git-svn-rs", "init", "file:///tmp/repo", "--no-metadata"]);
+    let Command::Init(args) = cli.command else {
+        panic!("expected init");
+    };
+    assert!(args.shared.no_metadata);
+
+    let cli = Cli::parse_from(["git-svn-rs", "clone", "file:///tmp/repo", "--noMetadata"]);
+    let Command::Clone(args) = cli.command else {
+        panic!("expected clone");
+    };
+    assert!(args.shared.no_metadata);
+
+    let cli = Cli::parse_from(["git-svn-rs", "fetch", "--noMetadata"]);
+    let Command::Fetch(args) = cli.command else {
+        panic!("expected fetch");
+    };
+    assert!(args.shared.no_metadata);
+}
+
+#[test]
 fn parses_dcommit_dry_run_commit_url() {
     let cli = Cli::parse_from([
         "git-svn-rs",

@@ -496,23 +496,36 @@ fn no_metadata_import_rejects_followup_operations_without_mutating_tracking_stat
         .success();
 
     let tracked_before = git_output(&work, ["rev-parse", "refs/remotes/git-svn"]);
+    let head_before = git_output(&work, ["rev-parse", "HEAD"]);
+    let status_before = git_output(&work, ["status", "--porcelain=v1"]);
+    let config_before = std::fs::read(work.join(".git/config")).unwrap();
     let rev_map_path = canonical_git_svn_metadata(&work).join(".rev_map.mock-uuid");
     let rev_map_before = std::fs::read(&rev_map_path).unwrap();
+
+    for command in [
+        vec!["find-rev", "r2"],
+        vec!["find-rev", "--before", "r3"],
+        vec!["find-rev", "--after", "r1"],
+        vec!["info"],
+        vec!["info", "--url"],
+        vec!["reset", "r1"],
+    ] {
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(&work)
+            .args(command)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("unavailable for --no-metadata"));
+    }
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(&work)
-        .args(["find-rev", "r2"])
+        .args(["find-rev", tracked_before.trim()])
         .assert()
         .success()
-        .stdout(format!("{}\n", tracked_before.trim()));
-    Command::cargo_bin("git-svn-rs")
-        .unwrap()
-        .current_dir(&work)
-        .arg("info")
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("URL: mock://repo/trunk"));
+        .stdout("");
 
     for (command, expected) in [
         (vec!["fetch"], "fetch is unavailable"),
@@ -532,6 +545,15 @@ fn no_metadata_import_rejects_followup_operations_without_mutating_tracking_stat
     assert_eq!(
         git_output(&work, ["rev-parse", "refs/remotes/git-svn"]),
         tracked_before
+    );
+    assert_eq!(git_output(&work, ["rev-parse", "HEAD"]), head_before);
+    assert_eq!(
+        git_output(&work, ["status", "--porcelain=v1"]),
+        status_before
+    );
+    assert_eq!(
+        std::fs::read(work.join(".git/config")).unwrap(),
+        config_before
     );
     assert_eq!(std::fs::read(rev_map_path).unwrap(), rev_map_before);
 }

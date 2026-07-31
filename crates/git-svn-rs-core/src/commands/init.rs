@@ -55,7 +55,7 @@ fn validate_args(args: &InitArgs) -> Result<(), String> {
     }
     crate::config::MetadataOptions {
         no_metadata: args.shared.no_metadata,
-        use_svm_props: false,
+        use_svm_props: args.shared.use_svm_props,
         use_svnsync_props: args.shared.use_svnsync_props,
         rewrite_root: args.shared.rewrite_root.clone(),
         rewrite_uuid: args.shared.rewrite_uuid.clone(),
@@ -250,6 +250,9 @@ fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfi
     if args.shared.no_metadata {
         config = config.without_metadata();
     }
+    if args.shared.use_svm_props {
+        config = config.with_svm_props();
+    }
     if args.shared.use_svnsync_props {
         config = config.with_svnsync_props();
     }
@@ -306,6 +309,9 @@ fn write_svn_remote_config(git: &GitCli, config: &SvnRemoteConfig) -> Result<(),
     }
     if config.no_metadata {
         git.config_set(&format!("{prefix}.noMetadata"), "true")?;
+    }
+    if config.use_svm_props {
+        git.config_set(&format!("{prefix}.useSvmProps"), "true")?;
     }
     if config.use_svnsync_props {
         git.config_set(&format!("{prefix}.useSvnsyncProps"), "true")?;

@@ -153,3 +153,41 @@ fn init_rejects_svnsync_metadata_rewrites_before_mutation() {
         assert!(!work.exists());
     }
 }
+
+#[test]
+fn init_persists_svm_mode_and_rejects_conflicting_metadata_options() {
+    let temp = tempfile::tempdir().unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args(["init", "file:///svn/repo", "work", "--use-svm-props"])
+        .assert()
+        .success();
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.config_get("svn-remote.svn.useSvmProps")
+            .unwrap()
+            .as_deref(),
+        Some("true")
+    );
+
+    for conflicting in ["--no-metadata", "--use-svnsync-props"] {
+        let temp = tempfile::tempdir().unwrap();
+        let work = temp.path().join("work");
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(temp.path())
+            .args([
+                "init",
+                "file:///svn/repo",
+                "work",
+                "--use-svm-props",
+                conflicting,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains("useSvmProps"));
+        assert!(!work.exists());
+    }
+}
