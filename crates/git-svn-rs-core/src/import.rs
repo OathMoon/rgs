@@ -356,6 +356,7 @@ fn import_revisions_for_mapping(
         .ok()
         .map(|commit| commit.trim().to_string());
     let authors = author_mapper(config)?;
+    let metadata_uuid = config.metadata_uuid(uuid)?;
     let staging_ref = next_import_staging_ref();
 
     for revision in revisions {
@@ -387,11 +388,11 @@ fn import_revisions_for_mapping(
         stream = stream.commit(&FastImportCommit {
             mark: imported_revisions.len() as u32,
             refname: staging_ref.clone(),
-            author: author_ident(&revision.author, uuid, Some(&authors))?,
-            committer: author_ident(&revision.author, uuid, Some(&authors))?,
+            author: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
+            committer: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
             timestamp: timestamp.seconds,
             timezone_offset: timestamp.offset,
-            message: commit_message(config, revision, uuid, &mapping.svn_path),
+            message: commit_message(config, revision, uuid, &mapping.svn_path)?,
             parent_mark: (imported_revisions.len() > 1)
                 .then_some(imported_revisions.len() as u32 - 1),
             parent_ref: first_parent_ref,
@@ -441,6 +442,7 @@ fn import_ra_revisions_for_mapping(
         .ok()
         .map(|commit| commit.trim().to_string());
     let authors = author_mapper(config)?;
+    let metadata_uuid = config.metadata_uuid(uuid)?;
     let staging_ref = next_import_staging_ref();
 
     for revision in revisions {
@@ -466,11 +468,11 @@ fn import_ra_revisions_for_mapping(
         let plan = FetchCommitPlan {
             mark: imported_revisions.len() as u32 + 1,
             refname: staging_ref.clone(),
-            author: author_ident(&revision.author, uuid, Some(&authors))?,
-            committer: author_ident(&revision.author, uuid, Some(&authors))?,
+            author: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
+            committer: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
             timestamp: timestamp.seconds,
             timezone_offset: timestamp.offset,
-            message: commit_message(config, revision, uuid, &mapping.svn_path),
+            message: commit_message(config, revision, uuid, &mapping.svn_path)?,
             parent_mark,
             parent_ref,
         };
@@ -1668,21 +1670,18 @@ fn commit_message(
     revision: &RevisionEvent,
     uuid: &str,
     svn_path: &str,
-) -> String {
+) -> Result<String, String> {
     if config.no_metadata {
-        return revision.message.clone();
+        return Ok(revision.message.clone());
     }
 
     let footer = GitSvnId {
-        url: config.metadata_url(svn_path),
+        url: config.metadata_url(svn_path)?,
         revision: revision.revision,
-        uuid: config
-            .rewrite_uuid
-            .clone()
-            .unwrap_or_else(|| uuid.to_string()),
+        uuid: config.metadata_uuid(uuid)?.to_string(),
     }
     .to_footer();
-    format!("{}\n\n{}\n", revision.message, footer)
+    Ok(format!("{}\n\n{}\n", revision.message, footer))
 }
 
 struct AuthorMapper {
@@ -1934,7 +1933,7 @@ r4
         };
 
         assert_eq!(
-            commit_message(&config, &revision, "repo-uuid", "trunk"),
+            commit_message(&config, &revision, "repo-uuid", "trunk").unwrap(),
             "layout\n\ngit-svn-id: file:///repo/trunk@1 repo-uuid\n"
         );
     }

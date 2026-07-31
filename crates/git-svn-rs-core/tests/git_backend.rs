@@ -184,6 +184,35 @@ fn git_svn_metadata_read_migrates_the_legacy_internal_config_name() {
 }
 
 #[test]
+fn git_svn_metadata_multi_set_replaces_all_keys_or_none() {
+    let dir = tempdir().unwrap();
+    let git = GitCli::new(dir.path());
+    git.init().unwrap();
+    git.git_svn_metadata_set("svn-remote.svn.marker", "before")
+        .unwrap();
+
+    let error = git
+        .git_svn_metadata_set_many(&[
+            ("svn-remote.svn.svnsync-uuid", "source-uuid"),
+            ("invalid key", "cannot be written"),
+        ])
+        .unwrap_err();
+
+    assert!(!error.is_empty());
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.marker")
+            .unwrap()
+            .as_deref(),
+        Some("before")
+    );
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.svnsync-uuid")
+            .unwrap(),
+        None
+    );
+}
+
+#[test]
 fn commands_do_not_mutate_process_current_directory() {
     let cwd = std::env::current_dir().unwrap();
     let dir = tempdir().unwrap();

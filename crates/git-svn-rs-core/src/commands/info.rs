@@ -22,7 +22,7 @@ pub fn run_in_work_tree(
 ) -> Result<String, String> {
     let tracked = resolve_tracked_svn(work_tree)?;
     let relative_path = args.path.as_deref().map(normalize_info_path).transpose()?;
-    let base_url = tracked.config.metadata_url(&tracked.svn_path);
+    let base_url = tracked.config.metadata_url(&tracked.svn_path)?;
     let url = relative_path
         .as_deref()
         .map(|path| add_info_path_to_url(&base_url, path))
@@ -55,6 +55,7 @@ pub fn run_in_work_tree(
         .git
         .git_svn_metadata_get(&format!("svn-remote.{}.reposRoot", tracked.config.name))?
         .unwrap_or_else(|| tracked.config.url.clone());
+    let metadata_uuid = tracked.config.metadata_uuid(&tracked.uuid)?;
 
     if let (Some(path_arg), Some(path)) = (args.path.as_deref(), relative_path.as_deref()) {
         let entry = if path.is_empty() {
@@ -91,12 +92,8 @@ pub fn run_in_work_tree(
             &records,
             &svn_record.object_id_hex,
             path,
-            &tracked.config.metadata_url(&tracked.svn_path),
-            tracked
-                .config
-                .rewrite_uuid
-                .as_deref()
-                .unwrap_or(&tracked.uuid),
+            &tracked.config.metadata_url(&tracked.svn_path)?,
+            metadata_uuid,
         )?;
         let file_details = entry
             .as_ref()
@@ -106,13 +103,13 @@ pub fn run_in_work_tree(
             .unwrap_or_default();
         return Ok(format!(
             "Path: {path_arg}\n{name}URL: {url}\nRepository Root: {repository_root}\nRepository UUID: {}\nRevision: {revision}\nNode Kind: {node_kind}\nSchedule: normal\nLast Changed Author: {}\nLast Changed Rev: {}\nLast Changed Date: {}\n{file_details}\n",
-            tracked.uuid, last_changed.author, last_changed.revision, last_changed.date
+            metadata_uuid, last_changed.author, last_changed.revision, last_changed.date
         ));
     }
 
     Ok(format!(
         "URL: {url}\nRepository Root: {repository_root}\nRepository UUID: {}\nRevision: {revision}\n",
-        tracked.uuid
+        metadata_uuid
     ))
 }
 

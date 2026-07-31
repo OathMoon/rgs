@@ -48,6 +48,12 @@ pub fn run_in_work_tree(
     let git = GitCli::new(&work_tree);
     if !args.dry_run && crate::import_transaction::has_pending_batch(&git)? {
         let pending = resolve_tracked_svn_allow_import_batch(&work_tree)?;
+        if pending.config.use_svnsync_props {
+            return Err(
+                "dcommit is unavailable for useSvnsyncProps mirrors; refusing to recover an import batch before rejecting mirror write-back"
+                    .to_string(),
+            );
+        }
         crate::path_url::validate_fetch_url(&pending.config.url)?;
         let refnames = crate::import_transaction::pending_batch_refnames(&git)?;
         for refname in refnames {
@@ -62,6 +68,12 @@ pub fn run_in_work_tree(
     let tracked = resolve_tracked_svn(work_tree)?;
     if tracked.config.no_metadata {
         return Err("dcommit is unavailable for --no-metadata one-shot imports".to_string());
+    }
+    if tracked.config.use_svnsync_props {
+        return Err(
+            "dcommit is unavailable for useSvnsyncProps mirrors; refusing to write through a read mirror"
+                .to_string(),
+        );
     }
     if tracked.git.range_has_merges(&tracked.refname, "HEAD")? {
         return Err("dcommit does not support merge commits in the local commit range".to_string());

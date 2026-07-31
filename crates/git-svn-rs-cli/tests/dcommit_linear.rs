@@ -17,6 +17,104 @@ use svn_fixture::{
 };
 
 #[test]
+fn dcommit_rejects_svnsync_mirror_before_journal_or_remote_write() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture
+        .set_revision_property(0, "svn:sync-from-url", b"https://origin.example/svn/source")
+        .unwrap();
+    fixture
+        .set_revision_property(
+            0,
+            "svn:sync-from-uuid",
+            b"11111111-2222-3333-4444-555555555555",
+        )
+        .unwrap();
+    let work = temp.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--useSvnsyncProps",
+        ])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    make_commit(&work, "local.txt", "local\n", "local mirror commit");
+    let before = fixture.latest_revision();
+    let journal = work.join(".git/svn/refs/remotes/origin/trunk/dcommit-journal");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("dcommit")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "dcommit is unavailable for useSvnsyncProps mirrors",
+        ));
+
+    assert_eq!(fixture.latest_revision(), before);
+    assert!(!journal.exists());
+
+    let rev_map_name = std::fs::read_dir(work.join(".git/svn/refs/remotes/origin/trunk"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .find(|name| name.starts_with(".rev_map.") && !name.ends_with(".lock"))
+        .unwrap();
+    let mirror_uuid = rev_map_name.trim_start_matches(".rev_map.");
+    let batch = format!(
+        "git-svn-rs-import-batch-v1\nuuid\t{mirror_uuid}\nref_count\t1\ncompleted_count\t0\nref\trefs/remotes/origin/trunk\n"
+    );
+    let batch_path = work.join(".git/svn/import-batch-journal");
+    std::fs::write(&batch_path, &batch).unwrap();
+    let refs_before = git_stdout(
+        &work,
+        &["for-each-ref", "--format=%(refname) %(objectname)"],
+    );
+    let metadata_before = directory_file_snapshot(&work.join(".git/svn"));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("dcommit")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "refusing to recover an import batch",
+        ));
+
+    assert_eq!(
+        git_stdout(
+            &work,
+            &["for-each-ref", "--format=%(refname) %(objectname)"]
+        ),
+        refs_before
+    );
+    assert_eq!(
+        directory_file_snapshot(&work.join(".git/svn")),
+        metadata_before
+    );
+    assert_eq!(fixture.latest_revision(), before);
+}
+
+#[test]
 fn dcommit_dry_run_lists_local_commits_after_tracked_svn_ref() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());

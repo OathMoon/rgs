@@ -22,6 +22,8 @@ pub struct SvnRemoteConfig {
     pub no_auth_cache: bool,
     pub no_metadata: bool,
     pub use_svnsync_props: bool,
+    pub svnsync_url: Option<String>,
+    pub svnsync_uuid: Option<String>,
     pub rewrite_root: Option<String>,
     pub rewrite_uuid: Option<String>,
     pub preserve_empty_dirs: bool,
@@ -50,6 +52,8 @@ impl SvnRemoteConfig {
             no_auth_cache: false,
             no_metadata: false,
             use_svnsync_props: false,
+            svnsync_url: None,
+            svnsync_uuid: None,
             rewrite_root: None,
             rewrite_uuid: None,
             preserve_empty_dirs: false,
@@ -117,6 +121,17 @@ impl SvnRemoteConfig {
         self
     }
 
+    pub fn with_svnsync_identity(
+        mut self,
+        url: impl Into<String>,
+        uuid: impl Into<String>,
+    ) -> Self {
+        self.use_svnsync_props = true;
+        self.svnsync_url = Some(url.into());
+        self.svnsync_uuid = Some(uuid.into());
+        self
+    }
+
     pub fn with_rewrite_root(mut self, value: impl Into<String>) -> Self {
         self.rewrite_root = Some(value.into());
         self
@@ -133,10 +148,10 @@ impl SvnRemoteConfig {
         self
     }
 
-    pub(crate) fn metadata_url(&self, svn_path: &str) -> String {
+    pub(crate) fn metadata_url(&self, svn_path: &str) -> Result<String, String> {
         let explicit_path = svn_path.trim_matches('/');
-        if explicit_path.is_empty() && self.rewrite_root.is_none() {
-            return self.url.clone();
+        if explicit_path.is_empty() && self.rewrite_root.is_none() && !self.use_svnsync_props {
+            return Ok(self.url.clone());
         }
         let svn_path = if explicit_path.is_empty() && self.url.starts_with("mock://") {
             self.url
@@ -147,16 +162,40 @@ impl SvnRemoteConfig {
         } else {
             explicit_path
         };
-        let root = self.rewrite_root.as_ref().unwrap_or(&self.url);
-        if svn_path.is_empty() {
+        let root = if self.use_svnsync_props {
+            self.svnsync_url.as_ref().ok_or_else(|| {
+                format!(
+                    "svn-remote.{} uses useSvnsyncProps but has no validated svnsync identity",
+                    self.name
+                )
+            })?
+        } else {
+            self.rewrite_root.as_ref().unwrap_or(&self.url)
+        };
+        let url = if svn_path.is_empty() {
             root.clone()
         } else {
             format!("{}/{}", root.trim_end_matches('/'), svn_path)
+        };
+        remove_url_credentials(&crate::path_url::canonicalize_url(&url))
+    }
+
+    pub(crate) fn metadata_uuid<'a>(&'a self, transport_uuid: &'a str) -> Result<&'a str, String> {
+        if self.use_svnsync_props {
+            self.svnsync_uuid.as_deref().ok_or_else(|| {
+                format!(
+                    "svn-remote.{} uses useSvnsyncProps but has no validated svnsync identity",
+                    self.name
+                )
+            })
+        } else {
+            Ok(self.rewrite_uuid.as_deref().unwrap_or(transport_uuid))
         }
     }
 
     pub fn validate_mapping_destinations(&self) -> Result<(), String> {
         self.validate_metadata_options()?;
+        self.validate_svnsync_cache()?;
         for mapping in self
             .fetch
             .iter()
@@ -177,6 +216,20 @@ impl SvnRemoteConfig {
             rewrite_uuid: self.rewrite_uuid.clone(),
         }
         .validate()
+    }
+
+    pub fn validate_svnsync_cache(&self) -> Result<(), String> {
+        if !self.use_svnsync_props {
+            return Ok(());
+        }
+        match (&self.svnsync_url, &self.svnsync_uuid) {
+            (None, None) => Ok(()),
+            (Some(url), Some(uuid)) => validate_svnsync_identity(url, uuid),
+            _ => Err(format!(
+                "svn-remote.{} useSvnsyncProps cache must contain both svnsync-url and svnsync-uuid",
+                self.name
+            )),
+        }
     }
 
     pub fn to_git_config_entries(&self) -> Vec<(String, String)> {
@@ -263,6 +316,47 @@ impl SvnRemoteConfig {
     }
 }
 
+pub(crate) fn validate_svnsync_identity(url: &str, uuid: &str) -> Result<(), String> {
+    let (scheme, target) = url
+        .split_once("://")
+        .ok_or_else(|| format!("invalid svn:sync-from-url {url:?}"))?;
+    if scheme.is_empty()
+        || target.is_empty()
+        || !scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'+')
+        || url.chars().any(char::is_whitespace)
+    {
+        return Err(format!("invalid svn:sync-from-url {url:?}"));
+    }
+    if uuid.len() < 30
+        || !uuid
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        return Err(format!("invalid svn:sync-from-uuid {uuid:?}"));
+    }
+    Ok(())
+}
+
+fn remove_url_credentials(value: &str) -> Result<String, String> {
+    let (scheme, rest) = value
+        .split_once("://")
+        .ok_or_else(|| format!("invalid SVN metadata URL {value:?}"))?;
+    let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let path = if path.is_empty() {
+        String::new()
+    } else {
+        format!("/{path}")
+    };
+    Ok(format!("{scheme}://{authority}{path}")
+        .trim_end_matches('/')
+        .to_string())
+}
+
 pub fn svn_remote_names(git: &GitCli) -> Result<Vec<String>, String> {
     let keys = git.config_names_matching(r"^svn-remote\..*\.url$")?;
     let mut names = keys
@@ -313,6 +407,8 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
         no_auth_cache: read_bool("no-auth-cache")?.unwrap_or(false),
         no_metadata: read_bool("noMetadata")?.unwrap_or(false),
         use_svnsync_props: read_bool("useSvnsyncProps")?.unwrap_or(false),
+        svnsync_url: git.git_svn_metadata_get(&format!("{prefix}.svnsync-url"))?,
+        svnsync_uuid: git.git_svn_metadata_get(&format!("{prefix}.svnsync-uuid"))?,
         rewrite_root: read("rewriteRoot")?,
         rewrite_uuid: read("rewriteUUID")?,
         preserve_empty_dirs: read_bool("preserve-empty-dirs")?.unwrap_or(false),
@@ -320,6 +416,7 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
             .unwrap_or_else(|| ".gitignore".to_string()),
     };
     config.validate_metadata_options()?;
+    config.validate_svnsync_cache()?;
     Ok(config)
 }
 

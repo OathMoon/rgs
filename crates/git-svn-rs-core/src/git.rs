@@ -2,6 +2,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use fs2::FileExt;
+
 pub trait GitBackend {
     fn init(&self) -> Result<(), String>;
     fn git_dir(&self) -> Result<String, String>;
@@ -175,11 +177,26 @@ impl GitCli {
     }
 
     pub fn git_svn_metadata_set(&self, key: &str, value: &str) -> Result<(), String> {
+        self.git_svn_metadata_set_many(&[(key, value)])
+    }
+
+    pub fn git_svn_metadata_set_many(&self, entries: &[(&str, &str)]) -> Result<(), String> {
         let path = self.git_svn_metadata_path()?;
         let svn_dir = path
             .parent()
             .ok_or_else(|| "git-svn metadata path has no parent".to_string())?;
         std::fs::create_dir_all(svn_dir).map_err(|error| error.to_string())?;
+        let lock_path = svn_dir.join(".metadata-pair-lock");
+        let lock = std::fs::OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .read(true)
+            .write(true)
+            .open(&lock_path)
+            .map_err(|error| format!("failed to open {}: {error}", lock_path.display()))?;
+        lock.lock_exclusive()
+            .map_err(|error| format!("failed to lock {}: {error}", lock_path.display()))?;
+
         let old_path = svn_dir.join("config");
         if !path.exists() && old_path.exists() {
             std::fs::rename(&old_path, &path).map_err(|error| {
@@ -190,25 +207,38 @@ impl GitCli {
                 )
             })?;
         }
-        if !path.exists() {
-            std::fs::write(
-                &path,
-                "; This file is used internally by git-svn\n; You should not have to edit it\n",
+        let mut temp = tempfile::Builder::new()
+            .prefix(".metadata-update-")
+            .tempfile_in(svn_dir)
+            .map_err(|error| format!("failed to create metadata temporary file: {error}"))?;
+        if path.exists() {
+            let mut source = std::fs::File::open(&path).map_err(|error| error.to_string())?;
+            std::io::copy(&mut source, temp.as_file_mut()).map_err(|error| error.to_string())?;
+        } else {
+            temp.write_all(
+                b"; This file is used internally by git-svn\n; You should not have to edit it\n",
             )
             .map_err(|error| error.to_string())?;
         }
-        let output = Command::new("git")
-            .current_dir(&self.work_tree)
-            .args(["config", "--file"])
-            .arg(&path)
-            .args([key, value])
-            .output()
-            .map_err(|error| error.to_string())?;
-        if output.status.success() {
-            Ok(())
-        } else {
-            Err(stderr_or_status(output))
+        temp.flush().map_err(|error| error.to_string())?;
+        for (key, value) in entries {
+            let output = Command::new("git")
+                .current_dir(&self.work_tree)
+                .args(["config", "--file"])
+                .arg(temp.path())
+                .args([key, value])
+                .output()
+                .map_err(|error| error.to_string())?;
+            if !output.status.success() {
+                return Err(stderr_or_status(output));
+            }
         }
+        temp.as_file()
+            .sync_all()
+            .map_err(|error| format!("failed to sync metadata temporary file: {error}"))?;
+        persist_metadata_temp(temp, &path)?;
+        FileExt::unlock(&lock)
+            .map_err(|error| format!("failed to unlock {}: {error}", lock_path.display()))
     }
 
     fn git_svn_metadata_path(&self) -> Result<PathBuf, String> {
@@ -569,6 +599,63 @@ impl GitCli {
             Err(stderr_or_status(output))
         }
     }
+}
+
+#[cfg(unix)]
+fn persist_metadata_temp(temp: tempfile::NamedTempFile, path: &Path) -> Result<(), String> {
+    temp.persist(path)
+        .map_err(|error| format!("failed to replace {}: {}", path.display(), error.error))?;
+    std::fs::File::open(
+        path.parent()
+            .ok_or_else(|| format!("{} has no parent directory", path.display()))?,
+    )
+    .and_then(|directory| directory.sync_all())
+    .map_err(|error| format!("failed to sync metadata directory: {error}"))
+}
+
+#[cfg(windows)]
+fn persist_metadata_temp(temp: tempfile::NamedTempFile, path: &Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let (file, temporary_path) = temp
+        .keep()
+        .map_err(|error| format!("failed to retain metadata temporary file: {}", error.error))?;
+    drop(file);
+    let source = temporary_path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    let target = path
+        .as_os_str()
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+    if unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            target.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    } == 0
+    {
+        let error = std::io::Error::last_os_error();
+        let _ = std::fs::remove_file(temporary_path);
+        Err(format!("failed to replace git-svn metadata: {error}"))
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(not(any(unix, windows)))]
+fn persist_metadata_temp(_temp: tempfile::NamedTempFile, path: &Path) -> Result<(), String> {
+    Err(format!(
+        "atomic git-svn metadata replacement is unavailable for {}",
+        path.display()
+    ))
 }
 
 fn log_record_args(

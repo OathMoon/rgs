@@ -18,7 +18,7 @@ pub(crate) fn validate_existing_tracking_state(
 ) -> Result<Option<RevMapRecord>, String> {
     let state = read_existing_tracking_state(git, config, refname, rev_map_path)?;
     if let Some(record) = &state.record
-        && !tracking_identity_matches(config, svn_path, uuid, record, state.identity.as_ref())
+        && !tracking_identity_matches(config, svn_path, uuid, record, state.identity.as_ref())?
     {
         return Err(identity_mismatch_error(
             config,
@@ -68,19 +68,18 @@ pub(crate) fn validate_candidate_mappings(
             validated.extend(candidates);
             continue;
         };
-        let mut matches = candidates
-            .iter()
-            .filter(|mapping| {
-                tracking_identity_matches(
-                    config,
-                    &mapping.svn_path,
-                    &uuid,
-                    record,
-                    state.identity.as_ref(),
-                )
-            })
-            .cloned()
-            .collect::<Vec<_>>();
+        let mut matches = Vec::new();
+        for mapping in &candidates {
+            if tracking_identity_matches(
+                config,
+                &mapping.svn_path,
+                &uuid,
+                record,
+                state.identity.as_ref(),
+            )? {
+                matches.push(mapping.clone());
+            }
+        }
         match matches.len() {
             1 => validated.push(matches.pop().expect("one matching mapping")),
             0 => {
@@ -298,16 +297,16 @@ fn tracking_identity_matches(
     uuid: &str,
     record: &RevMapRecord,
     identity: Option<&GitSvnId>,
-) -> bool {
+) -> Result<bool, String> {
     if config.no_metadata {
-        return true;
+        return Ok(true);
     }
     let Some(identity) = identity else {
-        return false;
+        return Ok(false);
     };
-    identity.revision == record.revision
-        && identity.url == config.metadata_url(svn_path)
-        && identity.uuid == config.rewrite_uuid.as_deref().unwrap_or(uuid)
+    Ok(identity.revision == record.revision
+        && identity.url == config.metadata_url(svn_path)?
+        && identity.uuid == config.metadata_uuid(uuid)?)
 }
 
 fn identity_mismatch_error(
@@ -319,8 +318,12 @@ fn identity_mismatch_error(
     record: &RevMapRecord,
     identity: Option<&GitSvnId>,
 ) -> String {
-    let expected_url = config.metadata_url(svn_path);
-    let expected_uuid = config.rewrite_uuid.as_deref().unwrap_or(uuid);
+    let expected_url = config
+        .metadata_url(svn_path)
+        .unwrap_or_else(|error| format!("<invalid metadata URL: {error}>"));
+    let expected_uuid = config
+        .metadata_uuid(uuid)
+        .unwrap_or("<invalid metadata UUID>");
     corrupt_error(
         refname,
         rev_map_path,

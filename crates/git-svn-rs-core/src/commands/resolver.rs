@@ -319,12 +319,8 @@ fn tracking_identity_matches(
     let Ok(identity) = GitSvnId::parse(footer.trim_end_matches('\r')) else {
         return Ok(false);
     };
-    let expected_url = tracked.config.metadata_url(&tracked.svn_path);
-    let expected_uuid = tracked
-        .config
-        .rewrite_uuid
-        .as_deref()
-        .unwrap_or(&tracked.uuid);
+    let expected_url = tracked.config.metadata_url(&tracked.svn_path)?;
+    let expected_uuid = tracked.config.metadata_uuid(&tracked.uuid)?;
     Ok(identity.url == expected_url
         && identity.uuid == expected_uuid
         && identity.revision == record.revision)

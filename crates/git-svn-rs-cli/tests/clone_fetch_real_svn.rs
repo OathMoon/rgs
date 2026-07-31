@@ -15,6 +15,183 @@ use svn_fixture::{
 #[cfg(target_os = "linux")]
 use svn_fixture::{run_with_pty_password, run_with_pty_without_prompt};
 
+const SVNSYNC_SOURCE_URL: &str = "https://origin.example/svn/source";
+const SVNSYNC_SOURCE_UUID: &str = "11111111-2222-3333-4444-555555555555";
+
+#[test]
+fn clone_and_fetch_use_validated_svnsync_source_identity() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture
+        .set_revision_property(0, "svn:sync-from-url", SVNSYNC_SOURCE_URL.as_bytes())
+        .unwrap();
+    fixture
+        .set_revision_property(0, "svn:sync-from-uuid", SVNSYNC_SOURCE_UUID.as_bytes())
+        .unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--useSvnsyncProps",
+        ])
+        .assert()
+        .success();
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let commit = git
+        .run_for_test([
+            "show",
+            "-s",
+            "--format=%B%n%ae",
+            "refs/remotes/origin/trunk",
+        ])
+        .unwrap();
+    assert!(commit.contains(&format!(
+        "git-svn-id: {SVNSYNC_SOURCE_URL}/trunk@2 {SVNSYNC_SOURCE_UUID}"
+    )));
+    assert!(commit.contains(&format!("@{SVNSYNC_SOURCE_UUID}")));
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.svnsync-url")
+            .unwrap()
+            .as_deref(),
+        Some(SVNSYNC_SOURCE_URL)
+    );
+    assert_eq!(git.config_get("svn-remote.svn.svnsync-url").unwrap(), None);
+    let mirror_uuid = svn_stdout(&["info", "--show-item", "repos-uuid", &fixture.url()]);
+    assert!(
+        work.join(format!(
+            ".git/svn/refs/remotes/origin/trunk/.rev_map.{}",
+            mirror_uuid.trim()
+        ))
+        .is_file(),
+        "rev_map must remain keyed by the mirror transport UUID"
+    );
+    assert_eq!(
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(&work)
+            .args(["info", "--url"])
+            .output()
+            .unwrap()
+            .stdout,
+        format!("{SVNSYNC_SOURCE_URL}/trunk\n").as_bytes()
+    );
+    let info = Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("info")
+        .output()
+        .unwrap();
+    assert!(info.status.success());
+    let info = String::from_utf8(info.stdout).unwrap();
+    assert!(info.contains(&format!("Repository Root: {}", fixture.url())));
+    assert!(info.contains(&format!("Repository UUID: {SVNSYNC_SOURCE_UUID}")));
+
+    let direct = temp.path().join("direct");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &format!("{}/trunk", fixture.url()),
+            "direct",
+            "--useSvnsyncProps",
+        ])
+        .assert()
+        .success();
+    let direct_git = git_svn_rs_core::git::GitCli::new(&direct);
+    assert!(
+        direct_git
+            .run_for_test(["show", "-s", "--format=%B", "refs/remotes/git-svn"])
+            .unwrap()
+            .contains(&format!(
+                "git-svn-id: {SVNSYNC_SOURCE_URL}@2 {SVNSYNC_SOURCE_UUID}"
+            ))
+    );
+
+    fixture
+        .set_revision_property(0, "svn:sync-from-url", b"")
+        .unwrap();
+    fixture
+        .set_revision_property(0, "svn:sync-from-uuid", b"")
+        .unwrap();
+    let revision = fixture
+        .modify_run_script_content("#!/bin/sh\necho cached\n")
+        .unwrap();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .success();
+    assert!(
+        git.run_for_test(["show", "-s", "--format=%B", "refs/remotes/origin/trunk"])
+            .unwrap()
+            .contains(&format!(
+                "git-svn-id: {SVNSYNC_SOURCE_URL}/trunk@{revision} {SVNSYNC_SOURCE_UUID}"
+            ))
+    );
+}
+
+#[test]
+fn clone_rejects_partial_svnsync_identity_without_import_or_cache() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture
+        .set_revision_property(0, "svn:sync-from-url", SVNSYNC_SOURCE_URL.as_bytes())
+        .unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--use-svnsync-props",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains("svn:sync-from-uuid"));
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert!(git.rev_parse("refs/remotes/origin/trunk").is_err());
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.svnsync-url")
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.svnsync-uuid")
+            .unwrap(),
+        None
+    );
+}
+
 #[test]
 fn clone_and_fetch_peg_sensitive_file_url() {
     match require_svn_tools() {

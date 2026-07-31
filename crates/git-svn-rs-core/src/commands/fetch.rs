@@ -104,7 +104,8 @@ fn fetch_config(
     if config.url.starts_with("mock://") {
         let session = MockRaSession::standard_fixture("mock-uuid");
         let base_revision = imported_base_revision(git, &config, "mock-uuid", selected_ref)?;
-        let config = effective_fetch_config(config, shared, base_revision)?;
+        let mut config = effective_fetch_config(config, shared, base_revision)?;
+        hydrate_svnsync_identity(git, &mut config, || session.rev_properties(0))?;
         let start_revision = base_revision.saturating_add(1);
         let head_revision = session.latest_revnum()?;
         let import_options =
@@ -129,7 +130,8 @@ fn fetch_config(
     let uuid = backend.uuid()?;
     let repos_root = backend.repository_root()?;
     let base_revision = imported_base_revision(git, &config, &uuid, selected_ref)?;
-    let config = effective_fetch_config(config, shared, base_revision)?;
+    let mut config = effective_fetch_config(config, shared, base_revision)?;
+    hydrate_svnsync_identity(git, &mut config, || backend.rev_properties(0))?;
     let start_revision = base_revision.saturating_add(1);
     let head_revision = backend.latest_revnum()?;
     let import_options = import_options(start_revision, head_revision, shared.revision.as_deref())?;
@@ -329,6 +331,17 @@ impl ConfiguredBackend {
             Self::Cli(backend) => backend.repository_root(),
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(backend) => Ok(RaSession::repos_root(backend).to_string()),
+        }
+    }
+
+    fn rev_properties(
+        &self,
+        revision: u32,
+    ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
+        match self {
+            Self::Cli(backend) => backend.rev_properties(revision),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => backend.rev_properties(revision),
         }
     }
 }
@@ -722,6 +735,44 @@ fn persist_discovery_high_water(
     Ok(())
 }
 
+fn hydrate_svnsync_identity(
+    git: &GitCli,
+    config: &mut SvnRemoteConfig,
+    read_revision_zero: impl FnOnce() -> Result<std::collections::BTreeMap<String, Vec<u8>>, String>,
+) -> Result<(), String> {
+    if !config.use_svnsync_props {
+        return Ok(());
+    }
+    config.validate_metadata_options()?;
+    config.validate_svnsync_cache()?;
+    if config.svnsync_url.is_some() {
+        return Ok(());
+    }
+
+    let properties = read_revision_zero()?;
+    let read = |name: &str| -> Result<String, String> {
+        let value = properties
+            .get(name)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                format!("useSvnsyncProps set, but failed to read svnsync property: {name}")
+            })?;
+        String::from_utf8(value.clone())
+            .map_err(|_| format!("{name} revision property is not valid UTF-8"))
+    };
+    let url = read("svn:sync-from-url")?;
+    let uuid = read("svn:sync-from-uuid")?;
+    crate::config::validate_svnsync_identity(&url, &uuid)?;
+
+    let prefix = format!("svn-remote.{}", config.name);
+    let uuid_key = format!("{prefix}.svnsync-uuid");
+    let url_key = format!("{prefix}.svnsync-url");
+    git.git_svn_metadata_set_many(&[(&uuid_key, &uuid), (&url_key, &url)])?;
+    config.svnsync_url = Some(url);
+    config.svnsync_uuid = Some(uuid);
+    Ok(())
+}
+
 fn persist_repository_identity(
     git: &GitCli,
     config: &SvnRemoteConfig,
@@ -1044,6 +1095,104 @@ mod tests {
             effective_fetch_config(config, &shared, 1)
                 .unwrap_err()
                 .contains("--use-svnsync-props cannot change")
+        );
+    }
+
+    #[test]
+    fn svnsync_identity_is_validated_then_cached_in_private_metadata() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = SvnRemoteConfig::new("svn", "file:///mirror", build_single_path(""))
+            .with_svnsync_props();
+        let properties = std::collections::BTreeMap::from([
+            (
+                "svn:sync-from-url".to_string(),
+                b"https://source.example/repo".to_vec(),
+            ),
+            (
+                "svn:sync-from-uuid".to_string(),
+                b"11111111-2222-3333-4444-555555555555".to_vec(),
+            ),
+        ]);
+
+        hydrate_svnsync_identity(&git, &mut config, || Ok(properties)).unwrap();
+
+        assert_eq!(
+            config.svnsync_url.as_deref(),
+            Some("https://source.example/repo")
+        );
+        assert_eq!(
+            git.git_svn_metadata_get("svn-remote.svn.svnsync-uuid")
+                .unwrap()
+                .as_deref(),
+            Some("11111111-2222-3333-4444-555555555555")
+        );
+        assert_eq!(git.config_get("svn-remote.svn.svnsync-uuid").unwrap(), None);
+    }
+
+    #[test]
+    fn partial_svnsync_identity_does_not_write_a_partial_cache() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = SvnRemoteConfig::new("svn", "file:///mirror", build_single_path(""))
+            .with_svnsync_props();
+        let properties = std::collections::BTreeMap::from([(
+            "svn:sync-from-url".to_string(),
+            b"https://source.example/repo".to_vec(),
+        )]);
+
+        let error = hydrate_svnsync_identity(&git, &mut config, || Ok(properties)).unwrap_err();
+
+        assert!(error.contains("svn:sync-from-uuid"));
+        assert_eq!(
+            git.git_svn_metadata_get("svn-remote.svn.svnsync-url")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            git.git_svn_metadata_get("svn-remote.svn.svnsync-uuid")
+                .unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn cached_svnsync_identity_skips_revision_property_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = SvnRemoteConfig::new("svn", "file:///mirror", build_single_path(""))
+            .with_svnsync_identity("foo+bar://source", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+
+        hydrate_svnsync_identity(&git, &mut config, || {
+            panic!("cached identity must avoid remote revision-property access")
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn svnsync_source_url_requires_a_nonempty_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = SvnRemoteConfig::new("svn", "file:///mirror", build_single_path(""))
+            .with_svnsync_props();
+        let properties = std::collections::BTreeMap::from([
+            ("svn:sync-from-url".to_string(), b"foo://".to_vec()),
+            (
+                "svn:sync-from-uuid".to_string(),
+                b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_vec(),
+            ),
+        ]);
+
+        let error = hydrate_svnsync_identity(&git, &mut config, || Ok(properties)).unwrap_err();
+        assert!(error.contains("invalid svn:sync-from-url"));
+        assert_eq!(
+            git.git_svn_metadata_get("svn-remote.svn.svnsync-url")
+                .unwrap(),
+            None
         );
     }
 
