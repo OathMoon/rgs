@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `7f493af Discover and cache SVM source identity`
+Committed HEAD at audit: `daf5508 Complete direct SVM replay and tracking`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -93,8 +93,9 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 - `useSvnsyncProps` validates byte-safe r0 source identity, atomically caches it,
   keeps mirror rev_maps separate from source footer/author/info identity, and works
   for direct/stdlayout replay; malformed/partial props publish no state.
-- `useSvmProps` discovers latest-revision ancestor identity byte-safely, atomically
-  caches private source/replace/UUID keys, then fails closed until dual replay lands.
+- `useSvmProps` discovers/caches source identity byte-safely, imports per-revision
+  `svm:headrev` into atomic transport/source rev_maps, supports mirror fallback and
+  source-aware readonly queries; reset/dcommit reject before mutating dual maps.
 - Plain HTTP reads are separated from HTTPS and enabled through the common
   adapters. A loopback Apache DAV Basic-auth fixture covers denied no-credential
   clone, secret-safe errors, authenticated clone, and incremental fetch; strict CI
@@ -236,9 +237,9 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 Verified on 2026-08-01:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 164/164; readonly follow-up 82/82
+- `cargo test --workspace`; core lib 170/170; readonly follow-up 82/82
 - dcommit linear 69/69; config mapping 17/17; real SVN default 47/47
-- linked core unit 196/196, backend 34/34, and real SVN CLI 47/47
+- linked core unit 202/202, backend 34/34, and real SVN CLI 47/47
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -251,7 +252,6 @@ Verified on 2026-08-01:
 
 ### P1
 
-- `useSvmProps` identity discovery and dual-domain replay; v3 multi-map recovery is ready.
 - Execute the strict HTTP DAV fixture in an equipped environment, then validate
   HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
 
@@ -281,12 +281,12 @@ Verified on 2026-08-01:
   svnsync CLI/config, revprops, and source identity.
 - `10ea719`, `a548b20`, `7f493af`: multi-map transactions, noMetadata limits,
   and byte-safe SVM CLI/config/identity discovery foundation.
+- `daf5508`: direct SVM replay, legal dual-map tracking/readonly, and mutation guards.
 
 ## Next Steps
 
-1. Parse per-revision `svm:headrev` and wire direct transport/source replay.
-2. Teach tracking/resolver/readonly paths to validate and select legal dual maps.
-3. Execute strict DAV/HTTPS/OpenSSH/write profiles and hosted CI when available.
+1. Execute strict DAV/HTTPS/OpenSSH/write profiles in equipped environments.
+2. Dispatch hosted compatibility CI and retain its artifacts when credentials exist.
 
 ## Handoff Notes
 
