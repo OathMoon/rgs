@@ -200,6 +200,29 @@ impl StandardSvnFixture {
     }
 
     #[allow(dead_code)]
+    pub fn set_revision_property(
+        &self,
+        revision: u32,
+        name: &str,
+        value: &[u8],
+    ) -> Result<(), String> {
+        let value_path = self._tmp.path().join("revision-property-value");
+        std::fs::write(&value_path, value).map_err(|error| error.to_string())?;
+        run(
+            self._tmp.path(),
+            "svnadmin",
+            &[
+                "setrevprop",
+                path_arg(&self.repo)?,
+                "-r",
+                &revision.to_string(),
+                name,
+                path_arg(&value_path)?,
+            ],
+        )
+    }
+
+    #[allow(dead_code)]
     pub fn create_peg_sensitive_trunk(&self) -> Result<u32, String> {
         let wc = self._tmp.path().join("create-peg-sensitive-trunk-wc");
         run(

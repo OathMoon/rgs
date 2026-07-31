@@ -175,6 +175,7 @@ pub struct MockRaSession {
     url: String,
     repos_root: String,
     backend: MockSvnBackend,
+    revision_properties: BTreeMap<u32, BTreeMap<String, Vec<u8>>>,
 }
 
 impl MockRaSession {
@@ -200,7 +201,17 @@ impl MockRaSession {
             url: "mock://repo/trunk".to_string(),
             repos_root: "mock://repo".to_string(),
             backend: MockSvnBackend::new(uuid, revisions),
+            revision_properties: BTreeMap::new(),
         }
+    }
+
+    pub fn with_revision_properties(
+        mut self,
+        revision: u32,
+        properties: BTreeMap<String, Vec<u8>>,
+    ) -> Self {
+        self.revision_properties.insert(revision, properties);
+        self
     }
 
     fn path_kind(path: &str, revision: u32) -> Option<SvnNodeKind> {
@@ -229,6 +240,17 @@ impl RaSession for MockRaSession {
 
     fn latest_revnum(&self) -> Result<u32, String> {
         self.backend.latest_revnum()
+    }
+
+    fn rev_properties(&self, revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        if revision > self.latest_revnum()? {
+            return Err(format!("SVN revision r{revision} was not found"));
+        }
+        Ok(self
+            .revision_properties
+            .get(&revision)
+            .cloned()
+            .unwrap_or_default())
     }
 
     fn check_path(&self, path: &str, revision: u32) -> Result<Option<SvnNodeKind>, String> {

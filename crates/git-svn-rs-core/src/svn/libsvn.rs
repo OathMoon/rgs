@@ -1050,6 +1050,18 @@ unsafe fn svn_string_to_string(value: *const svn_string_t) -> String {
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn svn_string_to_bytes(value: *const svn_string_t) -> Vec<u8> {
+    if value.is_null() {
+        return Vec::new();
+    }
+    let value = unsafe { &*value };
+    if value.data.is_null() || value.len == 0 {
+        return Vec::new();
+    }
+    unsafe { slice::from_raw_parts(value.data.cast::<u8>(), value.len) }.to_vec()
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn changed_paths(paths: *mut AprHashT) -> Vec<ChangedPath> {
     let mut changed_paths = Vec::new();
     if paths.is_null() {
@@ -1650,6 +1662,30 @@ unsafe fn svn_properties(props: *mut AprHashT) -> BTreeMap<String, String> {
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn svn_property_bytes(props: *mut AprHashT) -> BTreeMap<String, Vec<u8>> {
+    let mut properties = BTreeMap::new();
+    if props.is_null() {
+        return properties;
+    }
+
+    let mut index = unsafe { apr_hash_first(ptr::null_mut(), props) };
+    while !index.is_null() {
+        let mut key: *const c_void = ptr::null();
+        let mut key_len: isize = 0;
+        let mut value: *mut c_void = ptr::null_mut();
+        unsafe { apr_hash_this(index, &mut key, &mut key_len, &mut value) };
+        if let Some(name) = unsafe { hash_key_to_string(key, key_len) } {
+            properties.insert(name, unsafe {
+                svn_string_to_bytes(value as *const svn_string_t)
+            });
+        }
+        index = unsafe { apr_hash_next(index) };
+    }
+
+    properties
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
 unsafe fn svn_call(error: *mut svn_error_t, context: &str) -> Result<(), String> {
     if error.is_null() {
         Ok(())
@@ -1846,6 +1882,12 @@ unsafe extern "C" {
         latest_revnum: *mut c_long,
         pool: *mut AprPoolT,
     ) -> *mut svn_error_t;
+    fn svn_ra_rev_proplist(
+        session: *mut SvnRaSessionT,
+        revision: c_long,
+        props: *mut *mut AprHashT,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
     fn svn_ra_reparent(
         session: *mut SvnRaSessionT,
         url: *const c_char,
@@ -1989,6 +2031,29 @@ impl RaSession for LibSvnBackend {
 
     fn latest_revnum(&self) -> Result<u32, String> {
         SvnBackend::latest_revnum(self)
+    }
+
+    fn rev_properties(&self, revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        #[cfg(git_svn_rs_libsvn_linked)]
+        {
+            self.with_session(|session, pool| unsafe {
+                let revision_number: c_long = revision
+                    .try_into()
+                    .map_err(|_| format!("SVN revision {revision} does not fit in svn_revnum_t"))?;
+                let mut properties = ptr::null_mut();
+                svn_call(
+                    svn_ra_rev_proplist(session, revision_number, &mut properties, pool),
+                    "svn_ra_rev_proplist",
+                )?;
+                Ok(svn_property_bytes(properties))
+            })
+        }
+
+        #[cfg(not(git_svn_rs_libsvn_linked))]
+        {
+            let _ = revision;
+            Err(Self::unavailable_message().to_string())
+        }
     }
 
     fn check_path(&self, path: &str, revision: u32) -> Result<Option<SvnNodeKind>, String> {

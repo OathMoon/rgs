@@ -356,6 +356,21 @@ impl RaSession for SvnCliBackend {
         SvnBackend::latest_revnum(self)
     }
 
+    fn rev_properties(&self, revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        let target = crate::svn::target_without_peg_revision(&self.url);
+        let xml = self.run_text(&[
+            "proplist",
+            "--revprop",
+            "--xml",
+            "--verbose",
+            "--non-interactive",
+            "-r",
+            &revision.to_string(),
+            &target,
+        ])?;
+        parse_proplist_xml_bytes(&xml)
+    }
+
     fn check_path(&self, path: &str, revision: u32) -> Result<Option<SvnNodeKind>, String> {
         let url = versioned_url(&self.url, path, revision);
         match self.run_text(&["info", "--show-item", "kind", &url]) {

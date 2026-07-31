@@ -112,6 +112,33 @@ fn linked_backend_reads_file_repository_metadata() {
 }
 
 #[test]
+fn linked_backend_revision_properties_preserve_multibyte_utf8_bytes() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let value = "svnsync 来源\n".as_bytes();
+    fixture
+        .set_revision_property(0, "git-svn-rs:binary", value)
+        .unwrap();
+    let backend = LibSvnBackend::for_url(fixture.url());
+
+    assert_eq!(
+        backend.rev_properties(0).unwrap()["git-svn-rs:binary"],
+        value
+    );
+}
+
+#[test]
 fn linked_backend_reads_metadata_with_config_dir_from_remote_config() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

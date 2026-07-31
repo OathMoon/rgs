@@ -1041,6 +1041,10 @@ impl RaSession for PathFilteringRaSession {
         Ok(3)
     }
 
+    fn rev_properties(&self, _revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        Ok(BTreeMap::new())
+    }
+
     fn check_path(&self, _path: &str, _revision: u32) -> Result<Option<SvnNodeKind>, String> {
         Ok(None)
     }

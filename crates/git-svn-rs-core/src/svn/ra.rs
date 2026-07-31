@@ -34,6 +34,7 @@ pub trait RaSession {
     fn repos_root(&self) -> &str;
     fn uuid(&self) -> Result<String, String>;
     fn latest_revnum(&self) -> Result<u32, String>;
+    fn rev_properties(&self, revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String>;
     fn check_path(&self, path: &str, revision: u32) -> Result<Option<SvnNodeKind>, String>;
     fn get_dir(&self, path: &str, revision: u32) -> Result<DirListing, String>;
     fn get_log(&self, paths: &[&str], start: u32, end: u32) -> Result<Vec<RevisionEvent>, String>;

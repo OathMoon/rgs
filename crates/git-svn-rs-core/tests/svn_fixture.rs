@@ -62,6 +62,30 @@ fn svn_cli_get_dir_returns_immediate_files_and_directories() {
 }
 
 #[test]
+fn svn_cli_revision_properties_preserve_multibyte_utf8_bytes() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let value = "svnsync 来源\n".as_bytes();
+    fixture
+        .set_revision_property(0, "git-svn-rs:binary", value)
+        .unwrap();
+    let backend = SvnCliBackend::new(fixture.url()).unwrap();
+
+    assert_eq!(
+        backend.rev_properties(0).unwrap()["git-svn-rs:binary"],
+        value
+    );
+}
+
+#[test]
 fn svn_cli_log_handles_deleted_files_after_copies_without_catting_them() {
     match require_svn_tools() {
         Ok(()) => {}

@@ -1,6 +1,7 @@
 use git_svn_rs_core::svn::editor::FetchEditor;
 use git_svn_rs_core::svn::mock::MockRaSession;
 use git_svn_rs_core::svn::ra::{RaSession, SvnNodeKind};
+use std::collections::BTreeMap;
 
 #[test]
 fn mock_ra_session_exposes_check_path_get_dir_and_log() {
@@ -18,6 +19,20 @@ fn mock_ra_session_exposes_check_path_get_dir_and_log() {
             .contains_key("src")
     );
     assert_eq!(session.get_log(&["trunk"], 1, 2).unwrap().len(), 2);
+}
+
+#[test]
+fn mock_ra_session_preserves_revision_property_bytes() {
+    let value = b"svnsync\0\xffvalue".to_vec();
+    let session = MockRaSession::standard_fixture("uuid").with_revision_properties(
+        0,
+        BTreeMap::from([("git-svn-rs:binary".to_string(), value.clone())]),
+    );
+
+    assert_eq!(
+        session.rev_properties(0).unwrap()["git-svn-rs:binary"],
+        value
+    );
 }
 
 #[test]
