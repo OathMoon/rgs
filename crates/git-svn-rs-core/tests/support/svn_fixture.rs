@@ -751,3 +751,78 @@ fn file_url(path: &Path) -> Result<String, String> {
     let raw = raw.strip_prefix("//?/").unwrap_or(&raw);
     Ok(format!("file:///{}", raw.trim_start_matches('/')))
 }
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+#[derive(Debug)]
+pub struct PtyCommandOutput {
+    pub status: std::process::ExitStatus,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+#[cfg(target_os = "linux")]
+#[allow(dead_code)]
+pub fn run_with_pty_password(
+    binary: &str,
+    current_dir: &Path,
+    args: &[&str],
+    password: &str,
+) -> PtyCommandOutput {
+    use std::io::{Read, Write};
+    use std::process::Stdio;
+    use std::time::Duration;
+
+    assert!(!binary.contains('\''));
+    assert!(args.iter().all(|arg| !arg.contains('\'')));
+    let command = std::iter::once(binary)
+        .chain(args.iter().copied())
+        .map(|arg| format!("'{arg}'"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let mut child = Command::new("script")
+        .current_dir(current_dir)
+        .env_remove("GIT_ASKPASS")
+        .env_remove("SSH_ASKPASS")
+        .env("GIT_TERMINAL_PROMPT", "1")
+        .args(["-qec", &command, "/dev/null"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = child.stdout.take().unwrap();
+    let mut bytes = Vec::new();
+    let mut byte = [0_u8; 1];
+    let mut handled_through = 0;
+    while stdout.read(&mut byte).unwrap() != 0 {
+        bytes.push(byte[0]);
+        if bytes[handled_through..].ends_with(b": ")
+            && String::from_utf8_lossy(&bytes[handled_through..]).contains("Password for '")
+        {
+            std::thread::sleep(Duration::from_millis(50));
+            writeln!(stdin, "{password}").unwrap();
+            stdin.flush().unwrap();
+            handled_through = bytes.len();
+        }
+    }
+    drop(stdin);
+    let status = child.wait().unwrap();
+    let mut stderr = Vec::new();
+    child
+        .stderr
+        .take()
+        .unwrap()
+        .read_to_end(&mut stderr)
+        .unwrap();
+    assert!(
+        handled_through > 0,
+        "terminal password prompt was not observed"
+    );
+    PtyCommandOutput {
+        status,
+        stdout: String::from_utf8_lossy(&bytes).into_owned(),
+        stderr: String::from_utf8_lossy(&stderr).into_owned(),
+    }
+}

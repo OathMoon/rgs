@@ -7,6 +7,8 @@ use predicates::prelude::PredicateBooleanExt;
 #[path = "../../git-svn-rs-core/tests/support/svn_fixture.rs"]
 mod svn_fixture;
 
+#[cfg(target_os = "linux")]
+use svn_fixture::run_with_pty_password;
 #[cfg(unix)]
 use svn_fixture::{HttpDav, require_http_dav};
 use svn_fixture::{
@@ -1186,6 +1188,73 @@ fn clone_and_fetch_authenticated_svn_url_use_git_askpass() {
     let git_config = std::fs::read_to_string(work.join(".git/config")).unwrap();
     assert!(!git_config.contains("secret"));
     assert!(!git_config.contains("password"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn clone_and_fetch_authenticated_svn_url_use_terminal_password_prompt() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    if std::process::Command::new("script")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("script(1) is unavailable; skipping terminal auth coverage");
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_basic_auth("alice", "secret").unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let output = run_with_pty_password(
+        env!("CARGO_BIN_EXE_git-svn-rs"),
+        temp.path(),
+        &[
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+            "--no-auth-cache",
+        ],
+        "secret",
+    );
+    assert!(output.status.success(), "terminal clone failed: {output:?}");
+    assert!(!output.stdout.contains("secret"));
+    assert!(!output.stderr.contains("secret"));
+
+    let work = temp.path().join("work");
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    let before = git
+        .run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+        .unwrap();
+    fixture
+        .modify_run_script_content("#!/bin/sh\necho terminal\n")
+        .unwrap();
+    let output = run_with_pty_password(
+        env!("CARGO_BIN_EXE_git-svn-rs"),
+        &work,
+        &["fetch", "--no-auth-cache"],
+        "secret",
+    );
+    assert!(output.status.success(), "terminal fetch failed: {output:?}");
+    assert!(!output.stdout.contains("secret"));
+    assert!(!output.stderr.contains("secret"));
+    let after = git
+        .run_for_test(["rev-parse", "refs/remotes/origin/trunk"])
+        .unwrap();
+    assert_ne!(before, after);
+    let config = std::fs::read_to_string(work.join(".git/config")).unwrap();
+    assert!(!config.contains("secret"));
 }
 
 #[test]

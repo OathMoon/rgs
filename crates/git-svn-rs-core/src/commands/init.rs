@@ -9,7 +9,7 @@ use crate::path_url::{
     SvnUrlProfile, canonicalize_url, join_paths, repository_relative_url_path, svn_url_profile,
     validate_fetch_url,
 };
-use crate::svn::auth::askpass_password;
+use crate::svn::auth::prompted_password;
 use crate::svn::cli::SvnCliBackend;
 
 pub fn run(args: InitArgs) -> Result<(), String> {
@@ -132,7 +132,7 @@ pub(crate) fn normalize_layout_args(
                     svn_url_profile(url),
                     SvnUrlProfile::Svn | SvnUrlProfile::Http
                 ) {
-                askpass_password(url, shared.username.as_deref(), shared.no_auth_cache)?
+                prompted_password(url, shared.username.as_deref(), shared.no_auth_cache)?
             } else {
                 None
             };

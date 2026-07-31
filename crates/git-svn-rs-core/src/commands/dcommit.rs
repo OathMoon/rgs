@@ -21,7 +21,7 @@ use crate::git::{GitCli, GitCommitSummary};
 use crate::git_svn_id::GitSvnId;
 use crate::rev_map::RevMap;
 use crate::svn::CommitRecord;
-use crate::svn::auth::askpass_password;
+use crate::svn::auth::prompted_password;
 use crate::svn::mock::MockSvnBackend;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1157,7 +1157,7 @@ fn resolved_dcommit_svn_options(
     if options.password.is_none()
         && crate::path_url::svn_url_profile(target_url) == crate::path_url::SvnUrlProfile::Svn
     {
-        options.password = askpass_password(
+        options.password = prompted_password(
             target_url,
             options.username.as_deref(),
             options.no_auth_cache,

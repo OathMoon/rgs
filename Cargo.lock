@@ -438,6 +438,7 @@ dependencies = [
  "flate2",
  "fs2",
  "hex",
+ "libc",
  "md-5",
  "sha2",
  "tempfile",

@@ -10,6 +10,8 @@ use std::collections::BTreeMap;
 #[path = "../../git-svn-rs-core/tests/support/svn_fixture.rs"]
 mod svn_fixture;
 
+#[cfg(target_os = "linux")]
+use svn_fixture::run_with_pty_password;
 use svn_fixture::{
     StandardSvnFixture, SvnServe, SvnToolPolicy, require_svn_tools, require_svnserve,
 };
@@ -1923,6 +1925,128 @@ fn dcommit_uses_git_askpass_for_authenticated_svnserve_write_and_fetch() {
     let git_config = std::fs::read_to_string(work.join(".git/config")).unwrap();
     assert!(!git_config.contains("secret"));
     assert!(!git_config.contains("password"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn dcommit_uses_terminal_password_without_leaking_or_writing_before_auth() {
+    match require_svn_tools().and_then(|()| require_svnserve()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    if std::process::Command::new("script")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("script(1) is unavailable; skipping terminal auth coverage");
+        return;
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture.require_read_write_auth("alice", "secret").unwrap();
+    let server = SvnServe::start(fixture.root()).unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let work = parent.path().join("work");
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args([
+            "clone",
+            &server.repo_url(),
+            "work",
+            "--stdlayout",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    make_commit(
+        &work,
+        "terminal-write.txt",
+        "terminal credential\n",
+        "terminal authenticated dcommit",
+    );
+    let journal_directory = work.join(".git/svn/refs/remotes/origin/trunk/dcommit-journal");
+    assert!(!journal_directory.exists());
+
+    let before = fixture.latest_revision();
+    let output = run_with_pty_password(
+        env!("CARGO_BIN_EXE_git-svn-rs"),
+        &work,
+        &[
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--no-auth-cache",
+        ],
+        "wrong",
+    );
+    assert!(!output.status.success());
+    assert!(!output.stdout.contains("wrong"));
+    assert!(!output.stderr.contains("wrong"));
+    assert_eq!(fixture.latest_revision(), before);
+    assert!(
+        !journal_directory.exists(),
+        "unexpected journal contents: {:?}",
+        std::fs::read_dir(&journal_directory).map(|entries| entries
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>())
+    );
+
+    let output = run_with_pty_password(
+        env!("CARGO_BIN_EXE_git-svn-rs"),
+        &work,
+        &[
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--no-auth-cache",
+        ],
+        "secret",
+    );
+    assert!(
+        output.status.success(),
+        "terminal dcommit failed: {output:?}"
+    );
+    assert!(!output.stdout.contains("secret"));
+    assert!(!output.stderr.contains("secret"));
+    assert_eq!(fixture.latest_revision(), before + 1);
+    let svn_output = std::process::Command::new("svn")
+        .args([
+            "cat",
+            "--non-interactive",
+            "--no-auth-cache",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            &format!("{}/trunk/terminal-write.txt", server.repo_url()),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        svn_output.status.success(),
+        "authenticated svn cat failed: {}",
+        String::from_utf8_lossy(&svn_output.stderr)
+    );
+    assert_eq!(svn_output.stdout, b"terminal credential\n");
+    let config = std::fs::read_to_string(work.join(".git/config")).unwrap();
+    assert!(!config.contains("secret"));
+    assert!(!config.contains("password"));
 }
 
 #[test]
