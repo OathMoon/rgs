@@ -132,10 +132,18 @@ fn fetch_config(
     let repos_root = backend.repository_root()?;
     let base_revision = imported_base_revision(git, &config, &uuid, selected_ref)?;
     let mut config = effective_fetch_config(config, shared, base_revision)?;
+    let head_revision = backend.latest_revnum()?;
+    hydrate_svm_identity(
+        git,
+        &mut config,
+        selected_ref,
+        &repos_root,
+        head_revision,
+        |path, revision| backend.node_property_bytes(&repos_root, path, revision),
+    )?;
     reject_unimplemented_svm_import(&config)?;
     hydrate_svnsync_identity(git, &mut config, || backend.rev_properties(0))?;
     let start_revision = base_revision.saturating_add(1);
-    let head_revision = backend.latest_revnum()?;
     let import_options = import_options(start_revision, head_revision, shared.revision.as_deref())?;
     let scanned_end = import_options
         .end_revision
@@ -357,6 +365,21 @@ impl ConfiguredBackend {
             Self::Cli(backend) => backend.rev_properties(revision),
             #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
             Self::LibSvn(backend) => backend.rev_properties(revision),
+        }
+    }
+
+    fn node_property_bytes(
+        &self,
+        repository_root: &str,
+        path: &str,
+        revision: u32,
+    ) -> Result<std::collections::BTreeMap<String, Vec<u8>>, String> {
+        match self {
+            Self::Cli(backend) => backend.node_property_bytes(repository_root, path, revision),
+            #[cfg(all(feature = "svn-libsvn", git_svn_rs_libsvn_linked))]
+            Self::LibSvn(backend) => {
+                backend.node_property_bytes_at_repository_path(repository_root, path, revision)
+            }
         }
     }
 }
@@ -750,6 +773,165 @@ fn persist_discovery_high_water(
     Ok(())
 }
 
+fn hydrate_svm_identity(
+    git: &GitCli,
+    config: &mut SvnRemoteConfig,
+    selected_ref: Option<&str>,
+    repository_root: &str,
+    latest_revision: u32,
+    mut read_directory_properties: impl FnMut(
+        &str,
+        u32,
+    ) -> Result<
+        std::collections::BTreeMap<String, Vec<u8>>,
+        String,
+    >,
+) -> Result<(), String> {
+    if !config.use_svm_props {
+        return Ok(());
+    }
+    config.validate_metadata_options()?;
+    config.validate_svm_cache()?;
+    if config.svm_source.is_some() {
+        return Ok(());
+    }
+
+    let paths = svm_discovery_paths(config, selected_ref, repository_root)?;
+    for path in &paths {
+        let properties = read_directory_properties(path, latest_revision)?;
+        let source = properties
+            .get("svm:source")
+            .filter(|value| !value.is_empty());
+        let uuid = properties.get("svm:uuid").filter(|value| !value.is_empty());
+        let (Some(source), Some(uuid)) = (source, uuid) else {
+            continue;
+        };
+        let source = normalize_svm_source(source)?;
+        let uuid = decode_svm_property("svm:uuid", uuid)?;
+        crate::config::validate_svm_uuid(&uuid)?;
+        let replace = crate::path_url::add_path_to_url(repository_root, path);
+
+        let prefix = format!("svn-remote.{}", config.name);
+        let source_key = format!("{prefix}.svm-source");
+        let replace_key = format!("{prefix}.svm-replace");
+        let uuid_key = format!("{prefix}.svm-uuid");
+        git.git_svn_metadata_set_many(&[
+            (&source_key, &source),
+            (&replace_key, &replace),
+            (&uuid_key, &uuid),
+        ])?;
+        config.svm_source = Some(source);
+        config.svm_replace = Some(replace);
+        config.svm_uuid = Some(uuid);
+        return Ok(());
+    }
+
+    let tried = paths
+        .iter()
+        .map(|path| {
+            format!(
+                "  {}",
+                crate::path_url::add_path_to_url(repository_root, path)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Err(format!(
+        "useSvmProps set, but failed to read SVM properties\n(svm:source, svm:uuid) from the following URLs:\n{tried}\n"
+    ))
+}
+
+fn svm_discovery_paths(
+    config: &SvnRemoteConfig,
+    selected_ref: Option<&str>,
+    repository_root: &str,
+) -> Result<Vec<String>, String> {
+    let session_path = crate::path_url::repository_relative_url_path(repository_root, &config.url)?;
+    let mappings = config
+        .fetch
+        .iter()
+        .chain(config.branches.iter())
+        .chain(config.tags.iter())
+        .filter(|mapping| selected_ref.is_none_or(|selected| mapping.git_ref == selected))
+        .collect::<Vec<_>>();
+    let starts = if mappings.is_empty() {
+        vec![session_path.clone()]
+    } else {
+        mappings
+            .into_iter()
+            .map(|mapping| {
+                let fixed = mapping
+                    .svn_path
+                    .split('/')
+                    .take_while(|part| !part.contains('*') && !part.contains('{'))
+                    .collect::<Vec<_>>()
+                    .join("/");
+                crate::path_url::join_paths([session_path.as_str(), fixed.as_str()])
+            })
+            .collect()
+    };
+
+    let mut paths = Vec::new();
+    for start in starts {
+        let mut current = start.trim_matches('/').to_string();
+        loop {
+            if !paths.contains(&current) {
+                paths.push(current.clone());
+            }
+            let Some((parent, _)) = current.rsplit_once('/') else {
+                if !current.is_empty() && !paths.iter().any(String::is_empty) {
+                    paths.push(String::new());
+                }
+                break;
+            };
+            current = parent.to_string();
+        }
+    }
+    if paths.is_empty() {
+        paths.push(String::new());
+    }
+    Ok(paths)
+}
+
+fn decode_svm_property(name: &str, value: &[u8]) -> Result<String, String> {
+    let mut value = String::from_utf8(value.to_vec())
+        .map_err(|_| format!("{name} directory property is not valid UTF-8"))?;
+    if value.ends_with('\n') {
+        value.pop();
+    }
+    Ok(value)
+}
+
+fn normalize_svm_source(value: &[u8]) -> Result<String, String> {
+    let mut source = decode_svm_property("svm:source", value)?;
+    if let Some(bang) = source.find('!') {
+        let left = source[..bang].trim_end_matches('/');
+        let right = source[bang + 1..].trim_start_matches('/');
+        source = format!("{left}/{right}");
+    }
+    while source.ends_with('/') {
+        source.pop();
+    }
+    if let Some((scheme, rest)) = source.split_once("://")
+        && scheme
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte == b'+')
+    {
+        let (authority, path) = rest.split_once('/').unwrap_or((rest, ""));
+        if let Some((_, host)) = authority.rsplit_once('@') {
+            source = if path.is_empty() {
+                format!("{scheme}://{host}")
+            } else {
+                format!("{scheme}://{host}/{path}")
+            };
+        }
+    }
+    if source.is_empty() {
+        return Err("svm:source directory property is empty after normalization".to_string());
+    }
+    Ok(source)
+}
+
 fn hydrate_svnsync_identity(
     git: &GitCli,
     config: &mut SvnRemoteConfig,
@@ -1120,6 +1302,211 @@ mod tests {
 
         let error = reject_unimplemented_svm_import(&config).unwrap_err();
         assert!(error.contains("refusing to write incorrect revision metadata"));
+    }
+
+    fn svm_config(url: &str, svn_path: &str) -> SvnRemoteConfig {
+        let mut config = SvnRemoteConfig::new("svn", url, build_single_path(svn_path));
+        config.fetch[0].svn_path = svn_path.to_string();
+        config.use_svm_props = true;
+        config
+    }
+
+    #[test]
+    fn svm_source_parser_normalizes_bang_username_and_trailing_slashes() {
+        assert_eq!(
+            normalize_svm_source(b"https://user:secret@origin.example/source!/nested///\n")
+                .unwrap(),
+            "https://origin.example/source/nested"
+        );
+        assert_eq!(normalize_svm_source(b"junk///").unwrap(), "junk");
+    }
+
+    #[test]
+    fn svm_identity_discovers_an_ancestor_and_caches_all_keys_atomically() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = svm_config("file:///repo", "trunk/project");
+        let mut visited = Vec::new();
+
+        hydrate_svm_identity(
+            &git,
+            &mut config,
+            None,
+            "file:///repo",
+            9,
+            |path, revision| {
+                visited.push((path.to_string(), revision));
+                Ok(match path {
+                    "trunk/project" => std::collections::BTreeMap::from([(
+                        "svm:source".to_string(),
+                        b"partial".to_vec(),
+                    )]),
+                    "trunk" => std::collections::BTreeMap::from([
+                        (
+                            "svm:source".to_string(),
+                            b"https://user@origin/source!/project///\n".to_vec(),
+                        ),
+                        (
+                            "svm:uuid".to_string(),
+                            b"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\n".to_vec(),
+                        ),
+                    ]),
+                    _ => std::collections::BTreeMap::new(),
+                })
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            visited,
+            vec![("trunk/project".to_string(), 9), ("trunk".to_string(), 9)]
+        );
+        assert_eq!(
+            config.svm_source.as_deref(),
+            Some("https://origin/source/project")
+        );
+        assert_eq!(config.svm_replace.as_deref(), Some("file:///repo/trunk"));
+        assert_eq!(
+            config.svm_uuid.as_deref(),
+            Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        );
+        for (key, expected) in [
+            ("svm-source", "https://origin/source/project"),
+            ("svm-replace", "file:///repo/trunk"),
+            ("svm-uuid", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"),
+        ] {
+            assert_eq!(
+                git.git_svn_metadata_get(&format!("svn-remote.svn.{key}"))
+                    .unwrap()
+                    .as_deref(),
+                Some(expected)
+            );
+            assert_eq!(
+                git.config_get(&format!("svn-remote.svn.{key}")).unwrap(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn svm_identity_walks_from_a_direct_subdirectory_to_repository_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = svm_config("file:///repo/trunk", "");
+        let mut visited = Vec::new();
+
+        hydrate_svm_identity(&git, &mut config, None, "file:///repo", 3, |path, _| {
+            visited.push(path.to_string());
+            Ok(if path.is_empty() {
+                std::collections::BTreeMap::from([
+                    ("svm:source".to_string(), b"source-root".to_vec()),
+                    (
+                        "svm:uuid".to_string(),
+                        b"11111111-2222-3333-4444-555555555555".to_vec(),
+                    ),
+                ])
+            } else {
+                std::collections::BTreeMap::new()
+            })
+        })
+        .unwrap();
+
+        assert_eq!(visited, vec!["trunk", ""]);
+        assert_eq!(config.svm_source.as_deref(), Some("source-root"));
+        assert_eq!(config.svm_replace.as_deref(), Some("file:///repo"));
+    }
+
+    #[test]
+    fn missing_or_partial_svm_properties_never_write_a_partial_cache() {
+        for properties in [
+            std::collections::BTreeMap::new(),
+            std::collections::BTreeMap::from([("svm:source".to_string(), b"source".to_vec())]),
+            std::collections::BTreeMap::from([(
+                "svm:uuid".to_string(),
+                b"11111111-2222-3333-4444-555555555555".to_vec(),
+            )]),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let git = GitCli::new(temp.path());
+            git.init().unwrap();
+            let mut config = svm_config("file:///repo", "trunk");
+            let error = hydrate_svm_identity(&git, &mut config, None, "file:///repo", 2, |_, _| {
+                Ok(properties.clone())
+            })
+            .unwrap_err();
+            assert!(error.contains("failed to read SVM properties"));
+            for key in ["svm-source", "svm-replace", "svm-uuid"] {
+                assert_eq!(
+                    git.git_svn_metadata_get(&format!("svn-remote.svn.{key}"))
+                        .unwrap(),
+                    None
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_svm_property_encoding_and_uuid_fail_without_cache() {
+        for (properties, expected) in [
+            (
+                std::collections::BTreeMap::from([
+                    ("svm:source".to_string(), vec![0xff]),
+                    (
+                        "svm:uuid".to_string(),
+                        b"11111111-2222-3333-4444-555555555555".to_vec(),
+                    ),
+                ]),
+                "svm:source directory property is not valid UTF-8",
+            ),
+            (
+                std::collections::BTreeMap::from([
+                    ("svm:source".to_string(), b"source".to_vec()),
+                    ("svm:uuid".to_string(), vec![0xff]),
+                ]),
+                "svm:uuid directory property is not valid UTF-8",
+            ),
+            (
+                std::collections::BTreeMap::from([
+                    ("svm:source".to_string(), b"source".to_vec()),
+                    ("svm:uuid".to_string(), b"not-a-uuid".to_vec()),
+                ]),
+                "doesn't look right - svm:uuid",
+            ),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let git = GitCli::new(temp.path());
+            git.init().unwrap();
+            let mut config = svm_config("file:///repo", "trunk");
+            let error = hydrate_svm_identity(&git, &mut config, None, "file:///repo", 2, |_, _| {
+                Ok(properties.clone())
+            })
+            .unwrap_err();
+            assert!(error.contains(expected), "{error}");
+            assert_eq!(
+                git.git_svn_metadata_get("svn-remote.svn.svm-source")
+                    .unwrap(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn cached_svm_identity_skips_directory_property_access() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = svm_config("file:///repo", "trunk").with_svm_identity(
+            "source",
+            "file:///repo",
+            "11111111-2222-3333-4444-555555555555",
+        );
+
+        hydrate_svm_identity(&git, &mut config, None, "file:///repo", 2, |_, _| {
+            panic!("cached SVM identity should skip remote property access")
+        })
+        .unwrap();
     }
 
     #[test]

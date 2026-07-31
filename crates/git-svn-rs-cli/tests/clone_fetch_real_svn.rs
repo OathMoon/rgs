@@ -19,6 +19,73 @@ const SVNSYNC_SOURCE_URL: &str = "https://origin.example/svn/source";
 const SVNSYNC_SOURCE_UUID: &str = "11111111-2222-3333-4444-555555555555";
 
 #[test]
+fn fetch_discovers_and_privately_caches_svm_identity_before_import_rejection() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    fixture
+        .set_trunk_dir_property(
+            "svm:source",
+            "https://user@origin.example/svn/source!/nested///",
+        )
+        .unwrap();
+    fixture
+        .set_trunk_dir_property("svm:uuid", SVNSYNC_SOURCE_UUID)
+        .unwrap();
+    let work = temp.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "init",
+            &format!("{}/trunk", fixture.url()),
+            "work",
+            "--useSvmProps",
+        ])
+        .assert()
+        .success();
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .arg("fetch")
+        .assert()
+        .failure()
+        .stderr(predicates::str::contains(
+            "useSvmProps import is not yet implemented",
+        ));
+
+    let git = git_svn_rs_core::git::GitCli::new(&work);
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.svm-source")
+            .unwrap()
+            .as_deref(),
+        Some("https://origin.example/svn/source/nested")
+    );
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.svm-replace")
+            .unwrap()
+            .as_deref(),
+        Some(format!("{}/trunk", fixture.url()).as_str())
+    );
+    assert_eq!(
+        git.git_svn_metadata_get("svn-remote.svn.svm-uuid")
+            .unwrap()
+            .as_deref(),
+        Some(SVNSYNC_SOURCE_UUID)
+    );
+    assert_eq!(git.config_get("svn-remote.svn.svm-source").unwrap(), None);
+    assert!(git.rev_parse("refs/remotes/git-svn").is_err());
+}
+
+#[test]
 fn clone_and_fetch_use_validated_svnsync_source_identity() {
     match require_svn_tools() {
         Ok(()) => {}

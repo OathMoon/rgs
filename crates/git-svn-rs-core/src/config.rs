@@ -22,6 +22,9 @@ pub struct SvnRemoteConfig {
     pub no_auth_cache: bool,
     pub no_metadata: bool,
     pub use_svm_props: bool,
+    pub svm_source: Option<String>,
+    pub svm_replace: Option<String>,
+    pub svm_uuid: Option<String>,
     pub use_svnsync_props: bool,
     pub svnsync_url: Option<String>,
     pub svnsync_uuid: Option<String>,
@@ -53,6 +56,9 @@ impl SvnRemoteConfig {
             no_auth_cache: false,
             no_metadata: false,
             use_svm_props: false,
+            svm_source: None,
+            svm_replace: None,
+            svm_uuid: None,
             use_svnsync_props: false,
             svnsync_url: None,
             svnsync_uuid: None,
@@ -125,6 +131,19 @@ impl SvnRemoteConfig {
 
     pub fn with_svm_props(mut self) -> Self {
         self.use_svm_props = true;
+        self
+    }
+
+    pub fn with_svm_identity(
+        mut self,
+        source: impl Into<String>,
+        replace: impl Into<String>,
+        uuid: impl Into<String>,
+    ) -> Self {
+        self.use_svm_props = true;
+        self.svm_source = Some(source.into());
+        self.svm_replace = Some(replace.into());
+        self.svm_uuid = Some(uuid.into());
         self
     }
 
@@ -202,6 +221,7 @@ impl SvnRemoteConfig {
 
     pub fn validate_mapping_destinations(&self) -> Result<(), String> {
         self.validate_metadata_options()?;
+        self.validate_svm_cache()?;
         self.validate_svnsync_cache()?;
         for mapping in self
             .fetch
@@ -234,6 +254,28 @@ impl SvnRemoteConfig {
             (Some(url), Some(uuid)) => validate_svnsync_identity(url, uuid),
             _ => Err(format!(
                 "svn-remote.{} useSvnsyncProps cache must contain both svnsync-url and svnsync-uuid",
+                self.name
+            )),
+        }
+    }
+
+    pub fn validate_svm_cache(&self) -> Result<(), String> {
+        if !self.use_svm_props {
+            return Ok(());
+        }
+        match (&self.svm_source, &self.svm_replace, &self.svm_uuid) {
+            (None, None, None) => Ok(()),
+            (Some(source), Some(replace), Some(uuid)) => {
+                if source.is_empty() || replace.is_empty() {
+                    return Err(format!(
+                        "svn-remote.{} useSvmProps cache contains an empty source or replacement URL",
+                        self.name
+                    ));
+                }
+                validate_svm_uuid(uuid)
+            }
+            _ => Err(format!(
+                "svn-remote.{} useSvmProps cache must contain svm-source, svm-replace, and svm-uuid",
                 self.name
             )),
         }
@@ -349,6 +391,17 @@ pub(crate) fn validate_svnsync_identity(url: &str, uuid: &str) -> Result<(), Str
     Ok(())
 }
 
+pub(crate) fn validate_svm_uuid(uuid: &str) -> Result<(), String> {
+    if uuid.len() < 30
+        || !uuid
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() || byte == b'-')
+    {
+        return Err(format!("doesn't look right - svm:uuid is '{uuid}'"));
+    }
+    Ok(())
+}
+
 fn remove_url_credentials(value: &str) -> Result<String, String> {
     let (scheme, rest) = value
         .split_once("://")
@@ -417,6 +470,9 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
         no_auth_cache: read_bool("no-auth-cache")?.unwrap_or(false),
         no_metadata: read_bool("noMetadata")?.unwrap_or(false),
         use_svm_props: read_bool("useSvmProps")?.unwrap_or(false),
+        svm_source: git.git_svn_metadata_get(&format!("{prefix}.svm-source"))?,
+        svm_replace: git.git_svn_metadata_get(&format!("{prefix}.svm-replace"))?,
+        svm_uuid: git.git_svn_metadata_get(&format!("{prefix}.svm-uuid"))?,
         use_svnsync_props: read_bool("useSvnsyncProps")?.unwrap_or(false),
         svnsync_url: git.git_svn_metadata_get(&format!("{prefix}.svnsync-url"))?,
         svnsync_uuid: git.git_svn_metadata_get(&format!("{prefix}.svnsync-uuid"))?,
@@ -427,6 +483,7 @@ pub fn read_svn_remote_config(git: &GitCli, remote: &str) -> Result<SvnRemoteCon
             .unwrap_or_else(|| ".gitignore".to_string()),
     };
     config.validate_metadata_options()?;
+    config.validate_svm_cache()?;
     config.validate_svnsync_cache()?;
     Ok(config)
 }

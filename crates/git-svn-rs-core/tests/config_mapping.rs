@@ -164,6 +164,50 @@ fn serializes_svm_property_mode() {
 }
 
 #[test]
+fn reads_svm_identity_only_from_private_metadata_and_rejects_partial_cache() {
+    let temp = tempfile::tempdir().unwrap();
+    let git = GitCli::new(temp.path());
+    git.init().unwrap();
+    git.config_set("svn-remote.svn.url", "file:///mirror")
+        .unwrap();
+    git.config_set("svn-remote.svn.useSvmProps", "true")
+        .unwrap();
+    git.git_svn_metadata_set_many(&[
+        ("svn-remote.svn.svm-source", "source"),
+        ("svn-remote.svn.svm-replace", "file:///mirror"),
+        (
+            "svn-remote.svn.svm-uuid",
+            "11111111-2222-3333-4444-555555555555",
+        ),
+    ])
+    .unwrap();
+
+    let config = read_svn_remote_config(&git, "svn").unwrap();
+    assert_eq!(config.svm_source.as_deref(), Some("source"));
+    assert_eq!(config.svm_replace.as_deref(), Some("file:///mirror"));
+    assert_eq!(
+        config.svm_uuid.as_deref(),
+        Some("11111111-2222-3333-4444-555555555555")
+    );
+    assert_eq!(git.config_get("svn-remote.svn.svm-source").unwrap(), None);
+
+    let partial = tempfile::tempdir().unwrap();
+    let partial_git = GitCli::new(partial.path());
+    partial_git.init().unwrap();
+    partial_git
+        .config_set("svn-remote.svn.url", "file:///mirror")
+        .unwrap();
+    partial_git
+        .config_set("svn-remote.svn.useSvmProps", "true")
+        .unwrap();
+    partial_git
+        .git_svn_metadata_set("svn-remote.svn.svm-source", "source")
+        .unwrap();
+    let error = read_svn_remote_config(&partial_git, "svn").unwrap_err();
+    assert!(error.contains("must contain svm-source, svm-replace, and svm-uuid"));
+}
+
+#[test]
 fn reads_dcommit_target_urls() {
     let temp = tempfile::tempdir().unwrap();
     let git = GitCli::new(temp.path());

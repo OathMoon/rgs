@@ -203,6 +203,30 @@ impl LibSvnBackend {
         self
     }
 
+    #[cfg(git_svn_rs_libsvn_linked)]
+    pub(crate) fn node_property_bytes_at_repository_path(
+        &self,
+        repository_root: &str,
+        path: &str,
+        revision: u32,
+    ) -> Result<BTreeMap<String, Vec<u8>>, String> {
+        let rooted = Self {
+            url: Some(repository_root.to_string()),
+            repos_root: OnceLock::new(),
+            config_dir: self.config_dir.clone(),
+            username: self.username.clone(),
+            password: self.password.clone(),
+            no_auth_cache: self.no_auth_cache,
+            auth_prompt: self.auth_prompt.clone(),
+        };
+        rooted.with_session(|session, pool| unsafe {
+            let revision: c_long = revision
+                .try_into()
+                .map_err(|_| format!("SVN revision {revision} does not fit in svn_revnum_t"))?;
+            directory_property_bytes(session, pool, path, revision)
+        })
+    }
+
     pub fn availability() -> LibSvnAvailability {
         #[cfg(git_svn_rs_libsvn_linked)]
         {
@@ -1396,6 +1420,34 @@ unsafe fn dir_listing(
     }
 
     Ok((entries, unsafe { svn_properties(props) }))
+}
+
+#[cfg(git_svn_rs_libsvn_linked)]
+unsafe fn directory_property_bytes(
+    session: *mut SvnRaSessionT,
+    pool: *mut AprPoolT,
+    path: &str,
+    revision: c_long,
+) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let relative_path =
+        CString::new(path.trim_matches('/')).map_err(|_| "SVN path contains NUL".to_string())?;
+    let mut props = ptr::null_mut();
+    unsafe {
+        svn_call(
+            svn_ra_get_dir2(
+                session,
+                ptr::null_mut(),
+                ptr::null_mut(),
+                &mut props,
+                relative_path.as_ptr(),
+                revision,
+                0,
+                pool,
+            ),
+            "svn_ra_get_dir2",
+        )?;
+        Ok(svn_property_bytes(props))
+    }
 }
 
 #[cfg(git_svn_rs_libsvn_linked)]

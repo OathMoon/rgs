@@ -171,7 +171,7 @@ impl SvnCliBackend {
             .collect())
     }
 
-    fn node_property_bytes(
+    pub(crate) fn node_property_bytes(
         &self,
         repos_root: &str,
         path: &str,
