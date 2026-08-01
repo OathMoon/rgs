@@ -1,25 +1,25 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `23e5c2a Validate authenticated HTTPS DAV replay`
+Committed HEAD at audit: `0303507 Validate remote dcommit profiles`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
 ## Current Overall State
 
 The repository provides an initially complete core workflow for covered `file://`,
-local `svn://`, configured `svn+ssh`, mock, and authenticated loopback HTTP/HTTPS
-DAV reads. Real OpenSSH, HTTP(S) writes, and hosted CI still await validation.
+local `svn://`, configured and real loopback `svn+ssh`, mock, and authenticated
+loopback HTTP/HTTPS DAV reads and writes. Hosted CI still awaits validation.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, ref sanitization, svnsync identity config | remaining encoding/platform edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, exact v0-v5 rejection | automatic migration/typed errors |
-| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel/loopback-HTTP(S) profiles | shared replay, per-file RA-serf delta batons, audited FFI, byte-safe revprops, cache-first TTY auth, svn+ssh and authenticated DAV E2E | real OpenSSH |
+| 4 SVN adapters | `behavior-pass` for covered file/svn/SSH/loopback-HTTP(S) profiles | shared replay, per-file RA-serf delta batons, audited FFI, byte-safe revprops, cache-first TTY auth, real OpenSSH and authenticated DAV E2E | broader remote/platform validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
-| 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/configured-tunnel exact writes | HTTP(S)/real-SSH write-back and broader faults |
+| 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/HTTP(S)/configured and real-SSH exact writes | broader remote faults |
 | 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; Linux workflow defined | first hosted execution |
 
 ## Validated Capabilities
@@ -102,8 +102,12 @@ DAV reads. Real OpenSSH, HTTP(S) writes, and hosted CI still await validation.
   an explicit SVN config directory. The strict fixtures passed locally on
   2026-08-01 using non-privileged packaged Apache; denied clone fails before
   creating `.git/svn`. RA-serf replay now assigns one native baton per interleaved
-  file and consumes the 1.10+ textdelta-stream callback. Strict CI installs Apache.
-- HTTP(S) dcommit remains deferred pending DAV write validation.
+  file and consumes the 1.10+ textdelta-stream callback. Strict CI installs Apache
+  and OpenSSH server dependencies.
+- Authenticated loopback HTTP and HTTPS DAV dcommit completes preflight, one
+  linear write, post-fetch verification, ref/rev_map publication, and exact SVN
+  content validation. HTTPS reuses the explicit CA trust configuration and Basic
+  credentials without persisting the password.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
 - Cross-remote fixed/wildcard and wildcard/wildcard destination intersections
@@ -207,8 +211,11 @@ DAV reads. Real OpenSSH, HTTP(S) writes, and hosted CI still await validation.
 - SVN subprocesses remain non-interactive. Dcommit reuses one askpass/TTY secret
   across preflight/write/post-fetch; wrong input leaves zero revision or journal,
   secrets stay out of output/config, and Windows echo restore is reviewed.
-- Configured `svn+ssh` dcommit completes preflight/write/post-fetch; incompatible
-  profiles fail early, and svnsync rejects before journal/write/import recovery.
+- Configured `svn+ssh` dcommit completes preflight/write/post-fetch; a real
+  loopback OpenSSH fixture additionally validates Ed25519 key authentication,
+  explicit known-host trust with strict checking, clone, write-back, and ref
+  publication. Incompatible profiles fail early, and svnsync rejects before
+  journal/write/import recovery.
 - `dcommit --revision` fails before recovery or lookup rather than silently
   ignoring its unsupported SVN editor-base semantics.
 - Mock write-back rejects `--commit-url` before journal, lock, or remote mutation
@@ -241,8 +248,9 @@ Verified on 2026-08-01:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
 - `cargo test --workspace`; core lib 171/171; readonly follow-up 82/82
-- dcommit linear 69/69; config mapping 17/17; real SVN default 48/48
-- linked core unit 203/203, backend 34/34, and real SVN CLI 48/48
+- dcommit linear 72/72; config mapping 17/17; real SVN default 48/48
+- linked core unit 203/203 and backend 34/34 in parallel and serial runs; real SVN
+  linked CLI 48/48
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -253,10 +261,6 @@ Verified on 2026-08-01:
    current environment has no GitHub credentials, so this is externally blocked
    until the branch is pushed and the workflow can be dispatched.
 
-### P1
-
-- Validate real OpenSSH key/host-trust behavior.
-
 ## Important Commit Anchors
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
 - `9d354f6`, `e3b8cf9`, `4bf9205`, `8405e79`: shared replay and durable
@@ -265,6 +269,8 @@ Verified on 2026-08-01:
 - `fa5f81f`, `5dd0ede`, `838a618`: protocol gating, DAV fixture, and askpass reads.
 - `23e5c2a`: strict HTTP/HTTPS DAV reads, fresh-clone/fetch preflight, and
   interleaved RA-serf per-file/textdelta-stream replay.
+- `0303507`: authenticated HTTP/HTTPS DAV writes, real OpenSSH key/host-trust
+  clone and dcommit, and strict CI OpenSSH dependency coverage.
 - `d42efb3`, `b7d1a9e`, `53707fe`, `87e1446`: mapped commit-URL recovery,
   versioned fingerprints, adoption, and password-safe resume.
 - `23bf393`, `793fb5d`, `afe3fb4`, `7968d5e`, `3573d2f`: durable dcommit fault
@@ -289,16 +295,17 @@ Verified on 2026-08-01:
 
 ## Next Steps
 
-1. Execute OpenSSH/write profiles in equipped environments.
-2. Dispatch hosted compatibility CI and retain artifacts when credentials exist.
+1. Push the branch, dispatch hosted compatibility CI, and retain its artifacts
+   when GitHub credentials exist.
 
 ## Handoff Notes
 
 - Preserve pre-existing untracked `.codex/`, `.zcode/`, `CLAUDE.md`, `docs/`, and
   generated `golden-stdlayout-*`/`svn-fixture-*` directories.
-- Configured `svn+ssh` tunnel reads/writes do not imply validated OpenSSH key or
-  host trust. HTTP(S) writes remain gated. Authenticated loopback HTTP/HTTPS DAV
-  reads passed through CLI and linked backends locally on 2026-08-01.
+- Configured `svn+ssh` tunnel and real loopback OpenSSH reads/writes passed locally;
+  the latter uses generated Ed25519 keys and strict explicit known-host trust.
+  Authenticated loopback HTTP/HTTPS DAV reads and writes passed locally on
+  2026-08-01; linked libsvn covers reads while dcommit uses the CLI sink.
 - The linked backend is a read/import backend. Dcommit still uses the SVN CLI
   working-copy sink for the covered local write profiles.
 - Migration remains inspection/rejection rather than automatic conversion.
