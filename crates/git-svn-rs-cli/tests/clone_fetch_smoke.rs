@@ -180,14 +180,14 @@ fn fetch_rejects_duplicate_remote_url_without_metadata_mutation() {
 }
 
 #[test]
-fn fetch_rejects_unvalidated_https_before_metadata_mutation() {
+fn fetch_rejects_unreachable_https_before_metadata_mutation() {
     let temp = tempfile::tempdir().unwrap();
     let work = temp.path().join("work");
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
         .current_dir(temp.path())
-        .args(["init", "https://svn.example/repo/trunk", "work"])
+        .args(["init", "https://127.0.0.1:1/repo/trunk", "work"])
         .assert()
         .success();
 
@@ -197,12 +197,11 @@ fn fetch_rejects_unvalidated_https_before_metadata_mutation() {
         .arg("fetch")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("HTTPS SVN fetch"))
-        .stderr(predicate::str::contains("deferred"));
+        .stderr(predicate::str::contains("secret").not());
 
     assert!(
         !work.join(".git/svn").exists(),
-        "unvalidated HTTPS must fail before creating SVN metadata"
+        "unreachable HTTPS must fail before creating SVN metadata"
     );
 }
 

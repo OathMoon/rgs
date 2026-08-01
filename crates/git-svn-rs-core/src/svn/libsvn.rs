@@ -1837,6 +1837,11 @@ unsafe extern "C" {
         handler: *mut SvnTxdeltaWindowHandlerFunc,
         handler_baton: *mut *mut c_void,
     );
+    fn svn_txdelta_next_window(
+        window: *mut *mut SvnTxdeltaWindowT,
+        stream: *mut SvnTxdeltaStreamT,
+        pool: *mut AprPoolT,
+    ) -> *mut svn_error_t;
     fn svn_subr_version() -> *const svn_version_t;
     fn svn_err_best_message(
         error: *const svn_error_t,

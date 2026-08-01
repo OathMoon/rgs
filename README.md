@@ -54,10 +54,11 @@ The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 - dirty-index rejection with no SVN write or Rust recovery journal.
 
 This is a `behavior-pass` for those scenarios, not a blanket compatibility claim.
-Plain HTTP reads have a loopback Apache DAV fixture and are enabled separately
-from HTTPS. HTTPS trust/authentication, real OpenSSH key/host-trust behavior, and
-HTTP(S) write-back are not claimed. Configured `svn+ssh://` external-tunnel
-reads/writes are covered without implying real OpenSSH key or host-trust support.
+Authenticated loopback HTTP and HTTPS DAV reads cover clone and incremental fetch
+through both the SVN CLI and linked libsvn backends. HTTPS uses an explicit CA
+trust configuration. Real OpenSSH key/host-trust behavior and HTTP(S) write-back
+are not claimed. Configured `svn+ssh://` external-tunnel reads/writes are covered
+without implying real OpenSSH key or host-trust support.
 SVM repositories are read-only: `dcommit` and `reset` fail before mutation until
 dual-map write/reset semantics are implemented. Missing usernames and passwords
 can be supplied through askpass or an enabled terminal prompt without persistence.
@@ -67,8 +68,9 @@ can be supplied through askpass or an enabled terminal prompt without persistenc
 The `svn-libsvn` Cargo feature enables the native Subversion backend and probes for
 the platform's libsvn development libraries at build time. Default builds do not
 require libsvn. Linked libsvn read/update behavior has `file://`, local `svn://`,
-configured `svn+ssh://` tunnel, and loopback HTTP DAV fixture coverage; this does
-not imply HTTPS, general OpenSSH authentication, or native write-back support.
+configured `svn+ssh://` tunnel, and authenticated loopback HTTP/HTTPS DAV fixture
+coverage; this does not imply general OpenSSH authentication or native write-back
+support.
 
 On Ubuntu or Debian, install the system development packages with:
 

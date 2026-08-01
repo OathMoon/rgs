@@ -152,10 +152,8 @@ pub fn validate_fetch_url(url: &str) -> Result<(), String> {
         | SvnUrlProfile::File
         | SvnUrlProfile::Svn
         | SvnUrlProfile::Http
+        | SvnUrlProfile::Https
         | SvnUrlProfile::SvnSsh => Ok(()),
-        SvnUrlProfile::Https => Err(format!(
-            "HTTPS SVN fetch is deferred until TLS trust and authentication are validated: {url}"
-        )),
         SvnUrlProfile::Unsupported => Err(format!("unsupported SVN URL scheme: {url}")),
     }
 }

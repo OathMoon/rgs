@@ -48,7 +48,7 @@ pub fn require_svnserve() -> Result<(), SvnToolPolicy> {
 #[cfg(unix)]
 #[allow(dead_code)]
 pub fn require_http_dav() -> Result<(), SvnToolPolicy> {
-    if http_dav_tools().is_some() {
+    if http_dav_tools(false).is_some() {
         Ok(())
     } else if strict_compat() {
         Err(SvnToolPolicy::Fail(
@@ -57,6 +57,22 @@ pub fn require_http_dav() -> Result<(), SvnToolPolicy> {
     } else {
         Err(SvnToolPolicy::Skip(
             "skipping: apache2/httpd, htpasswd, and mod_dav_svn are required".to_string(),
+        ))
+    }
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+pub fn require_https_dav() -> Result<(), SvnToolPolicy> {
+    if http_dav_tools(true).is_some() && command_succeeds("openssl", &["version"]) {
+        Ok(())
+    } else if strict_compat() {
+        Err(SvnToolPolicy::Fail(
+            "Apache DAV SVN with mod_ssl and openssl is required".to_string(),
+        ))
+    } else {
+        Err(SvnToolPolicy::Skip(
+            "skipping: Apache DAV SVN with mod_ssl and openssl is required".to_string(),
         ))
     }
 }
@@ -542,6 +558,8 @@ pub struct HttpDav {
     child: Child,
     _runtime: TempDir,
     port: u16,
+    tls: bool,
+    certificate: Option<PathBuf>,
 }
 
 #[cfg(unix)]
@@ -555,8 +573,25 @@ impl HttpDav {
         username: &str,
         password: &str,
     ) -> Result<Self, String> {
-        let (apache, module_dir) =
-            http_dav_tools().ok_or_else(|| "Apache DAV SVN tools are unavailable".to_string())?;
+        Self::start(repository_root, username, password, false)
+    }
+
+    pub fn start_basic_tls(
+        repository_root: &Path,
+        username: &str,
+        password: &str,
+    ) -> Result<Self, String> {
+        Self::start(repository_root, username, password, true)
+    }
+
+    fn start(
+        repository_root: &Path,
+        username: &str,
+        password: &str,
+        tls: bool,
+    ) -> Result<Self, String> {
+        let (apache, module_dir) = http_dav_tools(tls)
+            .ok_or_else(|| "Apache DAV SVN tools are unavailable".to_string())?;
         let _start_guard = HTTP_DAV_START_LOCK
             .lock()
             .map_err(|_| "HTTP DAV start lock is poisoned".to_string())?;
@@ -583,6 +618,51 @@ impl HttpDav {
         }
         let password_file = apache_path(&password_file)?;
         let module_dir = apache_path(&module_dir)?;
+        let (certificate, tls_modules, tls_config) = if tls {
+            let certificate = runtime.path().join("certificate.pem");
+            let private_key = runtime.path().join("private-key.pem");
+            let certificate_output = Command::new("openssl")
+                .args([
+                    "req",
+                    "-x509",
+                    "-newkey",
+                    "rsa:2048",
+                    "-sha256",
+                    "-nodes",
+                    "-days",
+                    "1",
+                    "-subj",
+                    "/CN=localhost",
+                    "-addext",
+                    "subjectAltName=DNS:localhost,IP:127.0.0.1",
+                    "-addext",
+                    "basicConstraints=critical,CA:TRUE",
+                    "-keyout",
+                ])
+                .arg(&private_key)
+                .arg("-out")
+                .arg(&certificate)
+                .output()
+                .map_err(|error| format!("openssl failed to start: {error}"))?;
+            if !certificate_output.status.success() {
+                return Err("openssl failed to create the HTTPS DAV certificate".to_string());
+            }
+            let certificate_path = apache_path(&certificate)?;
+            let private_key_path = apache_path(&private_key)?;
+            (
+                Some(certificate),
+                format!(
+                    "LoadModule socache_shmcb_module \"{module_dir}/mod_socache_shmcb.so\"\n\
+                     LoadModule ssl_module \"{module_dir}/mod_ssl.so\"\n"
+                ),
+                format!(
+                    "SSLEngine On\nSSLCertificateFile \"{certificate_path}\"\n\
+                     SSLCertificateKeyFile \"{private_key_path}\"\n"
+                ),
+            )
+        } else {
+            (None, String::new(), String::new())
+        };
         let config_path = runtime.path().join("httpd.conf");
         let config = format!(
             concat!(
@@ -600,8 +680,10 @@ impl HttpDav {
                 "LoadModule dav_module \"{module_dir}/mod_dav.so\"\n",
                 "LoadModule dav_svn_module \"{module_dir}/mod_dav_svn.so\"\n",
                 "LoadModule authz_svn_module \"{module_dir}/mod_authz_svn.so\"\n",
+                "{tls_modules}",
                 "ErrorLog \"{runtime_path}/error.log\"\n",
                 "LogLevel warn\n",
+                "{tls_config}",
                 "<Location /svn>\n",
                 "  DAV svn\n",
                 "  SVNParentPath \"{repository_root}\"\n",
@@ -617,6 +699,8 @@ impl HttpDav {
             module_dir = module_dir,
             repository_root = repository_root,
             password_file = password_file,
+            tls_modules = tls_modules,
+            tls_config = tls_config,
         );
         std::fs::write(&config_path, config).map_err(|e| e.to_string())?;
 
@@ -631,22 +715,45 @@ impl HttpDav {
             child,
             _runtime: runtime,
             port,
+            tls,
+            certificate,
         };
         server.wait_until_ready(username, password)?;
         Ok(server)
     }
 
     pub fn repo_url(&self) -> String {
-        format!("http://127.0.0.1:{}/svn/repo", self.port)
+        let scheme = if self.tls { "https" } else { "http" };
+        format!("{scheme}://localhost:{}/svn/repo", self.port)
+    }
+
+    pub fn write_tls_config(&self, config_dir: &Path) -> Result<(), String> {
+        let certificate = self
+            .certificate
+            .as_deref()
+            .ok_or_else(|| "HTTP DAV fixture has no TLS certificate".to_string())?;
+        std::fs::create_dir_all(config_dir).map_err(|error| error.to_string())?;
+        std::fs::write(
+            config_dir.join("servers"),
+            format!(
+                "[global]\nssl-authority-files = {}\n",
+                path_arg(certificate)?
+            ),
+        )
+        .map_err(|error| error.to_string())
     }
 
     fn wait_until_ready(&mut self, username: &str, password: &str) -> Result<(), String> {
         for _ in 0..50 {
             let ready = Command::new("svn")
+                .args(["info", "--non-interactive", "--no-auth-cache"])
+                .args(
+                    self.tls
+                        .then_some(["--trust-server-cert-failures", "unknown-ca"])
+                        .into_iter()
+                        .flatten(),
+                )
                 .args([
-                    "info",
-                    "--non-interactive",
-                    "--no-auth-cache",
                     "--username",
                     username,
                     "--password",
@@ -690,12 +797,12 @@ fn command_succeeds(program: &str, args: &[&str]) -> bool {
 }
 
 #[cfg(unix)]
-fn http_dav_tools() -> Option<(&'static str, PathBuf)> {
+fn http_dav_tools(tls: bool) -> Option<(&'static str, PathBuf)> {
     let apache = ["apache2", "httpd"]
         .into_iter()
         .find(|program| Command::new(program).arg("-v").output().is_ok())?;
     Command::new("htpasswd").arg("-h").output().ok()?;
-    let required_modules = [
+    let mut required_modules = vec![
         "mod_mpm_event.so",
         "mod_authn_core.so",
         "mod_authn_file.so",
@@ -706,18 +813,24 @@ fn http_dav_tools() -> Option<(&'static str, PathBuf)> {
         "mod_dav_svn.so",
         "mod_authz_svn.so",
     ];
-    [
-        Path::new("/usr/lib/apache2/modules"),
-        Path::new("/usr/lib64/httpd/modules"),
-        Path::new("/usr/lib/httpd/modules"),
-    ]
-    .into_iter()
-    .find(|directory| {
-        required_modules
-            .iter()
-            .all(|module| directory.join(module).is_file())
-    })
-    .map(|directory| (apache, directory.to_path_buf()))
+    if tls {
+        required_modules.extend(["mod_socache_shmcb.so", "mod_ssl.so"]);
+    }
+    let configured_module_dir = std::env::var_os("GIT_SVN_RS_APACHE_MODULE_DIR").map(PathBuf::from);
+    configured_module_dir
+        .iter()
+        .map(PathBuf::as_path)
+        .chain([
+            Path::new("/usr/lib/apache2/modules"),
+            Path::new("/usr/lib64/httpd/modules"),
+            Path::new("/usr/lib/httpd/modules"),
+        ])
+        .find(|directory| {
+            required_modules
+                .iter()
+                .all(|module| directory.join(module).is_file())
+        })
+        .map(|directory| (apache, directory.to_path_buf()))
 }
 
 #[cfg(unix)]

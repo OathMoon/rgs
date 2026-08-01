@@ -128,53 +128,7 @@ pub(crate) fn normalize_layout_args(
         .as_deref()
         .and_then(|trunk| url::Url::parse(trunk).ok())
         .map(|trunk| canonicalize_url(trunk.as_str()));
-    let repository_root = match svn_url_profile(url) {
-        SvnUrlProfile::Mock => canonicalize_url(url),
-        SvnUrlProfile::File | SvnUrlProfile::Svn | SvnUrlProfile::Http | SvnUrlProfile::SvnSsh => {
-            let mut backend = SvnCliBackend::new(url.clone())?;
-            if let Some(username) = &shared.username {
-                backend = backend.with_username(username);
-            }
-            let prompted = if shared.password.is_none()
-                && matches!(
-                    svn_url_profile(url),
-                    SvnUrlProfile::Svn | SvnUrlProfile::Http
-                ) {
-                prompted_credentials(
-                    url,
-                    shared.username.as_deref(),
-                    shared.config_dir.as_deref(),
-                    shared.no_auth_cache,
-                    AuthOperation::Read,
-                )?
-            } else {
-                None
-            };
-            if shared.username.is_none()
-                && let Some(credentials) = prompted.as_ref()
-            {
-                backend = backend.with_username(&credentials.username);
-            }
-            if let Some(password) = shared
-                .password
-                .as_ref()
-                .or_else(|| prompted.as_ref().map(|credentials| &credentials.password))
-            {
-                backend = backend.with_password(password);
-            }
-            if let Some(config_dir) = &shared.config_dir {
-                backend = backend.with_config_dir(config_dir);
-            }
-            if shared.no_auth_cache {
-                backend = backend.without_auth_cache();
-            }
-            backend.repository_root()?
-        }
-        SvnUrlProfile::Https | SvnUrlProfile::Unsupported => {
-            validate_fetch_url(url)?;
-            unreachable!("unsupported fetch URL validation must fail")
-        }
-    };
+    let repository_root = remote_repository_root(url, shared)?;
     let session_path = repository_relative_url_path(&repository_root, url)?;
 
     let normalize_path = |value: &str, glob: bool| -> Result<String, String> {
@@ -221,6 +175,63 @@ pub(crate) fn normalize_layout_args(
     };
     Ok((normalization_source != *url)
         .then(|| format!("Using higher level of URL: {normalization_source} => {url}\n")))
+}
+
+pub(crate) fn remote_repository_root(
+    url: &str,
+    shared: &SharedFetchArgs,
+) -> Result<String, String> {
+    Ok(match svn_url_profile(url) {
+        SvnUrlProfile::Mock => canonicalize_url(url),
+        SvnUrlProfile::File
+        | SvnUrlProfile::Svn
+        | SvnUrlProfile::Http
+        | SvnUrlProfile::Https
+        | SvnUrlProfile::SvnSsh => {
+            let mut backend = SvnCliBackend::new(url)?;
+            if let Some(username) = &shared.username {
+                backend = backend.with_username(username);
+            }
+            let prompted = if shared.password.is_none()
+                && matches!(
+                    svn_url_profile(url),
+                    SvnUrlProfile::Svn | SvnUrlProfile::Http | SvnUrlProfile::Https
+                ) {
+                prompted_credentials(
+                    url,
+                    shared.username.as_deref(),
+                    shared.config_dir.as_deref(),
+                    shared.no_auth_cache,
+                    AuthOperation::Read,
+                )?
+            } else {
+                None
+            };
+            if shared.username.is_none()
+                && let Some(credentials) = prompted.as_ref()
+            {
+                backend = backend.with_username(&credentials.username);
+            }
+            if let Some(password) = shared
+                .password
+                .as_ref()
+                .or_else(|| prompted.as_ref().map(|credentials| &credentials.password))
+            {
+                backend = backend.with_password(password);
+            }
+            if let Some(config_dir) = &shared.config_dir {
+                backend = backend.with_config_dir(config_dir);
+            }
+            if shared.no_auth_cache {
+                backend = backend.without_auth_cache();
+            }
+            backend.repository_root()?
+        }
+        SvnUrlProfile::Unsupported => {
+            validate_fetch_url(url)?;
+            unreachable!("unsupported fetch URL validation must fail")
+        }
+    })
 }
 
 fn svn_remote_config(args: InitArgs, mappings: LayoutMappings) -> SvnRemoteConfig {

@@ -30,8 +30,14 @@ pub fn run_in_work_tree(
     let work_tree = work_tree.into();
     let git = GitCli::new(work_tree);
     verify_remote_fetch_ref_sanity(&git)?;
-    crate::migration::ensure_supported_git_svn_metadata(git.work_tree())?;
+    let migration = crate::migration::inspect_git_svn_metadata(git.work_tree())?;
+    if migration != crate::migration::MigrationAction::NoGitSvnMetadata {
+        crate::migration::ensure_supported_git_svn_metadata(git.work_tree())?;
+    }
     validate_requested_urls_before_recovery(&git, &args)?;
+    if migration == crate::migration::MigrationAction::NoGitSvnMetadata {
+        crate::migration::ensure_supported_git_svn_metadata(git.work_tree())?;
+    }
     crate::import_transaction::recover_pending(&git)?;
     if args.parent {
         let tracked =
@@ -180,9 +186,24 @@ fn validate_requested_urls_before_recovery(git: &GitCli, args: &FetchArgs) -> Re
     } else {
         vec![args.remote.clone().unwrap_or_else(|| "svn".to_string())]
     };
+    let git_dir = std::path::PathBuf::from(git.git_dir()?);
+    let git_dir = if git_dir.is_absolute() {
+        git_dir
+    } else {
+        git.work_tree().join(git_dir)
+    };
+    let fresh_metadata = !git_dir.join("svn").exists();
     for remote in remotes {
         let config = read_svn_remote_config(git, &remote)?;
         crate::path_url::validate_fetch_url(&config.url)?;
+        if fresh_metadata
+            && matches!(
+                svn_url_profile(&config.url),
+                SvnUrlProfile::Http | SvnUrlProfile::Https
+            )
+        {
+            configured_backend(&config, &args.shared)?.repository_root()?;
+        }
     }
     Ok(())
 }

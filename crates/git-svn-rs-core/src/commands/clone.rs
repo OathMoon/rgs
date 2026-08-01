@@ -3,6 +3,7 @@ use crate::commands::{fetch, init};
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::mapping::build_from_layout_args;
+use crate::path_url::{SvnUrlProfile, svn_url_profile};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +27,12 @@ pub fn run_with_output(mut args: CloneArgs) -> Result<CloneOutput, String> {
     )?;
     let normalization_notice =
         init::normalize_layout_args(&mut args.url, &mut args.layout, &args.shared)?;
+    if matches!(
+        svn_url_profile(&args.url),
+        SvnUrlProfile::Http | SvnUrlProfile::Https
+    ) {
+        init::remote_repository_root(&args.url, &args.shared)?;
+    }
     let mappings = build_from_layout_args(
         args.layout.stdlayout,
         args.layout.trunk.as_deref(),
