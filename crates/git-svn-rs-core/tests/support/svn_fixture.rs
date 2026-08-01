@@ -47,6 +47,22 @@ pub fn require_svnserve() -> Result<(), SvnToolPolicy> {
 
 #[cfg(unix)]
 #[allow(dead_code)]
+pub fn require_openssh_server() -> Result<(), SvnToolPolicy> {
+    if openssh_server().is_some() && command_available("ssh") && command_available("ssh-keygen") {
+        Ok(())
+    } else if strict_compat() {
+        Err(SvnToolPolicy::Fail(
+            "sshd, ssh, and ssh-keygen are required".to_string(),
+        ))
+    } else {
+        Err(SvnToolPolicy::Skip(
+            "skipping: sshd, ssh, and ssh-keygen are required".to_string(),
+        ))
+    }
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
 pub fn require_http_dav() -> Result<(), SvnToolPolicy> {
     if http_dav_tools(false).is_some() {
         Ok(())
@@ -197,6 +213,11 @@ impl StandardSvnFixture {
         self.repo
             .parent()
             .expect("fixture repository should have a parent")
+    }
+
+    #[allow(dead_code)]
+    pub fn repository_path(&self) -> &Path {
+        &self.repo
     }
 
     pub fn latest_revision(&self) -> u32 {
@@ -554,6 +575,180 @@ impl Drop for SvnServe {
 
 #[cfg(unix)]
 #[allow(dead_code)]
+pub struct OpenSshServer {
+    child: Child,
+    runtime: TempDir,
+    port: u16,
+    username: String,
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
+impl OpenSshServer {
+    pub fn start() -> Result<Self, String> {
+        let sshd = openssh_server().ok_or_else(|| "sshd is unavailable".to_string())?;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
+        let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+        drop(listener);
+        let runtime = tempfile::Builder::new()
+            .prefix("git-svn-rs-openssh-")
+            .tempdir()
+            .map_err(|e| e.to_string())?;
+        let host_key = runtime.path().join("host-key");
+        let client_key = runtime.path().join("client-key");
+        for key in [&host_key, &client_key] {
+            let output = Command::new("ssh-keygen")
+                .args(["-q", "-t", "ed25519", "-N", "", "-f"])
+                .arg(key)
+                .output()
+                .map_err(|error| format!("ssh-keygen failed to start: {error}"))?;
+            if !output.status.success() {
+                return Err("ssh-keygen failed to create an OpenSSH fixture key".to_string());
+            }
+        }
+        let authorized_keys = runtime.path().join("authorized_keys");
+        std::fs::copy(client_key.with_extension("pub"), &authorized_keys)
+            .map_err(|error| error.to_string())?;
+        let username = std::env::var("USER").map_err(|_| "USER is not set".to_string())?;
+        let config_path = runtime.path().join("sshd_config");
+        let log_path = runtime.path().join("sshd.log");
+        std::fs::write(
+            &config_path,
+            format!(
+                concat!(
+                    "Port {port}\n",
+                    "ListenAddress 127.0.0.1\n",
+                    "HostKey {host_key}\n",
+                    "PidFile {runtime_path}/sshd.pid\n",
+                    "AuthorizedKeysFile {authorized_keys}\n",
+                    "PasswordAuthentication no\n",
+                    "KbdInteractiveAuthentication no\n",
+                    "PubkeyAuthentication yes\n",
+                    "UsePAM no\n",
+                    "StrictModes no\n",
+                    "AllowUsers {username}\n",
+                ),
+                port = port,
+                host_key = path_arg(&host_key)?,
+                runtime_path = path_arg(runtime.path())?,
+                authorized_keys = path_arg(&authorized_keys)?,
+                username = username,
+            ),
+        )
+        .map_err(|error| error.to_string())?;
+        let child = Command::new(&sshd)
+            .args(["-D", "-e", "-f"])
+            .arg(&config_path)
+            .arg("-E")
+            .arg(&log_path)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|error| format!("{} failed to start: {error}", sshd.display()))?;
+        let host_public = std::fs::read_to_string(host_key.with_extension("pub"))
+            .map_err(|error| error.to_string())?;
+        let host_fields = host_public.split_whitespace().take(2).collect::<Vec<_>>();
+        if host_fields.len() != 2 {
+            return Err("generated OpenSSH host public key is malformed".to_string());
+        }
+        std::fs::write(
+            runtime.path().join("known_hosts"),
+            format!("[localhost]:{port} {} {}\n", host_fields[0], host_fields[1]),
+        )
+        .map_err(|error| error.to_string())?;
+        let mut server = Self {
+            child,
+            runtime,
+            port,
+            username,
+        };
+        server.wait_until_ready()?;
+        Ok(server)
+    }
+
+    pub fn tunnel_command(&self) -> String {
+        format!(
+            "ssh -i {} -p {} -o IdentitiesOnly=yes -o UserKnownHostsFile={} -o StrictHostKeyChecking=yes -o BatchMode=yes",
+            self.runtime.path().join("client-key").display(),
+            self.port,
+            self.runtime.path().join("known_hosts").display(),
+        )
+    }
+
+    pub fn repo_url(&self, repository: &Path) -> String {
+        format!(
+            "svn+ssh://{}@localhost{}",
+            self.username,
+            repository.display()
+        )
+    }
+
+    fn wait_until_ready(&mut self) -> Result<(), String> {
+        for _ in 0..50 {
+            let ready = Command::new("ssh")
+                .args(self.ssh_args())
+                .arg(format!("{}@localhost", self.username))
+                .arg("true")
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false);
+            if ready {
+                return Ok(());
+            }
+            if self
+                .child
+                .try_wait()
+                .map_err(|error| error.to_string())?
+                .is_some()
+            {
+                let log = std::fs::read_to_string(self.runtime.path().join("sshd.log"))
+                    .unwrap_or_default();
+                return Err(format!(
+                    "sshd exited before accepting connections: {}",
+                    log.trim()
+                ));
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        Err("sshd did not become ready".to_string())
+    }
+
+    fn ssh_args(&self) -> Vec<String> {
+        vec![
+            "-i".to_string(),
+            self.runtime
+                .path()
+                .join("client-key")
+                .to_string_lossy()
+                .into_owned(),
+            "-p".to_string(),
+            self.port.to_string(),
+            "-o".to_string(),
+            "IdentitiesOnly=yes".to_string(),
+            "-o".to_string(),
+            format!(
+                "UserKnownHostsFile={}",
+                self.runtime.path().join("known_hosts").display()
+            ),
+            "-o".to_string(),
+            "StrictHostKeyChecking=yes".to_string(),
+            "-o".to_string(),
+            "BatchMode=yes".to_string(),
+        ]
+    }
+}
+
+#[cfg(unix)]
+impl Drop for OpenSshServer {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[cfg(unix)]
+#[allow(dead_code)]
 pub struct HttpDav {
     child: Child,
     _runtime: TempDir,
@@ -794,6 +989,27 @@ fn command_succeeds(program: &str, args: &[&str]) -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+#[cfg(unix)]
+fn command_available(program: &str) -> bool {
+    Command::new(program).arg("-V").output().is_ok()
+}
+
+#[cfg(unix)]
+fn openssh_server() -> Option<PathBuf> {
+    std::env::var_os("GIT_SVN_RS_SSHD")
+        .map(PathBuf::from)
+        .filter(|path| Command::new(path).arg("-V").output().is_ok())
+        .or_else(|| {
+            [
+                Path::new("/usr/sbin/sshd"),
+                Path::new("/usr/local/sbin/sshd"),
+            ]
+            .into_iter()
+            .find(|path| Command::new(path).arg("-V").output().is_ok())
+            .map(Path::to_path_buf)
+        })
 }
 
 #[cfg(unix)]

@@ -48,17 +48,18 @@ The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 - direct `useSvmProps` clone/fetch with source-zero skips, sparse source/transport
   rev maps, mirror fallback revisions, and source-aware readonly queries;
 - covered `find-rev`, `info`, `log`, `gc`, `reset`, and rebase behavior;
-- deterministic local `file://`, authenticated local `svn://`, and configured
-  non-interactive `svn+ssh://` tunnel dcommit;
+- deterministic local `file://`, authenticated local `svn://`, authenticated
+  loopback HTTP/HTTPS DAV, and configured `svn+ssh://` dcommit;
 - submitted-write recovery without a duplicate revision; and
 - dirty-index rejection with no SVN write or Rust recovery journal.
 
 This is a `behavior-pass` for those scenarios, not a blanket compatibility claim.
-Authenticated loopback HTTP and HTTPS DAV reads cover clone and incremental fetch
-through both the SVN CLI and linked libsvn backends. HTTPS uses an explicit CA
-trust configuration. Real OpenSSH key/host-trust behavior and HTTP(S) write-back
-are not claimed. Configured `svn+ssh://` external-tunnel reads/writes are covered
-without implying real OpenSSH key or host-trust support.
+Authenticated loopback HTTP and HTTPS DAV cover clone, incremental fetch, and
+SVN CLI working-copy dcommit. Reads pass through both the SVN CLI and linked
+libsvn backends; HTTPS uses an explicit CA trust configuration. A loopback
+OpenSSH fixture also covers Ed25519 key authentication, strict known-host trust,
+clone, and dcommit. These local fixtures are not a blanket claim for arbitrary
+remote server, proxy, SSH-agent, or enterprise certificate configurations.
 SVM repositories are read-only: `dcommit` and `reset` fail before mutation until
 dual-map write/reset semantics are implemented. Missing usernames and passwords
 can be supplied through askpass or an enabled terminal prompt without persistence.
@@ -68,9 +69,9 @@ can be supplied through askpass or an enabled terminal prompt without persistenc
 The `svn-libsvn` Cargo feature enables the native Subversion backend and probes for
 the platform's libsvn development libraries at build time. Default builds do not
 require libsvn. Linked libsvn read/update behavior has `file://`, local `svn://`,
-configured `svn+ssh://` tunnel, and authenticated loopback HTTP/HTTPS DAV fixture
-coverage; this does not imply general OpenSSH authentication or native write-back
-support.
+configured `svn+ssh://` tunnel, real loopback OpenSSH, and authenticated loopback
+HTTP/HTTPS DAV fixture coverage. Dcommit continues to use the SVN CLI
+working-copy sink; the linked backend is read/import-only.
 
 On Ubuntu or Debian, install the system development packages with:
 

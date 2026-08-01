@@ -12,6 +12,10 @@ mod svn_fixture;
 
 #[cfg(target_os = "linux")]
 use svn_fixture::run_with_pty_password;
+#[cfg(unix)]
+use svn_fixture::{
+    HttpDav, OpenSshServer, require_http_dav, require_https_dav, require_openssh_server,
+};
 use svn_fixture::{
     StandardSvnFixture, SvnServe, SvnToolPolicy, require_svn_tools, require_svnserve,
 };
@@ -1755,6 +1759,111 @@ fn dcommit_writes_linear_commit_to_svnserve_when_tools_exist() {
 
 #[cfg(unix)]
 #[test]
+fn dcommit_writes_linear_commit_to_authenticated_http_dav() {
+    dcommit_writes_linear_commit_to_authenticated_dav(false);
+}
+
+#[cfg(unix)]
+#[test]
+fn dcommit_writes_linear_commit_to_authenticated_https_dav() {
+    dcommit_writes_linear_commit_to_authenticated_dav(true);
+}
+
+#[cfg(unix)]
+fn dcommit_writes_linear_commit_to_authenticated_dav(tls: bool) {
+    let requirement = if tls {
+        require_svn_tools().and_then(|()| require_https_dav())
+    } else {
+        require_svn_tools().and_then(|()| require_http_dav())
+    };
+    match requirement {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let server = if tls {
+        HttpDav::start_basic_tls(fixture.root(), "alice", "secret").unwrap()
+    } else {
+        HttpDav::start_basic(fixture.root(), "alice", "secret").unwrap()
+    };
+    let parent = tempfile::tempdir().unwrap();
+    let config_dir = parent.path().join("svn-config");
+    if tls {
+        server.write_tls_config(&config_dir).unwrap();
+    }
+    let work = parent.path().join("work");
+    let server_url = server.repo_url();
+    let mut clone_args = vec![
+        "clone",
+        server_url.as_str(),
+        "work",
+        "--stdlayout",
+        "--username",
+        "alice",
+        "--password",
+        "secret",
+        "--no-auth-cache",
+    ];
+    let config_dir_string = config_dir.to_string_lossy().into_owned();
+    if tls {
+        clone_args.extend(["--config-dir", config_dir_string.as_str()]);
+    }
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args(clone_args)
+        .assert()
+        .success();
+
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+    std::fs::write(work.join("src/lib.rs"), "pub fn answer() -> u8 { 48 }\n").unwrap();
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-am",
+            "dav answer",
+        ],
+    );
+    let before = fixture.latest_revision();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args([
+            "dcommit",
+            "--no-rebase",
+            "--username",
+            "alice",
+            "--password",
+            "secret",
+            "--no-auth-cache",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("dav answer"));
+
+    assert_eq!(fixture.latest_revision(), before + 1);
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/src/lib.rs", fixture.url())]),
+        "pub fn answer() -> u8 { 48 }\n"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn dcommit_writes_through_a_configured_svn_ssh_tunnel_when_tools_exist() {
     match require_svn_tools().and_then(|()| require_svnserve()) {
         Ok(()) => {}
@@ -1850,6 +1959,78 @@ fn dcommit_writes_through_a_configured_svn_ssh_tunnel_when_tools_exist() {
         lines
             .chunks_exact(3)
             .all(|args| args == ["fixture", "svnserve", "-t"])
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn dcommit_writes_through_real_openssh_key_and_host_trust() {
+    match require_svn_tools().and_then(|()| require_openssh_server()) {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let server = OpenSshServer::start().unwrap();
+    let parent = tempfile::tempdir().unwrap();
+    let config_dir = parent.path().join("svn-config");
+    std::fs::create_dir(&config_dir).unwrap();
+    std::fs::write(
+        config_dir.join("config"),
+        format!("[tunnels]\nssh = {}\n", server.tunnel_command()),
+    )
+    .unwrap();
+    let url = format!("{}/trunk", server.repo_url(fixture.repository_path()));
+    let work = parent.path().join("work");
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(parent.path())
+        .args([
+            "clone",
+            &url,
+            "work",
+            "--config-dir",
+            config_dir.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    run_git(&work, &["checkout", "-b", "topic", "refs/remotes/git-svn"]);
+    std::fs::write(work.join("openssh-write.txt"), "trusted write\n").unwrap();
+    run_git(&work, &["add", "openssh-write.txt"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "write through real openssh",
+        ],
+    );
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Committed 1 local Git commit(s)"));
+
+    assert_eq!(
+        svn_stdout(&["cat", &format!("{}/trunk/openssh-write.txt", fixture.url())]),
+        "trusted write\n"
+    );
+    assert_eq!(
+        git_stdout(&work, &["show", "refs/remotes/git-svn:openssh-write.txt"]),
+        "trusted write"
     );
 }
 
@@ -4701,13 +4882,13 @@ fn dcommit_mergeinfo_reports_v1_scope_message() {
 }
 
 #[test]
-fn dcommit_without_dry_run_is_guarded_for_non_mock_urls() {
+fn dcommit_without_dry_run_is_guarded_for_unsupported_urls() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
     make_commit(&work, "local.txt", "local\n", "local change");
     run_git(
         &work,
-        &["config", "svn-remote.svn.url", "https://svn.example/trunk"],
+        &["config", "svn-remote.svn.url", "ftp://svn.example/trunk"],
     );
 
     Command::cargo_bin("git-svn-rs")
@@ -4716,8 +4897,9 @@ fn dcommit_without_dry_run_is_guarded_for_non_mock_urls() {
         .arg("dcommit")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("HTTP(S) SVN dcommit"))
-        .stderr(predicate::str::contains("before recovery"));
+        .stderr(predicate::str::contains(
+            "unsupported SVN dcommit URL scheme",
+        ));
     assert!(
         !work
             .join(".git/svn/refs/remotes/git-svn/dcommit-journal")

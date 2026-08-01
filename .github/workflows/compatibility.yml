@@ -23,7 +23,7 @@ jobs:
           sudo apt-get install --yes \
             apache2 apache2-utils build-essential gettext libapache2-mod-svn \
             libcurl4-openssl-dev libexpat1-dev libssl-dev libsvn-dev \
-            libsvn-perl pkg-config subversion zlib1g-dev
+            libsvn-perl openssh-server pkg-config subversion zlib1g-dev
 
       - name: Build frozen Git v2.54.0
         env:
@@ -46,6 +46,7 @@ jobs:
           svn --version --quiet
           pkg-config --modversion libsvn_client
           test -x /usr/sbin/apache2
+          test -x /usr/sbin/sshd
           test -x /usr/bin/htpasswd
           test -f /usr/lib/apache2/modules/mod_dav_svn.so
 

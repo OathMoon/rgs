@@ -212,10 +212,7 @@ pub fn run_in_work_tree(
             );
         }
         {
-            return Err(
-                "dcommit write-back is only implemented for mock://, file://, svn://, and configured svn+ssh:// URLs; HTTP(S) write-back is not implemented"
-                    .to_string(),
-            );
+            return Err("dcommit write-back URL profile is unsupported".to_string());
         }
     }
 
@@ -437,6 +434,8 @@ fn is_svn_cli_write_back_url(url: &str) -> bool {
         crate::path_url::svn_url_profile(url),
         crate::path_url::SvnUrlProfile::File
             | crate::path_url::SvnUrlProfile::Svn
+            | crate::path_url::SvnUrlProfile::Http
+            | crate::path_url::SvnUrlProfile::Https
             | crate::path_url::SvnUrlProfile::SvnSsh
     )
 }
@@ -1182,7 +1181,12 @@ fn resolved_dcommit_svn_options(
         &args.shared,
     );
     if options.password.is_none()
-        && crate::path_url::svn_url_profile(target_url) == crate::path_url::SvnUrlProfile::Svn
+        && matches!(
+            crate::path_url::svn_url_profile(target_url),
+            crate::path_url::SvnUrlProfile::Svn
+                | crate::path_url::SvnUrlProfile::Http
+                | crate::path_url::SvnUrlProfile::Https
+        )
         && let Some(credentials) = prompted_credentials(
             target_url,
             options.username.as_deref(),

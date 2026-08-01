@@ -65,10 +65,11 @@ fn remote_protocol_profiles_match_validated_read_boundaries() {
     assert!(validate_fetch_url("svn+ssh://host/repo").is_ok());
     assert!(validate_fetch_url("http://host/repo").is_ok());
     assert!(validate_fetch_url("https://host/repo").is_ok());
+    assert!(validate_dcommit_write_urls("https://host/repo", "https://host/repo").is_ok());
     assert!(
-        validate_dcommit_write_urls("https://host/repo", "https://host/repo")
+        validate_dcommit_write_urls("https://host/repo", "http://host/repo")
             .unwrap_err()
-            .contains("before recovery")
+            .contains("matching tracked")
     );
     assert!(
         validate_dcommit_write_urls("svn+ssh://host/repo/trunk", "svn+ssh://host/repo").is_ok()
