@@ -1,22 +1,22 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-01
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `754c57b Classify legacy metadata migrations precisely`
+Committed HEAD at audit: `23e5c2a Validate authenticated HTTPS DAV replay`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
 ## Current Overall State
 
 The repository provides an initially complete core workflow for covered `file://`,
-local `svn://`, configured `svn+ssh`, mock, and plain HTTP reads. Strict DAV,
-HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
+local `svn://`, configured `svn+ssh`, mock, and authenticated loopback HTTP/HTTPS
+DAV reads. Real OpenSSH, HTTP(S) writes, and hosted CI still await validation.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
 | 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, ref sanitization, svnsync identity config | remaining encoding/platform edge semantics |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, exact v0-v5 rejection | automatic migration/typed errors |
-| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel profiles; HTTP candidate | shared replay, audited FFI, byte-safe revprops, cache-first TTY auth, svn+ssh E2E | username prompt, equipped HTTP, HTTPS, real OpenSSH |
+| 4 SVN adapters | `behavior-pass` for covered file/svn/configured-tunnel/loopback-HTTP(S) profiles | shared replay, per-file RA-serf delta batons, audited FFI, byte-safe revprops, cache-first TTY auth, svn+ssh and authenticated DAV E2E | real OpenSSH |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
 | 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/configured-tunnel exact writes | HTTP(S)/real-SSH write-back and broader faults |
@@ -96,11 +96,14 @@ HTTPS/real OpenSSH, HTTP writes, and hosted CI still await validation.
 - `useSvmProps` discovers/caches source identity byte-safely, imports per-revision
   `svm:headrev` into atomic transport/source rev_maps, supports mirror fallback and
   source-aware readonly queries; reset/dcommit reject before mutating dual maps.
-- Plain HTTP reads are separated from HTTPS and enabled through the common
-  adapters. A loopback Apache DAV Basic-auth fixture covers denied no-credential
-  clone, secret-safe errors, authenticated clone, and incremental fetch; strict CI
-  installs and requires Apache, while this machine skips because it lacks Apache.
-- HTTPS fetch and HTTP(S) dcommit remain deferred pending TLS/DAV validation.
+- Loopback HTTP and HTTPS DAV Basic-auth fixtures cover denied no-credential clone,
+  secret-safe errors, authenticated clone, and incremental fetch through both the
+  SVN CLI and linked libsvn backends. HTTPS uses a self-signed CA supplied through
+  an explicit SVN config directory. The strict fixtures passed locally on
+  2026-08-01 using non-privileged packaged Apache; denied clone fails before
+  creating `.git/svn`. RA-serf replay now assigns one native baton per interleaved
+  file and consumes the 1.10+ textdelta-stream callback. Strict CI installs Apache.
+- HTTP(S) dcommit remains deferred pending DAV write validation.
 - Ambiguous `fetch REMOTE --fetch-all` and `fetch --parent --fetch-all`
   combinations fail before metadata or recovery side effects.
 - Cross-remote fixed/wildcard and wildcard/wildcard destination intersections
@@ -238,8 +241,8 @@ Verified on 2026-08-01:
 
 - `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
 - `cargo test --workspace`; core lib 171/171; readonly follow-up 82/82
-- dcommit linear 69/69; config mapping 17/17; real SVN default 47/47
-- linked core unit 203/203, backend 34/34, and real SVN CLI 47/47
+- dcommit linear 69/69; config mapping 17/17; real SVN default 48/48
+- linked core unit 203/203, backend 34/34, and real SVN CLI 48/48
 - `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
 
 ## Remaining Work
@@ -252,8 +255,7 @@ Verified on 2026-08-01:
 
 ### P1
 
-- Execute the strict HTTP DAV fixture in an equipped environment, then validate
-  HTTPS TLS/auth and real OpenSSH key/host-trust behavior.
+- Validate real OpenSSH key/host-trust behavior.
 
 ## Important Commit Anchors
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
@@ -261,6 +263,8 @@ Verified on 2026-08-01:
   dcommit/import coordinators.
 - `f11ecd1`, `08eef18`: canonical metadata/collision safety and audited libsvn FFI.
 - `fa5f81f`, `5dd0ede`, `838a618`: protocol gating, DAV fixture, and askpass reads.
+- `23e5c2a`: strict HTTP/HTTPS DAV reads, fresh-clone/fetch preflight, and
+  interleaved RA-serf per-file/textdelta-stream replay.
 - `d42efb3`, `b7d1a9e`, `53707fe`, `87e1446`: mapped commit-URL recovery,
   versioned fingerprints, adoption, and password-safe resume.
 - `23bf393`, `793fb5d`, `afe3fb4`, `7968d5e`, `3573d2f`: durable dcommit fault
@@ -285,7 +289,7 @@ Verified on 2026-08-01:
 
 ## Next Steps
 
-1. Execute strict DAV/HTTPS/OpenSSH/write profiles in equipped environments.
+1. Execute OpenSSH/write profiles in equipped environments.
 2. Dispatch hosted compatibility CI and retain artifacts when credentials exist.
 
 ## Handoff Notes
@@ -293,8 +297,8 @@ Verified on 2026-08-01:
 - Preserve pre-existing untracked `.codex/`, `.zcode/`, `CLAUDE.md`, `docs/`, and
   generated `golden-stdlayout-*`/`svn-fixture-*` directories.
 - Configured `svn+ssh` tunnel reads/writes do not imply validated OpenSSH key or
-  host trust. HTTP(S) writes and HTTPS reads remain gated; strict DAV awaits an
-  equipped run.
+  host trust. HTTP(S) writes remain gated. Authenticated loopback HTTP/HTTPS DAV
+  reads passed through CLI and linked backends locally on 2026-08-01.
 - The linked backend is a read/import backend. Dcommit still uses the SVN CLI
   working-copy sink for the covered local write profiles.
 - Migration remains inspection/rejection rather than automatic conversion.
