@@ -6,11 +6,18 @@ Provide one compatibility model for SVN repository identity, session URLs, repos
 
 ## Current State
 
-State: `structural-pass`.
+State: `behavior-pass` for the declared layout and protocol profiles.
 
-Existing units cover basic config serialization, single-path/standard-layout mappings, `GlobSpec`, authors files/programs, Perl-style negative lookahead filters, and ignore-over-include precedence.
+Verified behavior covers centralized config loading, single-path and standard,
+custom, partial, and full-URL layouts, ordered fixed/wildcard mappings, authors
+files/programs, Perl-style negative lookahead filters, and ignore-over-include
+precedence across CLI and linked replay.
 
-The phase is not `behavior-pass` because current code can duplicate a subdirectory URL path, treats full layout URLs as plain paths, invents a trunk mapping when only branches/tags are supplied, and does not apply several fetch-time options.
+Subdirectory URLs no longer duplicate path components; full layout URLs,
+branches-only/tags-only construction, prefixes, ref collisions, encoded paths,
+metadata immutability, auth/config precedence, and every accepted fetch option
+are exercised or explicitly rejected. Broader platform/remote combinations are
+future profiles, not gaps in the declared v1 profiles.
 
 ## Normative References
 

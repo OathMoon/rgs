@@ -58,6 +58,29 @@ jobs:
       - name: Strict frozen Perl comparison
         run: cargo test --workspace
 
+      - name: Verify required release artifact summaries
+        shell: bash
+        run: |
+          required_scenarios=(
+            standard-linear-history
+            standard-layout-history
+            standard-full-url-layout-history
+            standard-subdirectory-history
+            standard-dcommit-write
+            authenticated-svn-dcommit-write
+            recovered-dcommit-write
+            dirty-dcommit-no-write
+          )
+          for scenario in "${required_scenarios[@]}"; do
+            summary="$GIT_SVN_RS_COMPAT_ARTIFACT_DIR/$scenario/scenario-summary.json"
+            test -f "$summary"
+            grep -Fq '"status": "passed"' "$summary"
+            grep -Fq '"execution": "executed"' "$summary"
+            grep -Fq '"frozen_git_commit": "0b13e48a3a30cdfa94e8ef842e24d6045ab3d015"' "$summary"
+          done
+          printf '{\n  "schema_version": 1,\n  "status": "passed",\n  "required_scenario_count": %s\n}\n' \
+            "${#required_scenarios[@]}" > "$GIT_SVN_RS_COMPAT_ARTIFACT_DIR/release-summary.json"
+
       - name: Linked libsvn integration
         run: cargo test -p git-svn-rs-core --features svn-libsvn
 

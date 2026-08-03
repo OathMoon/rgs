@@ -4,6 +4,10 @@ version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+description = "A Rust implementation of core git svn workflows"
 
 [features]
 default = []
@@ -16,7 +20,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 clap.workspace = true
-git-svn-rs-core = { path = "../git-svn-rs-core" }
+git-svn-rs-core = { version = "0.1.0", path = "../git-svn-rs-core" }
 
 [dev-dependencies]
 assert_cmd.workspace = true

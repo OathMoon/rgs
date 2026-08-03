@@ -179,7 +179,11 @@ fn artifact_capture_writes_normalized_text_files() {
         std::fs::read_to_string(capture_root.join("case-one/scenario-summary.json")).unwrap();
     assert!(summary.contains("\"scenario\": \"case-one\""));
     assert!(summary.contains("\"status\": \"started\""));
+    assert!(summary.contains("\"execution\": \"executed\""));
+    assert!(summary.contains("\"frozen_git_tag\": \"v2.54.0\""));
     assert!(summary.contains("\"frozen_git_commit\": \"0b13e48"));
+    assert!(summary.contains("\"object_format\": \"sha1\""));
+    assert!(summary.contains("\"comparison_backend\": \"svn-cli-vs-frozen-perl\""));
 }
 
 #[test]

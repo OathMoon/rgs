@@ -6,19 +6,19 @@ Prove the declared `git-svn-rs` profiles against the frozen Git `v2.54.0` Perl i
 
 ## Current State
 
-State: `structural-pass`.
+State: `behavior-pass`; local release gate passed, hosted release evidence pending.
 
-The repository has a broad fixture/capture/comparison harness covering config, refs names, footers, rev_map shape, modes, properties, trees, several readonly outputs, reset, rebase dry-run, gc, and clone success.
+The exact harness now captures config, ref and graph identity, full rev_maps,
+HEAD/index/worktree state, modes, properties, readonly output, reset/rebase/gc,
+clone behavior, successful writes, recovery, and no-write failures. Strict mode
+uses frozen Git `v2.54.0` and makes absent dependencies or skipped comparisons a
+failure. Linked libsvn passes both default-parallel and serial gates.
 
-The phase is not `behavior-pass` or `release-pass` because:
-
-- Perl `git-svn` is absent in the current environment and comparison tests skip;
-- ref artifacts omit tip OIDs;
-- rev_map artifacts reduce object IDs to `has_commit`;
-- find-rev/log normalization replaces commit IDs with placeholders and discards dates/authors;
-- clone output is always normalized to `clone: success`;
-- branch/HEAD/index/working-tree state is not compared;
-- linked libsvn default-parallel tests are not stable.
+Every scenario summary records execution status, frozen tag/commit, Git,
+git-svn, SVN/libsvn and Rust versions, OS/architecture/object format,
+timezone/locale, backend, and artifact profile. The manual-only hosted workflow
+validates the required summary set and publishes a release summary. Phase 8 may
+move to `release-pass` only after that hosted run succeeds.
 
 ## Normative References
 

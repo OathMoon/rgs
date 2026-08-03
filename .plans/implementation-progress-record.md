@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-03
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `9f48097 Disable automatic hosted compatibility runs`
+Committed HEAD at audit: `48bf405 Complete strict local release validation`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -14,14 +14,14 @@ explicit manual dispatch.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
-| 1 workspace/CLI | `structural-pass` | CLI, core, opt-in shim, diagnostics, explicit unsupported/global output options | remaining option/layout edge semantics |
-| 2 config/mapping | `structural-pass` | layouts, globs, authors, filters, ref sanitization, svnsync identity config | remaining encoding/platform edge semantics |
+| 1 workspace/CLI | `behavior-pass` | complete capability inventory, CLI/core/opt-in shim, diagnostics, output/exit boundaries, explicit unsupported no-mutation tests | hosted release evidence through Phase 8 |
+| 2 config/mapping | `behavior-pass` for declared profiles | centralized config, relative/full layouts, globs, authors, filters, ref sanitization, metadata modes and auth precedence | broader future platform/remote profiles |
 | 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, exact v0-v5 rejection | automatic migration/typed errors |
 | 4 SVN adapters | `behavior-pass` for covered file/svn/SSH/loopback-HTTP(S) profiles | shared replay, per-file RA-serf delta batons, audited FFI, byte-safe revprops, cache-first TTY auth, real OpenSSH and authenticated DAV E2E | broader remote/platform validation |
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
 | 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/HTTP(S)/configured and real-SSH exact writes | broader remote faults |
-| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; complete strict Linux protocol gate passes; manual-only Linux workflow defined | hosted validation explicitly deferred |
+| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; complete strict Linux protocol gate and required summary validation pass; manual-only Linux workflow defined | one successful manual hosted release-gate run |
 
 ## Validated Capabilities
 
@@ -31,6 +31,9 @@ explicit manual dispatch.
   compatibility shim.
 - Typed command surface, explicit v1 exclusions, config serialization, mapping
   globs, authors, filters, URL helpers, and metadata option conflict checks.
+- `.plans/release-capability-inventory.md` classifies every command, option, and
+  protocol claim; accepted entries have a consumer and deferred commands fail
+  with stable exit/output behavior before mutation.
 - `diagnose` reports package version, frozen Git 2.54.0 commit, platform, and
   compiled/linked libsvn state without reading secret-bearing environment values.
 - Scalar `svn-remote.*` keys reject multiple values instead of silently selecting
@@ -237,8 +240,9 @@ explicit manual dispatch.
 - Exact artifacts cover ref tips, reachable graph/OIDs, rev_maps, configs,
   HEAD/index/worktree, tree contents/modes/properties, readonly outputs, clone
   output, local file/svn writes, submitted recovery, and dirty no-write behavior.
-- Each exact scenario writes a JSON summary and retains normalized Perl/Rust
-  artifacts.
+- Each exact scenario writes a JSON summary with execution status, frozen source,
+  toolchain/platform, backend, and artifact-profile identity, and retains
+  normalized Perl/Rust artifacts.
 - `.github/workflows/compatibility.yml` installs frozen Git/SVN/libsvn and runs
   workspace, linked parallel/serial, linked CLI, formatting, clippy, and strict
   compatibility gates. `scripts/verify.ps1 -StrictCompat` mirrors these local gates.
@@ -257,15 +261,21 @@ Verified on 2026-08-03 in WSL Ubuntu 24.04 with `GIT_SVN_RS_STRICT_COMPAT=1`,
   CLI real SVN workflows pass 48/48.
 - `cargo fmt --all -- --check`; clippy with all targets/features; release workspace
   build with all features; linked release diagnostics; `git diff --check`.
+- Required release-summary audit: all 8 clone/layout/write/recovery/no-write
+  scenarios executed, passed, and identify frozen commit
+  `0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`.
+- `cargo package` succeeds for core and shim. CLI packaging is publish-order
+  dependent and succeeds after `git-svn-rs-core` version `0.1.0` is available to
+  the registry.
 - The strict C-locale audit exposed and fixed fixture-only `svnadmin setrevprop`
   native-encoding handling by giving that byte-preservation subprocess an explicit
   UTF-8 locale; the focused regression and all full gates pass afterward.
 
 ## Remaining Work
 
-There is no active hosted-run task. Automatic `push` and `pull_request` triggers
-are intentionally disabled; the workflow can only be started manually with
-`workflow_dispatch` if hosted validation is requested again.
+One manual hosted compatibility run is required to promote Phase 8 to
+`release-pass`. Automatic `push` and `pull_request` triggers remain intentionally
+disabled; only `workflow_dispatch` is permitted.
 
 ## Important Commit Anchors
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
@@ -303,8 +313,9 @@ are intentionally disabled; the workflow can only be started manually with
 
 ## Next Steps
 
-1. Continue local compatibility work; use the manual hosted workflow only after
-   an explicit decision to resume hosted validation.
+1. Push this release-gate update and manually dispatch the compatibility workflow.
+2. If it passes, record the run and mark Phase 8 `release-pass`; otherwise retain
+   the artifacts and resolve the hosted-only failure.
 
 ## Handoff Notes
 

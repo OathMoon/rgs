@@ -265,7 +265,9 @@ fn load_authors(
     };
     let contents = std::fs::read_to_string(&path)
         .map_err(|error| format!("failed to read authors file {}: {error}", path.display()))?;
-    parse_authors_file(&contents).map(Some)
+    parse_authors_file(&contents)
+        .map(Some)
+        .map_err(|error| format!("failed to parse authors file {}: {error}", path.display()))
 }
 
 fn svn_author(authors: Option<&AuthorResolver>, name: &str, email: &str) -> String {

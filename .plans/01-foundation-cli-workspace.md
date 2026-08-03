@@ -6,16 +6,21 @@ Maintain the three-crate Rust workspace and provide a CLI whose parsed commands,
 
 ## Current State
 
-State: `structural-pass`.
+State: `behavior-pass`.
 
-Already present:
+Verified release surface:
 
 - `git-svn-rs` CLI crate, `git-svn-rs-core`, and opt-in shim;
 - typed subcommands for the v1 read/write workflow;
 - explicit errors for known out-of-scope commands;
-- basic help, diagnose, and forwarding tests.
+- help, diagnose, forwarding, stdout/stderr, exit-code, and no-mutation tests;
+- a command/option/protocol inventory at
+  `.plans/release-capability-inventory.md` with every parsed entry classified;
+- explicit rejection of global quiet/verbose flags rather than inert parsing.
 
-This phase is not `behavior-pass` because global verbosity is discarded and several accepted command options are inert or only partially wired.
+The declared v1 CLI surface has no known inert option. Deferred commands remain
+recognized but fail before repository mutation. Final release status is tied to
+the Phase 8 hosted compatibility gate rather than to additional Phase 1 work.
 
 ## Normative References
 

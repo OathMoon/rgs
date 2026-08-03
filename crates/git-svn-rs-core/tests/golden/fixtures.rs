@@ -311,12 +311,20 @@ impl GoldenArtifactCapture {
                 "  \"schema_version\": 1,\n",
                 "  \"scenario\": \"{}\",\n",
                 "  \"status\": \"{}\",\n",
+                "  \"execution\": \"executed\",\n",
+                "  \"frozen_git_tag\": \"v2.54.0\",\n",
                 "  \"frozen_git_commit\": \"{}\",\n",
                 "  \"git_version\": \"{}\",\n",
                 "  \"git_svn_version\": \"{}\",\n",
                 "  \"svn_version\": \"{}\",\n",
+                "  \"libsvn_version\": \"{}\",\n",
                 "  \"rustc_version\": \"{}\",\n",
                 "  \"os\": \"{}\",\n",
+                "  \"arch\": \"{}\",\n",
+                "  \"object_format\": \"sha1\",\n",
+                "  \"timezone\": \"{}\",\n",
+                "  \"locale\": \"{}\",\n",
+                "  \"comparison_backend\": \"svn-cli-vs-frozen-perl\",\n",
                 "  \"artifact_profile\": \"exact-supported-subset-v1\"",
                 "{}\n",
                 "}}\n"
@@ -327,8 +335,19 @@ impl GoldenArtifactCapture {
             json_escape(&command_version("git", &["--version"])),
             json_escape(&command_version("git", &["svn", "--version"])),
             json_escape(&command_version("svn", &["--version", "--quiet"])),
+            json_escape(&command_version(
+                "pkg-config",
+                &["--modversion", "libsvn_client"],
+            )),
             json_escape(&command_version("rustc", &["--version"])),
             std::env::consts::OS,
+            std::env::consts::ARCH,
+            json_escape(&std::env::var("TZ").unwrap_or_else(|_| "system-default".to_string())),
+            json_escape(
+                &std::env::var("LC_ALL")
+                    .or_else(|_| std::env::var("LANG"))
+                    .unwrap_or_else(|_| "system-default".to_string()),
+            ),
             detail,
         );
         fs::write(self.root.join("scenario-summary.json"), summary).map_err(|error| {

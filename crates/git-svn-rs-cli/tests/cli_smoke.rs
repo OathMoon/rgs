@@ -45,12 +45,49 @@ fn diagnose_prints_enabled_when_libsvn_feature_is_compiled() {
 }
 
 #[test]
-fn branch_is_explicitly_unsupported() {
-    let mut cmd = Command::cargo_bin("git-svn-rs").unwrap();
-    cmd.args(["branch", "feature"])
+fn recognized_unsupported_commands_fail_without_repository_mutation() {
+    for command in [
+        "branch",
+        "tag",
+        "set-tree",
+        "propget",
+        "propset",
+        "proplist",
+        "show-ignore",
+        "show-externals",
+    ] {
+        let temp = tempfile::tempdir().unwrap();
+        Command::cargo_bin("git-svn-rs")
+            .unwrap()
+            .current_dir(temp.path())
+            .arg(command)
+            .assert()
+            .failure()
+            .stdout("")
+            .stderr(predicate::str::contains(format!(
+                "unsupported in v1: {command}"
+            )));
+        assert!(std::fs::read_dir(temp.path()).unwrap().next().is_none());
+    }
+}
+
+#[test]
+fn invalid_usage_and_unknown_commands_have_stable_boundaries() {
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .arg("clone")
+        .assert()
+        .code(2)
+        .stdout("")
+        .stderr(predicate::str::contains("required arguments"));
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .arg("commit-diff")
         .assert()
         .failure()
-        .stderr(predicate::str::contains("unsupported in v1: branch"));
+        .stdout("")
+        .stderr(predicate::str::contains("unsupported in v1: commit-diff"));
 }
 
 #[test]
