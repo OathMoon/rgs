@@ -1,7 +1,7 @@
 # git-svn-rs Implementation Progress Record
-Last audited: 2026-08-01
+Last audited: 2026-08-03
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `0303507 Validate remote dcommit profiles`
+Committed HEAD at audit: `9f48097 Disable automatic hosted compatibility runs`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -21,7 +21,7 @@ explicit manual dispatch.
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
 | 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/HTTP(S)/configured and real-SSH exact writes | broader remote faults |
-| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; manual-only Linux workflow defined | hosted validation explicitly deferred |
+| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; complete strict Linux protocol gate passes; manual-only Linux workflow defined | hosted validation explicitly deferred |
 
 ## Validated Capabilities
 
@@ -245,14 +245,21 @@ explicit manual dispatch.
 
 ## Current Verification
 
-Verified on 2026-08-01:
+Verified on 2026-08-03 in WSL Ubuntu 24.04 with `GIT_SVN_RS_STRICT_COMPAT=1`,
+`LC_ALL=C`, and `TZ=UTC`:
 
-- `cargo fmt --all -- --check`; clippy with all targets/features; `git diff --check`
-- `cargo test --workspace`; core lib 171/171; readonly follow-up 82/82
-- dcommit linear 72/72; config mapping 17/17; real SVN default 48/48
-- linked core unit 203/203 and backend 34/34 in parallel and serial runs; real SVN
-  linked CLI 48/48
-- `GIT_SVN_RS_STRICT_COMPAT=1 GIT_SVN_RS_COMPAT_ARTIFACT_DIR=/tmp/git-svn-rs-current-artifacts cargo test -p git-svn-rs-core --test compat_golden -- --nocapture` (41/41)
+- `cargo test --workspace`; core 171/171, readonly 82/82, dcommit 72/72,
+  real SVN CLI 48/48, and frozen Perl golden 41/41.
+- Authenticated HTTP/HTTPS clone/fetch and dcommit plus real OpenSSH clone/dcommit
+  executed and passed with the required services present; no strict-required Linux
+  protocol fixture was skipped.
+- Linked core 203/203 and backend 34/34 pass in parallel and serial runs; linked
+  CLI real SVN workflows pass 48/48.
+- `cargo fmt --all -- --check`; clippy with all targets/features; release workspace
+  build with all features; linked release diagnostics; `git diff --check`.
+- The strict C-locale audit exposed and fixed fixture-only `svnadmin setrevprop`
+  native-encoding handling by giving that byte-preservation subprocess an explicit
+  UTF-8 locale; the focused regression and all full gates pass afterward.
 
 ## Remaining Work
 
@@ -270,6 +277,8 @@ are intentionally disabled; the workflow can only be started manually with
   interleaved RA-serf per-file/textdelta-stream replay.
 - `0303507`: authenticated HTTP/HTTPS DAV writes, real OpenSSH key/host-trust
   clone and dcommit, and strict CI OpenSSH dependency coverage.
+- `9f48097`: automatic frozen-compatibility workflow triggers removed; manual
+  dispatch retained.
 - `d42efb3`, `b7d1a9e`, `53707fe`, `87e1446`: mapped commit-URL recovery,
   versioned fingerprints, adoption, and password-safe resume.
 - `23bf393`, `793fb5d`, `afe3fb4`, `7968d5e`, `3573d2f`: durable dcommit fault

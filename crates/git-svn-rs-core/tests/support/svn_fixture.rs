@@ -245,7 +245,7 @@ impl StandardSvnFixture {
     ) -> Result<(), String> {
         let value_path = self._tmp.path().join("revision-property-value");
         std::fs::write(&value_path, value).map_err(|error| error.to_string())?;
-        run(
+        run_utf8(
             self._tmp.path(),
             "svnadmin",
             &[
@@ -1071,6 +1071,21 @@ fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
         .output()
         .map_err(|e| format!("{program} failed to start: {e}"))?;
 
+    command_result(program, output)
+}
+
+fn run_utf8(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
+    let output = Command::new(program)
+        .current_dir(cwd)
+        .env("LC_ALL", "C.UTF-8")
+        .args(args)
+        .output()
+        .map_err(|e| format!("{program} failed to start: {e}"))?;
+
+    command_result(program, output)
+}
+
+fn command_result(program: &str, output: std::process::Output) -> Result<(), String> {
     if output.status.success() {
         Ok(())
     } else {
