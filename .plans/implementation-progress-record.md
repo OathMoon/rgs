@@ -9,7 +9,8 @@ Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 
 The repository provides an initially complete core workflow for covered `file://`,
 local `svn://`, configured and real loopback `svn+ssh`, mock, and authenticated
-loopback HTTP/HTTPS DAV reads and writes. Hosted CI still awaits validation.
+loopback HTTP/HTTPS DAV reads and writes. Hosted CI remains available only by
+explicit manual dispatch.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
@@ -20,7 +21,7 @@ loopback HTTP/HTTPS DAV reads and writes. Hosted CI still awaits validation.
 | 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
 | 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/HTTP(S)/configured and real-SSH exact writes | broader remote faults |
-| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; Linux workflow defined | first hosted execution |
+| 8 golden/release | `behavior-pass` | strict frozen Perl 2.54.0 suite passes 41/41 locally; manual-only Linux workflow defined | hosted validation explicitly deferred |
 
 ## Validated Capabilities
 
@@ -255,11 +256,9 @@ Verified on 2026-08-01:
 
 ## Remaining Work
 
-### P0
-
-1. Run the required hosted compatibility workflow and retain its artifacts. The
-   current environment has no GitHub credentials, so this is externally blocked
-   until the branch is pushed and the workflow can be dispatched.
+There is no active hosted-run task. Automatic `push` and `pull_request` triggers
+are intentionally disabled; the workflow can only be started manually with
+`workflow_dispatch` if hosted validation is requested again.
 
 ## Important Commit Anchors
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
@@ -295,8 +294,8 @@ Verified on 2026-08-01:
 
 ## Next Steps
 
-1. Push the branch, dispatch hosted compatibility CI, and retain its artifacts
-   when GitHub credentials exist.
+1. Continue local compatibility work; use the manual hosted workflow only after
+   an explicit decision to resume hosted validation.
 
 ## Handoff Notes
 
