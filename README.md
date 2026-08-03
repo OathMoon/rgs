@@ -6,9 +6,10 @@ The primary command is `git-svn-rs`. The workspace also contains a `git-svn`
 compatibility shim, but installing or packaging that command name is an explicit
 opt-in so it does not replace Perl `git svn` by default.
 
-The current implementation is a substantial preview, not yet a general replacement
-for `git svn`. Its strongest validated profiles are local `file://` and authenticated
-local `svn://` repositories through the SVN CLI backend.
+The declared v1 compatibility profiles have passed their release gate, but this is
+not a general replacement for every `git svn` workflow. The exact command, option,
+and protocol boundary is recorded in the
+[release capability inventory](.plans/release-capability-inventory.md).
 
 ## Verification
 
@@ -53,7 +54,10 @@ The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 - submitted-write recovery without a duplicate revision; and
 - dirty-index rejection with no SVN write or Rust recovery journal.
 
-This is a `behavior-pass` for those scenarios, not a blanket compatibility claim.
+This is a `release-pass` for those declared profiles, backed by manual hosted
+[Frozen compatibility run #5](https://github.com/OathMoon/rgs/actions/runs/30790332534),
+not a blanket compatibility claim. Automatic hosted compatibility triggers remain
+disabled; the workflow is manual-only.
 Authenticated loopback HTTP and HTTPS DAV cover clone, incremental fetch, and
 SVN CLI working-copy dcommit. Reads pass through both the SVN CLI and linked
 libsvn backends; HTTPS uses an explicit CA trust configuration. A loopback

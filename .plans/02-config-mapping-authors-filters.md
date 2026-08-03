@@ -6,7 +6,7 @@ Provide one compatibility model for SVN repository identity, session URLs, repos
 
 ## Current State
 
-State: `behavior-pass` for the declared layout and protocol profiles.
+State: `release-pass` for the declared layout and protocol profiles.
 
 Verified behavior covers centralized config loading, single-path and standard,
 custom, partial, and full-URL layouts, ordered fixed/wildcard mappings, authors
@@ -18,6 +18,10 @@ branches-only/tags-only construction, prefixes, ref collisions, encoded paths,
 metadata immutability, auth/config precedence, and every accepted fetch option
 are exercised or explicitly rejected. Broader platform/remote combinations are
 future profiles, not gaps in the declared v1 profiles.
+
+The exact config/refspec/URL artifacts and required layout scenarios passed in
+Phase 8 hosted run
+[#5](https://github.com/OathMoon/rgs/actions/runs/30790332534).
 
 ## Normative References
 

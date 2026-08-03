@@ -6,7 +6,7 @@ Maintain the three-crate Rust workspace and provide a CLI whose parsed commands,
 
 ## Current State
 
-State: `behavior-pass`.
+State: `release-pass` for the declared v1 CLI profiles.
 
 Verified release surface:
 
@@ -19,8 +19,9 @@ Verified release surface:
 - explicit rejection of global quiet/verbose flags rather than inert parsing.
 
 The declared v1 CLI surface has no known inert option. Deferred commands remain
-recognized but fail before repository mutation. Final release status is tied to
-the Phase 8 hosted compatibility gate rather than to additional Phase 1 work.
+recognized but fail before repository mutation. Phase 8 hosted run
+[#5](https://github.com/OathMoon/rgs/actions/runs/30790332534) passed the strict
+CLI, frozen-baseline, linked-backend, and static release gates.
 
 ## Normative References
 
