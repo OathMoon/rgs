@@ -10,12 +10,14 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       GIT_SVN_RS_STRICT_COMPAT: "1"
-      GIT_SVN_RS_COMPAT_ARTIFACT_DIR: ${{ runner.temp }}/compat-artifacts
       LC_ALL: C
       TZ: UTC
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Configure compatibility artifacts
+        run: echo "GIT_SVN_RS_COMPAT_ARTIFACT_DIR=$RUNNER_TEMP/compat-artifacts" >> "$GITHUB_ENV"
 
       - name: Install compatibility dependencies
         run: |
