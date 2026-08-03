@@ -519,7 +519,6 @@ impl SvnServe {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         drop(listener);
-
         let child = Command::new("svnserve")
             .args([
                 "--daemon",
@@ -793,6 +792,11 @@ impl HttpDav {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(|e| e.to_string())?;
         let port = listener.local_addr().map_err(|e| e.to_string())?.port();
         drop(listener);
+        let ipv6_listen = if std::net::TcpListener::bind("[::1]:0").is_ok() {
+            format!("Listen [::1]:{port}\n")
+        } else {
+            String::new()
+        };
 
         let runtime = tempfile::Builder::new()
             .prefix("git-svn-rs-http-dav-")
@@ -865,6 +869,7 @@ impl HttpDav {
                 "DefaultRuntimeDir \"{runtime_path}\"\n",
                 "PidFile \"{runtime_path}/httpd.pid\"\n",
                 "Listen 127.0.0.1:{port}\n",
+                "{ipv6_listen}",
                 "ServerName 127.0.0.1\n",
                 "LoadModule mpm_event_module \"{module_dir}/mod_mpm_event.so\"\n",
                 "LoadModule authn_core_module \"{module_dir}/mod_authn_core.so\"\n",
@@ -891,6 +896,7 @@ impl HttpDav {
             ),
             runtime_path = runtime_path,
             port = port,
+            ipv6_listen = ipv6_listen,
             module_dir = module_dir,
             repository_root = repository_root,
             password_file = password_file,
@@ -939,8 +945,9 @@ impl HttpDav {
     }
 
     fn wait_until_ready(&mut self, username: &str, password: &str) -> Result<(), String> {
+        let mut last_error = "SVN readiness probe did not run".to_string();
         for _ in 0..50 {
-            let ready = Command::new("svn")
+            let probe = Command::new("svn")
                 .args(["info", "--non-interactive", "--no-auth-cache"])
                 .args(
                     self.tls
@@ -955,11 +962,13 @@ impl HttpDav {
                     password,
                     self.repo_url().as_str(),
                 ])
-                .output()
-                .map(|output| output.status.success())
-                .unwrap_or(false);
-            if ready {
-                return Ok(());
+                .output();
+            match probe {
+                Ok(output) if output.status.success() => return Ok(()),
+                Ok(output) => {
+                    last_error = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                }
+                Err(error) => last_error = error.to_string(),
             }
             if self.child.try_wait().map_err(|e| e.to_string())?.is_some() {
                 let error_log = std::fs::read_to_string(self._runtime.path().join("error.log"))
@@ -971,7 +980,9 @@ impl HttpDav {
             }
             std::thread::sleep(Duration::from_millis(100));
         }
-        Err("Apache DAV did not become ready for SVN requests".to_string())
+        Err(format!(
+            "Apache DAV did not become ready for SVN requests: {last_error}"
+        ))
     }
 }
 
