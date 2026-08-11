@@ -728,7 +728,7 @@ fn dcommit_skips_a_middle_noop_and_keeps_effective_revisions_contiguous() {
             .iter()
             .all(|entry| entry.git_oid != empty_oid)
     );
-    let log = svn_stdout(&["log", "-l", "2", &fixture.url()]);
+    let log = svn_stdout(&["log", "--xml", "-l", "2", &fixture.url()]);
     assert!(log.contains("effective A"));
     assert!(log.contains("effective B"));
     assert!(!log.contains("empty middle commit"));
@@ -2749,10 +2749,7 @@ fn dcommit_target_url_precedence_matches_git_svn_when_tools_exist() {
     );
     make_commit(&work, "local.txt", "local\n", "target precedence");
     let revision_before = fixture.latest_revision();
-    let missing_root = format!(
-        "file://{}",
-        temp.path().join("missing-write-root").display()
-    );
+    let missing_root = format!("{}/missing-write-root", fixture.url());
 
     run_git(&work, &["config", "svn-remote.svn.pushurl", &missing_root]);
     Command::cargo_bin("git-svn-rs")
@@ -2761,7 +2758,7 @@ fn dcommit_target_url_precedence_matches_git_svn_when_tools_exist() {
         .args(["dcommit", "--dry-run"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(format!("{missing_root}/trunk")));
+        .stderr(predicate::str::contains("missing-write-root/trunk"));
     assert_eq!(fixture.latest_revision(), revision_before);
 
     let trunk_url = format!("{}/trunk", fixture.url());

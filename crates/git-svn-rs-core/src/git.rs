@@ -159,7 +159,7 @@ impl GitCli {
         let output = Command::new("git")
             .current_dir(&self.work_tree)
             .args(["config", "--file"])
-            .arg(&path)
+            .arg(git_command_path(&path))
             .args(["--get", key])
             .output()
             .map_err(|error| error.to_string())?;
@@ -225,7 +225,7 @@ impl GitCli {
             let output = Command::new("git")
                 .current_dir(&self.work_tree)
                 .args(["config", "--file"])
-                .arg(temp.path())
+                .arg(git_command_path(temp.path()))
                 .args([key, value])
                 .output()
                 .map_err(|error| error.to_string())?;
@@ -599,6 +599,37 @@ impl GitCli {
             Err(stderr_or_status(output))
         }
     }
+}
+
+#[cfg(windows)]
+fn git_command_path(path: &Path) -> PathBuf {
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else {
+        return path.to_path_buf();
+    };
+
+    let mut normalized = match prefix.kind() {
+        Prefix::VerbatimDisk(disk) => PathBuf::from(format!("{}:\\", char::from(disk))),
+        Prefix::VerbatimUNC(server, share) => {
+            let mut normalized = PathBuf::from(r"\\");
+            normalized.push(server);
+            normalized.push(share);
+            normalized
+        }
+        _ => return path.to_path_buf(),
+    };
+    if matches!(components.clone().next(), Some(Component::RootDir)) {
+        components.next();
+    }
+    normalized.extend(components);
+    normalized
+}
+
+#[cfg(not(windows))]
+fn git_command_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
 }
 
 #[cfg(unix)]
@@ -995,8 +1026,31 @@ fn parse_ls_tree_files(raw: &[u8]) -> Result<Vec<(String, String)>, String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        GitCli, GitRawDiffEntry, GitRawDiffStatus, log_record_args, parse_raw_diff, rebase_args,
+        GitCli, GitRawDiffEntry, GitRawDiffStatus, git_command_path, log_record_args,
+        parse_raw_diff, rebase_args,
     };
+
+    #[cfg(windows)]
+    #[test]
+    fn git_command_paths_remove_windows_verbatim_prefixes() {
+        assert_eq!(
+            git_command_path(std::path::Path::new(r"\\?\C:\repo\.git\svn\.metadata")),
+            std::path::PathBuf::from(r"C:\repo\.git\svn\.metadata")
+        );
+        assert_eq!(
+            git_command_path(std::path::Path::new(
+                r"\\?\UNC\server\share\repo\.git\svn\.metadata"
+            )),
+            std::path::PathBuf::from(r"\\server\share\repo\.git\svn\.metadata")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn git_command_paths_are_unchanged_off_windows() {
+        let path = std::path::Path::new("/repo/.git/svn/.metadata");
+        assert_eq!(git_command_path(path), path);
+    }
 
     #[test]
     fn log_recursive_arguments_match_frozen_git_svn() {
