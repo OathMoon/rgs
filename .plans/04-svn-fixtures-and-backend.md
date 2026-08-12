@@ -6,7 +6,7 @@ Provide repeatable SVN fixtures and transport adapters that expose one revision/
 
 ## Current State
 
-State: `behavior-pass` for the declared CLI and linked read/import profiles.
+State: `release-pass` for the declared CLI and linked read/import profiles.
 
 Production linked-libsvn update/switch drives the shared `FetchEditor` through
 operation-owned, panic-contained callbacks. Incremental add replay now applies the

@@ -18,8 +18,8 @@
 
 ## Current State
 
-State: `local-p0-p1-pass`; Phase 09 is not yet `release-pass` because the current
-working tree has no same-commit hosted release artifact.
+State: `release-pass` for the Phase 09 P0/P1 scope at
+`c0dfb2067f75806935b2b36462d5819923652634`.
 
 审阅基线：`1139ae497567d4ae787be849ae31d68b2552aed8`。
 
@@ -36,7 +36,9 @@ working tree has no same-commit hosted release artifact.
 5. libsvn binding ADR、顶层 typed error 分类和首批 resolver/rev_map/dcommit
    高风险路径迁移已完成；
 6. default workspace、linked core parallel/serial、linked CLI read/write 本地
-   矩阵通过；当前改动提交并推送前无法生成 hosted current-SHA artifact。
+   矩阵通过；protected hosted
+   [release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
+   也完成相同 strict/linked/static 矩阵、artifact 上传和独立 same-SHA 校验。
 
 最小根因：`svn_ra_do_update3` 在该 incremental add 路径没有可靠投递
 `change_file_prop`，而 native adapter 的目标 revision 预读已经取得权威文件
@@ -316,11 +318,14 @@ P2：
 | P0 submitted recovery | complete locally | executable post-fetch failure resumes with one SVN revision |
 | P0 portable fixtures | complete locally | centralized temp root; root workspace run leaves no new fixture directory |
 | P0 linked/strict gates | implemented and locally exercised | linked parallel/serial plus CLI 48/48 and 73/73 |
-| P0 hosted current-SHA artifact | pending external execution | requires these uncommitted changes to be committed/pushed |
+| P0 hosted current-SHA artifact | complete | run #31561696796 retained a passed release summary for `c0dfb2067f75806935b2b36462d5819923652634` |
 | P0 status reconciliation | complete | Phase 3–9, README, inventory, and progress record aligned |
 | P1 libsvn ADR | complete | `adr/0001-libsvn-binding-strategy.md` |
 | P1 structured errors | complete for planned first boundary | stable categories at CLI/resolver/rev_map/dcommit boundaries |
 | P1 enforceable release gate | complete in repository | developer, reusable backend, and release/tag workflows |
+
+All P0/P1 completion criteria below are satisfied for the recorded evidence
+commit. P2 remains explicit post-release maintenance scope.
 
 ## Completion Definition
 

@@ -6,7 +6,7 @@ Commit eligible local Git commits to the correct SVN branch through one validate
 
 ## Current State
 
-State: `behavior-pass` for the declared safe-linear write profiles.
+State: `release-pass` for the declared safe-linear write profiles.
 
 First-parent target resolution, typed planning, complete messages/properties,
 preflight, CLI working-copy sinks, and durable submitted/fetched/rebase recovery are
@@ -17,8 +17,10 @@ suite is part of both strict local verification and the reusable protected relea
 workflow.
 
 Native libsvn commit write-back and arbitrary remote infrastructure remain
-deferred. Current-worktree hosted evidence must still be produced after the
-changes are committed and pushed; this local state alone is not a release pass.
+deferred. Protected hosted
+[release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
+executed the complete linked dcommit gate and retained exact write/recovery
+artifacts for commit `c0dfb2067f75806935b2b36462d5819923652634`.
 
 ## Normative References
 

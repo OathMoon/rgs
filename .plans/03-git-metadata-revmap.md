@@ -6,7 +6,7 @@ Provide the durable Git/SVN metadata boundary: tested Git plumbing, `git-svn-id`
 
 ## Current State
 
-State: `behavior-pass` for the declared v1 metadata layouts.
+State: `release-pass` for the declared v1 metadata layouts.
 
 Read-only rev_map access is non-creating; SHA-1/SHA-256 records, trailing-zero
 markers, locking/fsync, canonical and legacy paths, tracking identity, and

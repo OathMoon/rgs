@@ -5,11 +5,12 @@ Baseline: Git `v2.54.0` (`0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`)
 This inventory is the Phase 1/2 release boundary. Every parsed command and option
 is either implemented for a named gate or rejected before repository mutation.
 
-Evidence state (2026-08-12): the Phase 9 working tree based on
-`1139ae497567d4ae787be849ae31d68b2552aed8` passes the full local default and
-linked matrix. Its hosted release claim is pending a same-SHA artifact after the
-changes are committed and pushed; hosted run #5 remains evidence only for
-`e2c90e8e576e7c22b86f9673b5fe4d632c18a362`.
+Evidence state (2026-08-12): the Phase 9 P0/P1 closure at
+`c0dfb2067f75806935b2b36462d5819923652634` passes the full local default and
+linked matrix and protected hosted
+[release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796).
+The retained `frozen-compatibility-artifacts` release summary is passed and bound
+to that exact commit SHA.
 
 ## Command surface
 

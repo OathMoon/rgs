@@ -6,11 +6,9 @@ The primary command is `git-svn-rs`. The workspace also contains a `git-svn`
 compatibility shim, but installing or packaging that command name is an explicit
 opt-in so it does not replace Perl `git svn` by default.
 
-The declared v1 profiles have historical release evidence, and the current Phase 9
-working tree passes the complete local P0/P1 matrix. A new `release-pass` remains
-conditional on producing the protected hosted artifact for the exact committed
-SHA. This is not a general replacement for every `git svn` workflow. The exact
-command, option, and protocol boundary is recorded in the
+The declared v1 profiles and the Phase 9 P0/P1 closure have protected same-SHA
+release evidence. This is not a general replacement for every `git svn` workflow.
+The exact command, option, and protocol boundary is recorded in the
 [release capability inventory](.plans/release-capability-inventory.md).
 
 ## Verification
@@ -58,14 +56,15 @@ The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 - submitted-write recovery without a duplicate revision; and
 - dirty-index rejection with no SVN write or Rust recovery journal.
 
-The current working tree executes all 41 covered golden scenarios locally and the
-linked matrices pass in parallel and serial modes, including 48/48 real
-clone/fetch and 73/73 dcommit cases. The last hosted `release-pass` remains manual
-[Frozen compatibility run #5](https://github.com/OathMoon/rgs/actions/runs/30790332534)
-for commit `e2c90e8e576e7c22b86f9673b5fe4d632c18a362`; it is historical evidence,
-not evidence for the current uncommitted changes. The release/tag workflow now
-calls the strict compatibility workflow and verifies a same-SHA artifact, so a
-release cannot rely on that older run.
+The Phase 9 closure executes all 41 covered golden scenarios and the linked
+matrices in parallel and serial modes, including 48/48 real clone/fetch and 73/73
+dcommit cases. Protected hosted
+[release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
+passed for commit `c0dfb2067f75806935b2b36462d5819923652634`. Its
+`frozen-compatibility-artifacts` download contains eight executed/passed required
+scenario summaries and a `release-summary.json` bound to that exact SHA. The
+release/tag workflow calls the strict compatibility workflow and independently
+downloads and verifies the same-SHA artifact.
 Authenticated loopback HTTP and HTTPS DAV cover clone, incremental fetch, and
 SVN CLI working-copy dcommit. Reads pass through both the SVN CLI and linked
 libsvn backends; HTTPS uses an explicit CA trust configuration. A loopback

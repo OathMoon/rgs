@@ -6,7 +6,7 @@ Implement `find-rev`, `info`, `log`, `gc`, `reset`, and `rebase` on top of one v
 
 ## Current State
 
-State: `behavior-pass` for the documented readonly and maintenance subset.
+State: `release-pass` for the documented readonly and maintenance subset.
 
 Commands resolve one validated named-remote identity and fail closed on mapping,
 rev_map, UUID, or pending-transaction ambiguity. Covered `find-rev`, `info`,

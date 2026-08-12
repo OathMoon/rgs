@@ -1,8 +1,8 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-12
 Branch: `codex-execute-git-svn-rs-plans`
-Committed base at audit: `1139ae497567d4ae787be849ae31d68b2552aed8 Fix Windows metadata command paths`
-Phase 9 P0/P1 changes are present in the working tree and are not yet committed.
+Phase 9 P0/P1 evidence commit: `c0dfb2067f75806935b2b36462d5819923652634`
+Protected hosted evidence: [release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -11,20 +11,21 @@ Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 The repository provides the covered `file://`, local `svn://`, configured and real
 loopback `svn+ssh`, mock, and authenticated loopback HTTP/HTTPS DAV workflows. The
 2026-08-12 Phase 9 P0/P1 local closure fixes linked post-submit properties,
-portable fixtures, typed top-level errors, and protected release gates. It is not
-yet a release pass because no hosted artifact can be bound to uncommitted changes.
+portable fixtures, typed top-level errors, and protected release gates. The
+protected hosted gate passed the same strict/linked/static matrix and independently
+verified the retained artifact against the evidence commit SHA.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `release-pass` for declared v1 profiles | complete capability inventory, CLI/core/opt-in shim, diagnostics, output/exit boundaries, explicit unsupported no-mutation tests, hosted gate | future commands remain explicitly out of scope |
 | 2 config/mapping | `release-pass` for declared profiles | centralized config, relative/full layouts, globs, authors, filters, ref sanitization, metadata modes/auth precedence, exact hosted artifacts | broader future platform/remote profiles |
-| 3 metadata/rev_map | `behavior-pass` for declared layouts | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, typed resolver/rev_map/dcommit boundaries, exact v0-v5 rejection | automatic migration and broader internal typed-error migration |
-| 4 SVN adapters | `behavior-pass` for declared CLI/linked read profiles | shared replay, complete incremental add properties, per-file RA-serf batons, audited FFI, ADR, portable fixtures, parallel/serial linked gates | native write-back, module split, broader remote/platform validation |
-| 5 import/clone/fetch | `behavior-pass` for declared profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI 48/48 parity | remaining obscure Fetcher semantics |
-| 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
-| 7 dcommit | `behavior-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, full linked dcommit 73/73 gate | native write-back and broader remote faults |
-| 8 golden/release | `behavior-pass` on current tree; historical hosted pass on `e2c90e8` | 41 scenarios, 8 required summaries, backend/build-feature identity, reusable same-SHA release workflow | current-commit hosted artifact |
-| 9 hardening | `local-p0-p1-pass` | linked property/recovery fixes, temp-root migration, ADR, typed errors, developer/backend/release gates | commit/push and execute hosted release evidence; P2 maintenance remains |
+| 3 metadata/rev_map | `release-pass` for declared layouts | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, typed resolver/rev_map/dcommit boundaries, exact v0-v5 rejection | automatic migration and broader internal typed-error migration |
+| 4 SVN adapters | `release-pass` for declared CLI/linked read profiles | shared replay, complete incremental add properties, per-file RA-serf batons, audited FFI, ADR, portable fixtures, hosted parallel/serial linked gates | native write-back, module split, broader remote/platform validation |
+| 5 import/clone/fetch | `release-pass` for declared profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, hosted linked CLI 48/48 parity | remaining obscure Fetcher semantics |
+| 6 readonly | `release-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, PTY pager, exact hosted artifacts | broader platform terminal fidelity |
+| 7 dcommit | `release-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, hosted linked dcommit 73/73 gate | native write-back and broader remote faults |
+| 8 golden/release | `release-pass` at `c0dfb20` | hosted 41 scenarios, 8 required summaries, backend/build-feature identity, same-SHA release summary and verifier | forward-compatibility runs remain separately scoped |
+| 9 hardening | `release-pass` for P0/P1 | linked property/recovery fixes, temp-root migration, ADR, typed errors, protected hosted release evidence | P2 maintenance remains |
 
 ## Validated Capabilities
 
@@ -99,9 +100,11 @@ yet a release pass because no hosted artifact can be bound to uncommitted change
 - Copy-parent lookup and dependency ordering select the most specific overlapping
   mapping while retaining an empty root mapping as the final fallback.
 - Auth resolves explicit credentials, askpass, then TTY username/no-echo password
-  without persistence. Default reads probe SVN cache/public access before prompting;
-  interactive writes confirm credentials before the first write, while non-TTY writes
-  may use SVN's cache.
+  without persistence. Unix askpass retries only the transient `ETXTBSY` spawn
+  failure exposed by the hosted runner; other start failures remain immediate.
+  Default reads probe SVN cache/public access before prompting; interactive writes
+  confirm credentials before the first write, while non-TTY writes may use SVN's
+  cache.
 - Full-URL and configured `svn+ssh` paths validate exact read/write invocation.
 - `useSvnsyncProps` validates byte-safe r0 source identity, atomically caches it,
   keeps mirror rev_maps separate from source footer/author/info identity, and works
@@ -259,6 +262,11 @@ yet a release pass because no hosted artifact can be bound to uncommitted change
   workspace, linked parallel/serial, linked CLI read/write, formatting, clippy,
   and strict compatibility gates. The release/tag workflow calls that reusable
   gate and rejects artifacts not bound to the current SHA.
+- Protected hosted release gate
+  [#31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
+  passed for `c0dfb2067f75806935b2b36462d5819923652634`; the downloaded schema-2
+  release summary records `status: passed`, eight required scenarios, the default
+  SVN-CLI-vs-frozen-Perl profile, and all four linked backend profiles.
 
 ## Current Verification
 
@@ -280,17 +288,19 @@ Verified locally on 2026-08-12 in WSL from the repository root:
   introduced no new random `golden-stdlayout-*` or `svn-fixture-*` directories.
 - Formatting, all-target/all-feature clippy with warnings denied, and
   `git diff --check` passed for this working tree.
-- Historical hosted run
-  [#5](https://github.com/OathMoon/rgs/actions/runs/30790332534) remains valid only
-  for commit `e2c90e8e576e7c22b86f9673b5fe4d632c18a362`. A new hosted summary for
-  the current changes does not exist before commit/push and must not be inferred.
+- Hosted release gate
+  [#31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
+  completed in 6m39s: strict comparison, eight-summary audit, linked core
+  parallel/serial, linked CLI clone/fetch/dcommit, static gates, artifact upload,
+  and the separate same-SHA verifier all passed. The downloaded
+  `release-summary.json` is bound to
+  `c0dfb2067f75806935b2b36462d5819923652634`.
 
 ## Remaining Work
 
-P0/P1 implementation is locally complete. The remaining release action is to
-commit/push this working tree and let the release/tag path produce and verify the
-strict same-SHA hosted artifact. Phase 09 must not be marked `release-pass` before
-that artifact exists.
+Phase 9 P0/P1 implementation and protected hosted evidence are complete. Any
+subsequent release-candidate commit must rerun the protected workflow so its
+artifact remains bound to the candidate SHA; older artifacts are never inherited.
 
 P2 module splitting, import-loop optimization, public-API narrowing, and packaging
 hygiene remain maintenance work. Broader remote/platform profiles, native libsvn
@@ -334,15 +344,18 @@ outside this release claim.
 - `10ea719`, `a548b20`, `7f493af`: multi-map transactions, noMetadata limits,
   and byte-safe SVM CLI/config/identity discovery foundation.
 - `daf5508`, `bdce0b3`, `754c57b`: SVM dual maps, username prompts, v0-v5 policy.
+- `80b74fb`: Phase 9 P0/P1 property/recovery, portable-fixture, governance,
+  typed-error, and protected-gate closure.
+- `991eef5`, `c0dfb20`: hosted compatibility environment correction and transient
+  Unix askpass execution hardening; `c0dfb20` is validated by release gate
+  #31561696796.
 
 ## Next Steps
 
-1. Review and commit the Phase 9 working tree without staging the preserved
-   pre-existing untracked files.
-2. Push the commit and execute the protected release/strict workflow; archive the
-   same-SHA `release-summary.json`, then mark Phase 8/9 `release-pass`.
-3. Schedule P2 separately; do not expand deferred profiles as part of release
-   evidence collection.
+1. For every release candidate, execute the protected release workflow and retain
+   its same-SHA `release-summary.json` and scenario artifacts.
+2. Schedule P2 module/API/package maintenance separately.
+3. Do not expand deferred profiles as part of release evidence collection.
 
 ## Handoff Notes
 

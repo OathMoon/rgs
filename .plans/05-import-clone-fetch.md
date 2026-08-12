@@ -6,7 +6,7 @@ Turn SVN revisions into baseline-compatible Git commits, refs, rev_maps, local b
 
 ## Current State
 
-State: `behavior-pass` for the declared v1 import/clone/fetch profiles.
+State: `release-pass` for the declared v1 import/clone/fetch profiles.
 
 SVN CLI and linked libsvn replay share the `RaSession`/`FetchEditor` pipeline and
 cover direct URLs, standard layouts, timestamps/identities, checkout modes,
