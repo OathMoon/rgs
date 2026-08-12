@@ -6,11 +6,13 @@ Implement `find-rev`, `info`, `log`, `gc`, `reset`, and `rebase` on top of one v
 
 ## Current State
 
-State: `in-progress`.
+State: `behavior-pass` for the documented readonly and maintenance subset.
 
-The supported subset already covers common log formatting/ranges, info, bidirectional find-rev, reset, rebase dry-run, and gc behavior for known metadata layouts.
-
-The phase is not `behavior-pass` because current resolution can hard-code remote `svn`, flatten all rev_maps across refs, choose a same-numbered revision from the wrong branch, omit optional `find-rev` tree-ish scope, and lacks remaining Log/migration/noMetadata behavior.
+Commands resolve one validated named-remote identity and fail closed on mapping,
+rev_map, UUID, or pending-transaction ambiguity. Covered `find-rev`, `info`,
+Log.pm formatting/ranges/pathspecs, `reset`, `rebase`, and `gc` behavior has focused
+and frozen-artifact coverage. Full Log.pm compatibility and automatic legacy
+migration remain explicit deferred scope.
 
 ## Normative References
 

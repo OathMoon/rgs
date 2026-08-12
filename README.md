@@ -6,9 +6,11 @@ The primary command is `git-svn-rs`. The workspace also contains a `git-svn`
 compatibility shim, but installing or packaging that command name is an explicit
 opt-in so it does not replace Perl `git svn` by default.
 
-The declared v1 compatibility profiles have passed their release gate, but this is
-not a general replacement for every `git svn` workflow. The exact command, option,
-and protocol boundary is recorded in the
+The declared v1 profiles have historical release evidence, and the current Phase 9
+working tree passes the complete local P0/P1 matrix. A new `release-pass` remains
+conditional on producing the protected hosted artifact for the exact committed
+SHA. This is not a general replacement for every `git svn` workflow. The exact
+command, option, and protocol boundary is recorded in the
 [release capability inventory](.plans/release-capability-inventory.md).
 
 ## Verification
@@ -33,7 +35,9 @@ They may skip in the developer gate when those tools are unavailable. Set
 Strict mode makes missing compatibility dependencies or skipped scenarios fail. In
 addition to the default gates, the script runs the linked `git-svn-rs-core` suite
 with both the default parallel harness and `--test-threads=1`, then runs the linked
-CLI `clone_fetch_real_svn` workflows.
+CLI `clone_fetch_real_svn` and `dcommit_linear` workflows. Tests create SVN and
+golden fixtures under `GIT_SVN_RS_TEST_TMPDIR`, then `CARGO_TARGET_TMPDIR`, then
+the system temporary directory; they no longer use the source tree by default.
 
 ## Current compatibility evidence
 
@@ -54,10 +58,14 @@ The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 - submitted-write recovery without a duplicate revision; and
 - dirty-index rejection with no SVN write or Rust recovery journal.
 
-This is a `release-pass` for those declared profiles, backed by manual hosted
-[Frozen compatibility run #5](https://github.com/OathMoon/rgs/actions/runs/30790332534),
-not a blanket compatibility claim. Automatic hosted compatibility triggers remain
-disabled; the workflow is manual-only.
+The current working tree executes all 41 covered golden scenarios locally and the
+linked matrices pass in parallel and serial modes, including 48/48 real
+clone/fetch and 73/73 dcommit cases. The last hosted `release-pass` remains manual
+[Frozen compatibility run #5](https://github.com/OathMoon/rgs/actions/runs/30790332534)
+for commit `e2c90e8e576e7c22b86f9673b5fe4d632c18a362`; it is historical evidence,
+not evidence for the current uncommitted changes. The release/tag workflow now
+calls the strict compatibility workflow and verifies a same-SHA artifact, so a
+release cannot rely on that older run.
 Authenticated loopback HTTP and HTTPS DAV cover clone, incremental fetch, and
 SVN CLI working-copy dcommit. Reads pass through both the SVN CLI and linked
 libsvn backends; HTTPS uses an explicit CA trust configuration. A loopback
@@ -75,7 +83,9 @@ the platform's libsvn development libraries at build time. Default builds do not
 require libsvn. Linked libsvn read/update behavior has `file://`, local `svn://`,
 configured `svn+ssh://` tunnel, real loopback OpenSSH, and authenticated loopback
 HTTP/HTTPS DAV fixture coverage. Dcommit continues to use the SVN CLI
-working-copy sink; the linked backend is read/import-only.
+working-copy sink; its post-submit read/import and recovery path uses the linked
+backend when built with the feature. Incremental executable/special additions and
+special-to-regular transitions have linked native-delta regression coverage.
 
 On Ubuntu or Debian, install the system development packages with:
 

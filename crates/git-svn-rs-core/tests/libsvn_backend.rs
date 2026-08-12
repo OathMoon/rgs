@@ -443,6 +443,105 @@ fn linked_backend_do_update_drives_fetch_editor_callbacks() {
 }
 
 #[test]
+fn linked_backend_incremental_add_replays_text_and_complete_file_properties() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture.add_trunk_executable_and_special().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let mut editor = RecordingFetchEditor::default();
+
+    session.do_update("trunk", revision, &mut editor).unwrap();
+
+    assert!(
+        editor
+            .events
+            .contains(&"change_file_prop:trunk/tool.sh:svn:executable=*".to_string()),
+        "{:?}",
+        editor.events
+    );
+    assert!(
+        editor
+            .events
+            .contains(&"change_file_prop:trunk/new-link:svn:special=*".to_string()),
+        "{:?}",
+        editor.events
+    );
+    assert!(
+        editor
+            .events
+            .iter()
+            .any(|event| event.starts_with("apply_textdelta:trunk/tool.sh:")),
+        "{:?}",
+        editor.events
+    );
+    assert!(
+        editor
+            .events
+            .iter()
+            .any(|event| event.starts_with("apply_textdelta:trunk/new-link:")),
+        "{:?}",
+        editor.events
+    );
+}
+
+#[test]
+fn linked_backend_incremental_special_to_regular_type_transition() {
+    if !cfg!(git_svn_rs_libsvn_linked) {
+        return;
+    }
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(reason)) => {
+            eprintln!("{reason}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(reason)) => panic!("{reason}"),
+    }
+
+    let fixture = StandardSvnFixture::create().unwrap();
+    let revision = fixture.replace_trunk_symlink_with_regular_file().unwrap();
+    let session = LibSvnBackend::for_url(fixture.url());
+    let plan = FetchCommitPlan {
+        mark: revision,
+        refname: "refs/remotes/origin/trunk".to_string(),
+        author: "alice <alice@example.com>".to_string(),
+        committer: "alice <alice@example.com>".to_string(),
+        timestamp: 1,
+        timezone_offset: "+0000".to_string(),
+        message: "replace special link with regular file".to_string(),
+        parent_mark: None,
+        parent_ref: None,
+    };
+    let mut editor = SvnFetchEditor::with_base_tree(
+        plan,
+        vec![TreeEntry::file("link-to-lib", "120000", "src/lib.rs")],
+    )
+    .with_path_prefix("trunk");
+
+    session.do_update("trunk", revision, &mut editor).unwrap();
+    let commit = editor.into_commit().unwrap();
+
+    assert!(commit.changes.iter().any(|change| {
+        matches!(
+            change,
+            FileChange::Modify { path, mode, content }
+                if path == "link-to-lib" && mode == "100644" && content == b"regular\n"
+        )
+    }));
+}
+
+#[test]
 fn linked_backend_stops_update_on_fetch_editor_error() {
     if !cfg!(git_svn_rs_libsvn_linked) {
         return;

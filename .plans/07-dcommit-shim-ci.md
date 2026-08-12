@@ -6,19 +6,19 @@ Commit eligible local Git commits to the correct SVN branch through one validate
 
 ## Current State
 
-State: `in-progress`.
+State: `behavior-pass` for the declared safe-linear write profiles.
 
-Current local `file://` and local `svn://` working-copy paths cover many adds, deletes, modes, symlinks, renames/copies, attributes, auth options, commit URL, mergeinfo, post-fetch, and rebase scenarios. Mock tests exercise `GitDiffPlanner` and `SvnCommitEditor`.
+First-parent target resolution, typed planning, complete messages/properties,
+preflight, CLI working-copy sinks, and durable submitted/fetched/rebase recovery are
+covered for the named local and loopback profiles. A linked post-fetch failure
+regression proves an executable-file submission is resumed without a second SVN
+revision and ends with matching ref/rev_map/footer/tree state. The linked dcommit
+suite is part of both strict local verification and the reusable protected release
+workflow.
 
-The phase has not passed because:
-
-- target resolution can select the ancestor tracking ref with the highest SVN revision rather than the nearest first-parent SVN identity;
-- production working-copy write-back bypasses the planned `GitDiffPlanner`/`SvnCommitEditor` behavior model;
-- full Git commit messages are truncated to the subject;
-- clean/stale/merge topology checks are incomplete;
-- partial SVN success has no durable resume state;
-- property clearing can leave stale SVN properties;
-- common remote write profiles and production prompts are unsupported/unvalidated.
+Native libsvn commit write-back and arbitrary remote infrastructure remain
+deferred. Current-worktree hosted evidence must still be produced after the
+changes are committed and pushed; this local state alone is not a release pass.
 
 ## Normative References
 

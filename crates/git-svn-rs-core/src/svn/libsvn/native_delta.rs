@@ -19,6 +19,7 @@ struct UpdateBaton<'a> {
     editor: &'a mut dyn FetchEditor,
     directories: Vec<String>,
     active_files: BTreeSet<usize>,
+    added_file_properties: BTreeMap<String, BTreeMap<String, Vec<u8>>>,
     base_contents: BTreeMap<String, Vec<u8>>,
     copy_sources: BTreeMap<String, (String, u32)>,
     copy_contents: BTreeMap<String, Vec<u8>>,
@@ -131,15 +132,29 @@ fn drive_report(
     let mut base_paths = BTreeSet::new();
     let mut copy_sources = BTreeMap::new();
     let mut copy_file_targets = BTreeSet::new();
+    let mut added_file_properties = BTreeMap::new();
     for revision in backend.get_log(
         &[source_path],
         request.target_revision,
         request.target_revision,
     )? {
         for change in revision.changed_paths {
+            let target_path = remapped_editor_path(&change.path, source_path, target);
+            if matches!(change.action, ChangeAction::Add | ChangeAction::Replace)
+                && matches!(change.kind, NodeKind::File | NodeKind::Symlink)
+                && !change.properties.is_empty()
+            {
+                added_file_properties.insert(
+                    target_path.clone(),
+                    change
+                        .properties
+                        .iter()
+                        .map(|(name, value)| (name.clone(), value.as_bytes().to_vec()))
+                        .collect(),
+                );
+            }
             if let Some(copy_from) = editor_copy_from(&change.copy_from_path, change.copy_from_rev)
             {
-                let target_path = remapped_editor_path(&change.path, source_path, target);
                 if matches!(change.kind, NodeKind::File | NodeKind::Symlink) {
                     copy_file_targets.insert(target_path.clone());
                 }
@@ -255,6 +270,7 @@ fn drive_report(
             editor: fetch_editor,
             directories: vec![target.to_string()],
             active_files: BTreeSet::new(),
+            added_file_properties,
             base_contents,
             copy_sources,
             copy_contents,
@@ -540,6 +556,11 @@ unsafe extern "C" fn add_file(
         });
     } else {
         baton.invoke(|editor| editor.add_file(&path, None));
+    }
+    if let Some(properties) = baton.added_file_properties.get(&path).cloned() {
+        for (name, value) in properties {
+            baton.invoke(|editor| editor.change_file_prop_bytes(&path, &name, Some(&value)));
+        }
     }
     let source = if copy.is_some() {
         unsafe {

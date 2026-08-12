@@ -6,18 +6,16 @@ Provide the durable Git/SVN metadata boundary: tested Git plumbing, `git-svn-id`
 
 ## Current State
 
-State: `structural-pass`.
+State: `behavior-pass` for the declared v1 metadata layouts.
 
-Existing strengths:
+Read-only rev_map access is non-creating; SHA-1/SHA-256 records, trailing-zero
+markers, locking/fsync, canonical and legacy paths, tracking identity, and
+transactional ref/rev_map publication are covered by recovery tests. Resolver,
+rev_map and dcommit safety boundaries now surface stable typed categories through
+the top-level `GitSvnError` while retaining existing CLI text and source chains.
 
-- Git CLI wrapper basics;
-- SHA-1/SHA-256 rev_map record widths;
-- big-endian revisions, zero records, binary search, append ordering, lock files, and fsync;
-- gitfile/commondir metadata discovery;
-- `git-svn-id` parsing/formatting;
-- legacy metadata inspection.
-
-The phase is not `behavior-pass` because `RevMap::open` creates state during reads, ref and rev_map changes are not coordinated, ambiguous rev_maps can be selected arbitrarily, and legacy migration is not implemented.
+Legacy v0-v5 metadata is deliberately inspected and rejected without mutation;
+automatic conversion remains deferred and is not part of the v1 claim.
 
 ## Normative References
 

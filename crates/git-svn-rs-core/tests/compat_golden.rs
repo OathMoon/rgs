@@ -184,6 +184,7 @@ fn artifact_capture_writes_normalized_text_files() {
     assert!(summary.contains("\"frozen_git_commit\": \"0b13e48"));
     assert!(summary.contains("\"object_format\": \"sha1\""));
     assert!(summary.contains("\"comparison_backend\": \"svn-cli-vs-frozen-perl\""));
+    assert!(summary.contains("\"build_features\": \"default-svn-cli\""));
 }
 
 #[test]
@@ -384,10 +385,7 @@ fn standard_trunk_fixture_matches_perl_git_svn_supported_subset() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-").unwrap();
     let comparison = run_standard_trunk_golden_comparison(tmp.path()).unwrap();
 
     comparison.assert_supported_subset_matches().unwrap();
@@ -410,10 +408,7 @@ fn standard_layout_fixture_matches_perl_git_svn_supported_subset() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-stdlayout-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-stdlayout-").unwrap();
     let comparison = run_standard_stdlayout_golden_comparison(tmp.path()).unwrap();
 
     comparison.assert_supported_subset_matches().unwrap();
@@ -440,10 +435,7 @@ fn full_url_layout_fixture_matches_perl_git_svn_supported_subset() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-full-url-layout-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-full-url-layout-").unwrap();
     let comparison = run_standard_full_url_layout_golden_comparison(tmp.path()).unwrap();
 
     comparison.assert_supported_subset_matches().unwrap();
@@ -470,10 +462,7 @@ fn single_subdirectory_fixture_matches_perl_git_svn_supported_subset() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-subdirectory-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-subdirectory-").unwrap();
     let comparison = run_standard_subdirectory_golden_comparison(tmp.path()).unwrap();
 
     comparison.assert_supported_subset_matches().unwrap();
@@ -497,10 +486,7 @@ fn linear_dcommit_write_artifacts_match_frozen_perl_git_svn() {
         Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-dcommit-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-dcommit-").unwrap();
     let comparison = run_standard_dcommit_golden_comparison(tmp.path()).unwrap();
     comparison.assert_write_artifacts_match().unwrap();
 }
@@ -530,10 +516,7 @@ fn authenticated_svn_dcommit_write_artifacts_match_frozen_perl_git_svn() {
         Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-auth-dcommit-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-auth-dcommit-").unwrap();
     let comparison = run_standard_authenticated_svn_dcommit_golden_comparison(tmp.path()).unwrap();
     comparison.assert_write_artifacts_match().unwrap();
 }
@@ -560,10 +543,7 @@ fn recovered_dcommit_write_artifacts_match_frozen_perl_git_svn() {
         Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-recovery-dcommit-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-recovery-dcommit-").unwrap();
     let comparison = run_standard_recovery_dcommit_golden_comparison(tmp.path()).unwrap();
     comparison.assert_write_artifacts_match().unwrap();
 }
@@ -590,10 +570,7 @@ fn dirty_dcommit_no_write_artifacts_match_frozen_perl_git_svn() {
         Err(golden_fixtures::CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-compat-dirty-dcommit-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-compat-dirty-dcommit-").unwrap();
     let comparison = run_standard_dirty_dcommit_golden_comparison(tmp.path()).unwrap();
     comparison.assert_write_artifacts_match().unwrap();
 }
@@ -615,10 +592,7 @@ fn auxiliary_follow_parent_ref_matches_frozen_perl_git_svn() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let temp = tempfile::Builder::new()
-        .prefix("golden-follow-parent-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let temp = svn_fixture::test_tempdir("golden-follow-parent-").unwrap();
     let repo = temp.path().join("repo");
     let upstream = temp.path().join("upstream");
     run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
@@ -760,10 +734,7 @@ fn ancestor_directory_copy_discovery_matches_frozen_perl_git_svn() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let temp = tempfile::Builder::new()
-        .prefix("golden-ancestor-copy-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let temp = svn_fixture::test_tempdir("golden-ancestor-copy-").unwrap();
     let repo = temp.path().join("repo");
     let upstream = temp.path().join("upstream");
     run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
@@ -879,10 +850,7 @@ fn sparse_fixed_mapping_scan_marker_matches_frozen_perl_git_svn() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let temp = tempfile::Builder::new()
-        .prefix("golden-scan-marker-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let temp = svn_fixture::test_tempdir("golden-scan-marker-").unwrap();
     let repo = temp.path().join("repo");
     let upstream = temp.path().join("upstream");
     run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
@@ -1034,10 +1002,7 @@ fn discovery_high_water_matches_frozen_perl_across_incremental_fetch() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let temp = tempfile::Builder::new()
-        .prefix("golden-discovery-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let temp = svn_fixture::test_tempdir("golden-discovery-").unwrap();
     let repo = temp.path().join("repo");
     let upstream = temp.path().join("upstream");
     run_command(temp.path(), "svnadmin", &["create", path_text(&repo)]);
@@ -1255,10 +1220,7 @@ fn rust_stdlayout_golden_correlates_ref_tips_and_rev_maps() {
         Err(CompatDecision::Fail(message)) => panic!("{message}"),
     }
 
-    let tmp = tempfile::Builder::new()
-        .prefix("golden-stdlayout-")
-        .tempdir_in(std::env::current_dir().unwrap())
-        .unwrap();
+    let tmp = svn_fixture::test_tempdir("golden-stdlayout-").unwrap();
     let artifacts = run_rust_stdlayout_ref_artifacts(tmp.path()).unwrap();
 
     let expected = [

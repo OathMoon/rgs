@@ -1,0 +1,39 @@
+name: Protected release gate
+
+on:
+  push:
+    tags:
+      - "v*"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  strict-compatibility:
+    uses: ./.github/workflows/compatibility.yml
+
+  verify-current-sha-evidence:
+    needs: strict-compatibility
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download strict compatibility evidence
+        uses: actions/download-artifact@v4
+        with:
+          name: frozen-compatibility-artifacts
+          path: compatibility-evidence
+
+      - name: Require successful evidence for this release SHA
+        shell: bash
+        run: |
+          summary="compatibility-evidence/release-summary.json"
+          test -f "$summary"
+          grep -Fq '"status": "passed"' "$summary"
+          grep -Fq "\"commit_sha\": \"$GITHUB_SHA\"" "$summary"
+          grep -Fq '"required_scenario_count": 8' "$summary"
+          grep -Fq '"scenario_backend": "svn-cli-vs-frozen-perl"' "$summary"
+          grep -Fq '"scenario_build_features": "default-svn-cli"' "$summary"
+          grep -Fq '"cli-dcommit-post-fetch"' "$summary"

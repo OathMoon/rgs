@@ -1,59 +1,80 @@
-use anyhow::{Result, bail};
+use std::process::ExitCode;
+
 use git_svn_rs_core::cli::{Cli, Command};
 use git_svn_rs_core::commands;
 use git_svn_rs_core::diagnostics;
+use git_svn_rs_core::error::GitSvnError;
 
-fn main() -> Result<()> {
+fn main() -> ExitCode {
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(error) => {
+            eprintln!("Error: {error}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run() -> Result<(), GitSvnError> {
     let cli = Cli::parse_compat();
     if cli.quiet {
-        bail!("global --quiet is not supported in v1");
+        return Err(GitSvnError::invalid_invocation(
+            "global --quiet is not supported in v1",
+        ));
     }
     if cli.verbose > 0 {
-        bail!("global --verbose is not supported in v1");
+        return Err(GitSvnError::invalid_invocation(
+            "global --verbose is not supported in v1",
+        ));
     }
     match cli.command {
-        Command::Init(args) => commands::init::run(args).map_err(anyhow::Error::msg),
+        Command::Init(args) => commands::init::run(args).map_err(GitSvnError::from_command_error),
         Command::Clone(args) => {
-            let output = commands::clone::run_with_output(args).map_err(anyhow::Error::msg)?;
+            let output =
+                commands::clone::run_with_output(args).map_err(GitSvnError::from_command_error)?;
             print!("{}", output.stdout);
             eprint!("{}", output.stderr);
             Ok(())
         }
-        Command::Fetch(args) => commands::fetch::run(args).map_err(anyhow::Error::msg),
+        Command::Fetch(args) => commands::fetch::run(args).map_err(GitSvnError::from_command_error),
         Command::Rebase(args) => {
             print!(
                 "{}",
-                commands::rebase::run_with_inherited_stderr(args).map_err(anyhow::Error::msg)?
+                commands::rebase::run_with_inherited_stderr(args)
+                    .map_err(GitSvnError::from_command_error)?
             );
             Ok(())
         }
         Command::FindRev(args) => {
             print!(
                 "{}",
-                commands::find_rev::run(args).map_err(anyhow::Error::msg)?
+                commands::find_rev::run(args).map_err(GitSvnError::from_command_error)?
             );
             Ok(())
         }
         Command::Info(args) => {
-            print!("{}", commands::info::run(args).map_err(anyhow::Error::msg)?);
-            Ok(())
-        }
-        Command::Log(args) => {
-            print!("{}", commands::log::run(args).map_err(anyhow::Error::msg)?);
-            Ok(())
-        }
-        Command::Dcommit(args) => {
             print!(
                 "{}",
-                commands::dcommit::run(args).map_err(anyhow::Error::msg)?
+                commands::info::run(args).map_err(GitSvnError::from_command_error)?
             );
             Ok(())
         }
-        Command::Gc(args) => commands::gc::run(args).map_err(anyhow::Error::msg),
+        Command::Log(args) => {
+            print!(
+                "{}",
+                commands::log::run(args).map_err(GitSvnError::from_command_error)?
+            );
+            Ok(())
+        }
+        Command::Dcommit(args) => {
+            print!("{}", commands::dcommit::run_typed(args)?);
+            Ok(())
+        }
+        Command::Gc(args) => commands::gc::run(args).map_err(GitSvnError::from_command_error),
         Command::Reset(args) => {
             print!(
                 "{}",
-                commands::reset::run(args).map_err(anyhow::Error::msg)?
+                commands::reset::run(args).map_err(GitSvnError::from_command_error)?
             );
             Ok(())
         }
@@ -75,15 +96,15 @@ fn main() -> Result<()> {
                 .first()
                 .cloned()
                 .unwrap_or_else(|| "unknown".to_string());
-            bail!("unsupported in v1: {name}")
+            Err(GitSvnError::unsupported_command(name))
         }
-        Command::Branch(_) => bail!("unsupported in v1: branch"),
-        Command::Tag(_) => bail!("unsupported in v1: tag"),
-        Command::SetTree(_) => bail!("unsupported in v1: set-tree"),
-        Command::Propget(_) => bail!("unsupported in v1: propget"),
-        Command::Propset(_) => bail!("unsupported in v1: propset"),
-        Command::Proplist(_) => bail!("unsupported in v1: proplist"),
-        Command::ShowIgnore(_) => bail!("unsupported in v1: show-ignore"),
-        Command::ShowExternals(_) => bail!("unsupported in v1: show-externals"),
+        Command::Branch(_) => Err(GitSvnError::unsupported_command("branch")),
+        Command::Tag(_) => Err(GitSvnError::unsupported_command("tag")),
+        Command::SetTree(_) => Err(GitSvnError::unsupported_command("set-tree")),
+        Command::Propget(_) => Err(GitSvnError::unsupported_command("propget")),
+        Command::Propset(_) => Err(GitSvnError::unsupported_command("propset")),
+        Command::Proplist(_) => Err(GitSvnError::unsupported_command("proplist")),
+        Command::ShowIgnore(_) => Err(GitSvnError::unsupported_command("show-ignore")),
+        Command::ShowExternals(_) => Err(GitSvnError::unsupported_command("show-externals")),
     }
 }

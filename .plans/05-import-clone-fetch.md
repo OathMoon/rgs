@@ -6,19 +6,17 @@ Turn SVN revisions into baseline-compatible Git commits, refs, rev_maps, local b
 
 ## Current State
 
-State: `in-progress` and highest execution priority.
+State: `behavior-pass` for the declared v1 import/clone/fetch profiles.
 
-Existing local standard-layout scenarios cover many content, mode, symlink, copy, delete, filter, authors, metadata, empty-directory, branch/tag, and incremental cases.
+SVN CLI and linked libsvn replay share the `RaSession`/`FetchEditor` pipeline and
+cover direct URLs, standard layouts, timestamps/identities, checkout modes,
+bounded and parent fetches, copies/follow-parent, properties, persistent empty
+directories, and recoverable multi-mapping publication. The current linked CLI
+matrix passes all 48 real clone/fetch cases, including the corrected incremental
+add-file property projection.
 
-The phase has not passed because:
-
-- default single-subdirectory URL clone can request duplicated paths;
-- imported commit timestamps use revision-loop indices instead of SVN dates;
-- `clone` leaves an unborn `HEAD` and empty working tree, and ignores `--no-checkout`;
-- default SVN CLI import bypasses `SvnFetchEditor`;
-- `localtime`, log windowing, fetch parent, and revision keywords are incomplete;
-- absent paths, checksums, unhandled properties, pathname encoding, persistent placeholders, and full follow-parent semantics are incomplete;
-- ref and rev_map publication has no complete recovery transaction.
+Obscure Fetcher semantics and unvalidated remote/platform combinations remain
+outside the declared profile rather than implicit release claims.
 
 ## Normative References
 

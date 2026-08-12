@@ -8,7 +8,8 @@ use git_svn_rs_core::svn::SvnBackend;
 use git_svn_rs_core::svn::cli::SvnCliBackend;
 use git_svn_rs_core::svn::ra::{RaSession, SvnNodeKind};
 use support::svn_fixture::{
-    StandardSvnFixture, SvnToolPolicy, missing_tools_policy, require_svn_tools,
+    StandardSvnFixture, SvnToolPolicy, missing_tools_policy, require_svn_tools, test_temp_root,
+    test_tempdir,
 };
 
 #[test]
@@ -34,9 +35,11 @@ fn standard_fixture_creates_trunk_branch_and_tag_revisions() {
         Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
     }
 
+    let expected_root = test_temp_root().unwrap();
     let fixture = StandardSvnFixture::create().unwrap();
 
     assert!(fixture.url().starts_with("file:///"));
+    assert!(fixture.root().starts_with(expected_root));
     assert!(fixture.latest_revision() >= 4);
 }
 
@@ -116,10 +119,7 @@ struct DeletedFileAfterCopyFixture {
 
 impl DeletedFileAfterCopyFixture {
     fn create() -> Result<Self, String> {
-        let tmp = tempfile::Builder::new()
-            .prefix("svn-delete-fixture-")
-            .tempdir_in(std::env::current_dir().map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        let tmp = test_tempdir("svn-delete-fixture-")?;
         let repo = tmp.path().join("repo");
         let wc = tmp.path().join("wc");
 

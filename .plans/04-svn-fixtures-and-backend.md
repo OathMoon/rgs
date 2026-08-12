@@ -6,17 +6,19 @@ Provide repeatable SVN fixtures and transport adapters that expose one revision/
 
 ## Current State
 
-State: `in-progress`.
+State: `behavior-pass` for the declared CLI and linked read/import profiles.
 
-Existing capabilities include local SVN fixtures, mock RA/editor behavior, an SVN CLI reader, linked libsvn metadata/log/file/property access, simple auth baton support, log-backed `do_update`/`do_switch`, and extensive test-only `svn_ra_do_update3` callback scaffolding.
+Production linked-libsvn update/switch drives the shared `FetchEditor` through
+operation-owned, panic-contained callbacks. Incremental add replay now applies the
+authoritative complete file properties before close, including executable and
+special nodes; property removal and special-to-regular transitions are covered.
+The linked suite passes both default-parallel and serial execution. Fixtures use a
+portable temp root outside the source tree by default.
 
-This phase has not passed because:
-
-- public libsvn `do_update`/`do_switch` still synthesize editor calls from logs;
-- the true delta-to-`FetchEditor` adapter is inside `#[cfg(test)]`;
-- default-parallel linked tests can race on global callback recorders and abort through an `extern "C"` panic;
-- auth covers only a subset of simple credentials and not the full declared remote profiles;
-- unsafe FFI, APR, auth, RA, replay, adapter, and large tests share one file.
+The binding/ownership decision is recorded in
+`adr/0001-libsvn-binding-strategy.md`. Native commit-editor write-back and broader
+remote/platform profiles remain deferred; supported dcommit continues to use the
+SVN CLI working-copy sink.
 
 ## Normative References
 

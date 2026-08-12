@@ -1130,6 +1130,160 @@ fn dcommit_resumes_post_fetch_failure_without_duplicate_file_svn_commit() {
 }
 
 #[test]
+fn dcommit_recovers_executable_after_post_fetch_failure_without_resubmitting() {
+    match require_svn_tools() {
+        Ok(()) => {}
+        Err(SvnToolPolicy::Skip(message)) => {
+            eprintln!("{message}");
+            return;
+        }
+        Err(SvnToolPolicy::Fail(message)) => panic!("{message}"),
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    let fixture = StandardSvnFixture::create().unwrap();
+    let work = temp.path().join("work");
+    let authors_prog = recovery_authors_prog(temp.path(), false);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(temp.path())
+        .args([
+            "clone",
+            &fixture.url(),
+            "work",
+            "--stdlayout",
+            "--authors-prog",
+            authors_prog.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+    run_git(
+        &work,
+        &["checkout", "-b", "topic", "refs/remotes/origin/trunk"],
+    );
+
+    std::fs::write(
+        work.join("recovered-tool.sh"),
+        "#!/bin/sh\necho recovered\n",
+    )
+    .unwrap();
+    set_executable(&work.join("recovered-tool.sh"), true);
+    run_git(&work, &["add", "recovered-tool.sh"]);
+    run_git(&work, &["update-index", "--chmod=+x", "recovered-tool.sh"]);
+    run_git(
+        &work,
+        &[
+            "-c",
+            "user.name=Test User",
+            "-c",
+            "user.email=test@example.com",
+            "commit",
+            "-m",
+            "recover executable post fetch",
+        ],
+    );
+    recovery_authors_prog(temp.path(), true);
+    let before = fixture.latest_revision();
+
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("post-submit"));
+
+    let submitted = fixture.latest_revision();
+    assert_eq!(submitted, before + 1);
+    let journal_directory = find_dcommit_journal(&work);
+    let store = JournalStore::new(&journal_directory);
+    let interrupted = store.load().unwrap().expect("submitted dcommit journal");
+    assert!(matches!(
+        interrupted.entries.as_slice(),
+        [JournalEntry {
+            state: EntryState::Submitted { svn_revision },
+            ..
+        }] if *svn_revision == u64::from(submitted)
+    ));
+    assert_eq!(
+        svn_stdout(&["log", "--xml", &fixture.url()])
+            .matches("<msg>recover executable post fetch</msg>")
+            .count(),
+        1
+    );
+
+    recovery_authors_prog(temp.path(), false);
+    Command::cargo_bin("git-svn-rs")
+        .unwrap()
+        .current_dir(&work)
+        .args(["dcommit", "--no-rebase"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("recover executable post fetch"))
+        .stdout(predicate::str::contains("Skipped rebase (--no-rebase)."));
+
+    assert_eq!(
+        fixture.latest_revision(),
+        submitted,
+        "recovery resubmitted SVN revision"
+    );
+    assert_eq!(
+        svn_stdout(&["log", "--xml", &fixture.url()])
+            .matches("<msg>recover executable post fetch</msg>")
+            .count(),
+        1
+    );
+    assert!(
+        git_stdout(
+            &work,
+            &["ls-tree", "refs/remotes/origin/trunk", "recovered-tool.sh"]
+        )
+        .starts_with("100755 blob ")
+    );
+    assert_eq!(
+        git_stdout(
+            &work,
+            &["show", "refs/remotes/origin/trunk:recovered-tool.sh"]
+        ),
+        "#!/bin/sh\necho recovered"
+    );
+    let completed = store.load().unwrap().expect("completed dcommit journal");
+    assert_eq!(completed.batch_state, BatchState::Complete);
+    let [
+        JournalEntry {
+            state:
+                EntryState::FetchedVerified {
+                    svn_revision,
+                    imported_oid,
+                },
+            ..
+        },
+    ] = completed.entries.as_slice()
+    else {
+        panic!("recovered entry was not verified: {:?}", completed.entries);
+    };
+    assert_eq!(*svn_revision, u64::from(submitted));
+    assert_eq!(
+        git_stdout(&work, &["rev-parse", "refs/remotes/origin/trunk"]),
+        *imported_oid
+    );
+    let rev_map_path = std::path::PathBuf::from(&completed.target.rev_map_path);
+    let rev_map_path = if rev_map_path.is_absolute() {
+        rev_map_path
+    } else {
+        work.join(rev_map_path)
+    };
+    assert_eq!(
+        RevMap::open_existing(rev_map_path, ObjectFormat::Sha1)
+            .unwrap()
+            .get(submitted)
+            .unwrap()
+            .as_deref(),
+        Some(imported_oid.as_str())
+    );
+}
+
+#[test]
 fn dcommit_adopts_verified_in_flight_file_svn_revision_without_resubmitting() {
     match require_svn_tools() {
         Ok(()) => {}

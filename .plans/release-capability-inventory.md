@@ -5,6 +5,12 @@ Baseline: Git `v2.54.0` (`0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`)
 This inventory is the Phase 1/2 release boundary. Every parsed command and option
 is either implemented for a named gate or rejected before repository mutation.
 
+Evidence state (2026-08-12): the Phase 9 working tree based on
+`1139ae497567d4ae787be849ae31d68b2552aed8` passes the full local default and
+linked matrix. Its hosted release claim is pending a same-SHA artifact after the
+changes are committed and pushed; hosted run #5 remains evidence only for
+`e2c90e8e576e7c22b86f9673b5fe4d632c18a362`.
+
 ## Command surface
 
 | Command | Release state | Behavioral gate |
@@ -48,7 +54,7 @@ is either implemented for a named gate or rejected before repository mutation.
 |---|---|---|---|
 | SVN CLI `file://` | single-path, subpath and standard layout | safe linear dcommit | required release profile |
 | SVN CLI local authenticated `svn://` | clone/fetch | safe linear dcommit | required release profile |
-| linked libsvn `file://`, local `svn://` | RA/delta read/import | CLI working-copy sink only | read/import profile |
+| linked libsvn `file://`, local `svn://` | RA/delta read/import, including dcommit post-submit verification/recovery | CLI working-copy sink only | linked read/import profile; native write deferred |
 | loopback authenticated HTTP/HTTPS DAV | CLI and linked libsvn read/import | CLI working-copy sink | validated loopback profile, not arbitrary remote infrastructure |
 | configured and real loopback `svn+ssh://` | clone/fetch | CLI working-copy sink | validated configured/loopback profile |
 | `mock://` | test infrastructure | test infrastructure | never a user-facing release profile |

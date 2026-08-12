@@ -2,6 +2,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::reset_transaction;
 use crate::config::{SvnRemoteConfig, read_svn_remote_config, svn_remote_names};
+use crate::error::GitSvnError;
 use crate::git::GitCli;
 use crate::git_svn_id::GitSvnId;
 use crate::mapping::{RefMapping, desanitize_refname, sanitize_refname};
@@ -26,25 +27,52 @@ pub struct TrackedSvn {
 
 impl TrackedSvn {
     pub fn open_rev_map(&self) -> Result<RevMap, String> {
-        RevMap::open_existing(&self.rev_map_path, self.git.object_format()?)
+        self.open_rev_map_typed().map_err(|error| error.to_string())
+    }
+
+    pub fn open_rev_map_typed(&self) -> Result<RevMap, GitSvnError> {
+        let format = self.git.object_format()?;
+        RevMap::open_existing(&self.rev_map_path, format).map_err(GitSvnError::metadata_corruption)
     }
 
     pub fn records(&self) -> Result<Vec<RevMapRecord>, String> {
-        self.open_rev_map()?.records()
+        self.records_typed().map_err(|error| error.to_string())
+    }
+
+    pub fn records_typed(&self) -> Result<Vec<RevMapRecord>, GitSvnError> {
+        self.open_rev_map_typed()?
+            .records()
+            .map_err(GitSvnError::metadata_corruption)
     }
 
     pub fn max_record(&self) -> Result<Option<RevMapRecord>, String> {
-        self.open_rev_map()?.max_record(true)
+        self.max_record_typed().map_err(|error| error.to_string())
+    }
+
+    pub fn max_record_typed(&self) -> Result<Option<RevMapRecord>, GitSvnError> {
+        self.open_rev_map_typed()?
+            .max_record(true)
+            .map_err(GitSvnError::metadata_corruption)
     }
 }
 
 pub fn resolve_tracked_svn(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, String> {
+    resolve_tracked_svn_typed(work_tree).map_err(|error| error.to_string())
+}
+
+pub fn resolve_tracked_svn_typed(work_tree: impl Into<PathBuf>) -> Result<TrackedSvn, GitSvnError> {
     resolve_tracked_svn_impl(work_tree.into(), "HEAD", false, false)
 }
 
 pub(crate) fn resolve_tracked_svn_allow_import_batch(
     work_tree: impl Into<PathBuf>,
 ) -> Result<TrackedSvn, String> {
+    resolve_tracked_svn_allow_import_batch_typed(work_tree).map_err(|error| error.to_string())
+}
+
+pub(crate) fn resolve_tracked_svn_allow_import_batch_typed(
+    work_tree: impl Into<PathBuf>,
+) -> Result<TrackedSvn, GitSvnError> {
     resolve_tracked_svn_impl(work_tree.into(), "HEAD", false, true)
 }
 
@@ -52,6 +80,13 @@ pub fn resolve_tracked_svn_at(
     work_tree: impl Into<PathBuf>,
     treeish: &str,
 ) -> Result<TrackedSvn, String> {
+    resolve_tracked_svn_at_typed(work_tree, treeish).map_err(|error| error.to_string())
+}
+
+pub fn resolve_tracked_svn_at_typed(
+    work_tree: impl Into<PathBuf>,
+    treeish: &str,
+) -> Result<TrackedSvn, GitSvnError> {
     resolve_tracked_svn_impl(work_tree.into(), treeish, true, false)
 }
 
@@ -59,6 +94,13 @@ pub(crate) fn resolve_tracked_svn_path(
     tracked: &TrackedSvn,
     svn_path: &str,
 ) -> Result<TrackedSvn, String> {
+    resolve_tracked_svn_path_typed(tracked, svn_path).map_err(|error| error.to_string())
+}
+
+pub(crate) fn resolve_tracked_svn_path_typed(
+    tracked: &TrackedSvn,
+    svn_path: &str,
+) -> Result<TrackedSvn, GitSvnError> {
     let mut candidates = tracked_candidate_mappings(&tracked.git, &tracked.config)?
         .into_iter()
         .filter(|mapping| mapping.svn_path == svn_path)
@@ -67,15 +109,15 @@ pub(crate) fn resolve_tracked_svn_path(
     candidates.dedup_by(|left, right| left.git_ref == right.git_ref);
     let mapping = match candidates.len() {
         0 => {
-            return Err(format!(
+            return Err(GitSvnError::invalid_invocation(format!(
                 "commit URL path {svn_path:?} does not match a tracked SVN mapping"
-            ));
+            )));
         }
         1 => candidates.pop().expect("one commit URL mapping"),
         _ => {
-            return Err(format!(
+            return Err(GitSvnError::ambiguity(format!(
                 "commit URL path {svn_path:?} matches multiple SVN mappings"
-            ));
+            )));
         }
     };
     let git_dir = tracked.git.git_dir()?;
@@ -83,7 +125,9 @@ pub(crate) fn resolve_tracked_svn_path(
     let metadata_dir = svn_metadata_dir(&metadata_root, &mapping.git_ref)?;
     let resolved = tracked_from_mapping(&tracked.git, &tracked.config, &mapping, &metadata_dir)?;
     if resolved.uuid != tracked.uuid {
-        return Err("commit URL mapping repository UUID does not match the tracked target".into());
+        return Err(GitSvnError::metadata_corruption(
+            "commit URL mapping repository UUID does not match the tracked target",
+        ));
     }
     Ok(resolved)
 }
@@ -93,7 +137,7 @@ fn resolve_tracked_svn_impl(
     treeish: &str,
     require_history_identity: bool,
     allow_import_batch: bool,
-) -> Result<TrackedSvn, String> {
+) -> Result<TrackedSvn, GitSvnError> {
     crate::migration::ensure_supported_git_svn_metadata(&work_tree)?;
     let git = GitCli::new(work_tree);
     if allow_import_batch {
@@ -104,7 +148,9 @@ fn resolve_tracked_svn_impl(
     reset_transaction::ensure_no_pending(&git)?;
     let remote_names = svn_remote_names(&git)?;
     if remote_names.is_empty() {
-        return Err("missing svn-remote.svn.url".to_string());
+        return Err(GitSvnError::metadata_corruption(
+            "missing svn-remote.svn.url",
+        ));
     }
     let configs = remote_names
         .iter()
@@ -146,7 +192,7 @@ fn resolve_tracked_svn_impl(
             let identity = match rev_map_first_parent_identity(&tracked, &first_parent_history) {
                 Ok(identity) => identity,
                 Err(error) => {
-                    hard_errors.push((config.name.clone(), error));
+                    hard_errors.push((config.name.clone(), error.to_string()));
                     continue;
                 }
             };
@@ -186,10 +232,10 @@ fn resolve_tracked_svn_impl(
     }
 
     if !hard_errors.is_empty() {
-        return Err(format_resolver_errors(
+        return Err(GitSvnError::metadata_corruption(format_resolver_errors(
             "invalid SVN tracking metadata across remotes",
             hard_errors,
-        ));
+        )));
     }
 
     if best_identities.len() == 1 {
@@ -202,15 +248,15 @@ fn resolve_tracked_svn_impl(
             .map(|tracked| format!("{}/{}", tracked.config.name, tracked.refname))
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(format!(
+        return Err(GitSvnError::ambiguity(format!(
             "ambiguous SVN tracking identity at first-parent distance {distance}: {targets}"
-        ));
+        )));
     }
 
     if require_history_identity {
-        return Err(format!(
+        return Err(GitSvnError::ambiguity(format!(
             "tree-ish {treeish:?} has no unambiguous SVN tracking identity"
-        ));
+        )));
     }
 
     if let Some(index) = fallbacks
@@ -228,25 +274,27 @@ fn resolve_tracked_svn_impl(
             .map(|tracked| tracked.config.name.as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        return Err(format!(
+        return Err(GitSvnError::ambiguity(format!(
             "ambiguous SVN tracking fallback across remotes: {remotes}"
-        ));
+        )));
     }
 
     if let Some((_, error)) = errors.iter().find(|(remote, _)| remote == "svn") {
-        return Err(error.clone());
+        return Err(GitSvnError::metadata_corruption(error.clone()));
     }
     if errors.len() == 1 {
-        return Err(errors.pop().expect("one resolver error").1);
+        return Err(GitSvnError::metadata_corruption(
+            errors.pop().expect("one resolver error").1,
+        ));
     }
-    Err(format!(
+    Err(GitSvnError::metadata_corruption(format!(
         "no usable SVN tracking metadata across remotes: {}",
         errors
             .into_iter()
             .map(|(remote, error)| format!("{remote}: {error}"))
             .collect::<Vec<_>>()
             .join("; ")
-    ))
+    )))
 }
 
 fn same_tracking_target(left: &TrackedSvn, right: &TrackedSvn) -> bool {
@@ -305,9 +353,8 @@ fn tracked_from_mapping(
 fn rev_map_first_parent_identity(
     tracked: &TrackedSvn,
     first_parent_history: &[String],
-) -> Result<Option<(usize, RevMapRecord)>, String> {
-    let rev_map = RevMap::open_existing(&tracked.rev_map_path, tracked.git.object_format()?)?;
-    let records = rev_map.records()?;
+) -> Result<Option<(usize, RevMapRecord)>, GitSvnError> {
+    let records = tracked.records_typed()?;
     Ok(first_parent_history
         .iter()
         .enumerate()
@@ -397,8 +444,9 @@ fn expand_ref_mapping(mapping: &RefMapping, refs: &[String]) -> Vec<RefMapping> 
 
 #[cfg(test)]
 mod tests {
-    use super::tracked_from_mapping;
+    use super::{TrackedSvn, resolve_tracked_svn_path_typed, tracked_from_mapping};
     use crate::config::SvnRemoteConfig;
+    use crate::error::ErrorCategory;
     use crate::git::GitCli;
     use crate::mapping::{MappingKind, RefMapping, build_single_path};
     use crate::rev_map::{ObjectFormat, RevMap};
@@ -446,5 +494,63 @@ mod tests {
         assert_eq!(tracked.uuid, TRANSPORT);
         assert_eq!(tracked.rev_map_path, transport_path);
         assert_eq!(tracked.source_rev_map.unwrap().path, source_path);
+    }
+
+    #[test]
+    fn typed_tracking_boundary_classifies_corrupt_rev_map() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let rev_map_path = temp.path().join("corrupt.rev_map");
+        std::fs::write(&rev_map_path, b"not-a-record").unwrap();
+        let tracked = TrackedSvn {
+            git,
+            config: SvnRemoteConfig::new("svn", "file:///repo", build_single_path("trunk")),
+            refname: "refs/remotes/git-svn".to_string(),
+            svn_path: "trunk".to_string(),
+            uuid: "uuid".to_string(),
+            rev_map_path,
+            source_rev_map: None,
+        };
+
+        let error = tracked.records_typed().unwrap_err();
+
+        assert_eq!(error.category(), ErrorCategory::MetadataCorruption);
+        assert!(error.to_string().starts_with("corrupt .rev_map"));
+    }
+
+    #[test]
+    fn typed_tracking_boundary_classifies_mapping_ambiguity() {
+        let temp = tempfile::tempdir().unwrap();
+        let git = GitCli::new(temp.path());
+        git.init().unwrap();
+        let mut config = SvnRemoteConfig::new("svn", "file:///repo", build_single_path("trunk"));
+        config.fetch = ["refs/remotes/one/trunk", "refs/remotes/two/trunk"]
+            .into_iter()
+            .map(|git_ref| RefMapping {
+                kind: MappingKind::Fetch,
+                svn_path: "trunk".to_string(),
+                git_ref: git_ref.to_string(),
+            })
+            .collect();
+        let tracked = TrackedSvn {
+            git,
+            config,
+            refname: "refs/remotes/git-svn".to_string(),
+            svn_path: "trunk".to_string(),
+            uuid: "uuid".to_string(),
+            rev_map_path: temp.path().join("unused.rev_map"),
+            source_rev_map: None,
+        };
+
+        let error = resolve_tracked_svn_path_typed(&tracked, "trunk")
+            .err()
+            .expect("duplicate mappings should be ambiguous");
+
+        assert_eq!(error.category(), ErrorCategory::Ambiguity, "{error}");
+        assert_eq!(
+            error.to_string(),
+            "commit URL path \"trunk\" matches multiple SVN mappings"
+        );
     }
 }

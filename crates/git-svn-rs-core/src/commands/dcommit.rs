@@ -1,6 +1,7 @@
 use crate::cli::DcommitArgs;
 use crate::commands::resolver::{
-    resolve_tracked_svn, resolve_tracked_svn_allow_import_batch, resolve_tracked_svn_path,
+    resolve_tracked_svn_allow_import_batch_typed, resolve_tracked_svn_path,
+    resolve_tracked_svn_typed,
 };
 use crate::commands::{fetch, rebase};
 use crate::dcommit::coordinator::{CommitSink, Coordinator, PostSubmit, RemoteHead};
@@ -17,6 +18,7 @@ use crate::dcommit::{
     PropertyMapper, RecoveryFetchIntent, RecoveryFingerprintInput, SvnCommitEditor,
     build_prepared_dcommit, merge_attribute_properties, recovery_config_fingerprint,
 };
+use crate::error::GitSvnError;
 use crate::git::{GitCli, GitCommitSummary};
 use crate::git_svn_id::GitSvnId;
 use crate::rev_map::RevMap;
@@ -31,23 +33,34 @@ mod working_copy;
 use working_copy::WorkingCopyPlanEditor;
 
 pub fn run(args: DcommitArgs) -> Result<String, String> {
-    run_in_work_tree(".", args)
+    run_typed(args).map_err(|error| error.to_string())
+}
+
+pub fn run_typed(args: DcommitArgs) -> Result<String, GitSvnError> {
+    run_in_work_tree_typed(".", args)
 }
 
 pub fn run_in_work_tree(
     work_tree: impl Into<std::path::PathBuf>,
     args: DcommitArgs,
 ) -> Result<String, String> {
+    run_in_work_tree_typed(work_tree, args).map_err(|error| error.to_string())
+}
+
+fn run_in_work_tree_typed(
+    work_tree: impl Into<std::path::PathBuf>,
+    args: DcommitArgs,
+) -> Result<String, GitSvnError> {
     if args.shared.revision.is_some() {
-        return Err(
+        return Err(GitSvnError::invalid_invocation(
             "dcommit --revision is not supported in v1; refusing to ignore an SVN editor base override"
                 .to_string(),
-        );
+        ));
     }
     let work_tree = work_tree.into();
     let git = GitCli::new(&work_tree);
     if !args.dry_run && crate::import_transaction::has_pending_batch(&git)? {
-        let pending = resolve_tracked_svn_allow_import_batch(&work_tree)?;
+        let pending = resolve_tracked_svn_allow_import_batch_typed(&work_tree)?;
         reject_read_mirror_dcommit(&pending.config, true)?;
         crate::path_url::validate_fetch_url(&pending.config.url)?;
         let refnames = crate::import_transaction::pending_batch_refnames(&git)?;
@@ -60,16 +73,20 @@ pub fn run_in_work_tree(
             )?;
         }
     }
-    let tracked = resolve_tracked_svn(work_tree)?;
+    let tracked = resolve_tracked_svn_typed(work_tree)?;
     if tracked.config.no_metadata {
-        return Err("dcommit is unavailable for --no-metadata one-shot imports".to_string());
+        return Err(GitSvnError::unsupported(
+            "dcommit is unavailable for --no-metadata one-shot imports",
+        ));
     }
     reject_read_mirror_dcommit(&tracked.config, false)?;
     if tracked.git.range_has_merges(&tracked.refname, "HEAD")? {
-        return Err("dcommit does not support merge commits in the local commit range".to_string());
+        return Err(GitSvnError::unsupported(
+            "dcommit does not support merge commits in the local commit range",
+        ));
     }
     let revision = tracked
-        .max_record()?
+        .max_record_typed()?
         .map(|record| record.revision)
         .unwrap_or(0);
     let target = resolve_dcommit_target(&tracked, args.commit_url.as_deref())?;
@@ -83,10 +100,10 @@ pub fn run_in_work_tree(
                 .or(tracked.config.config_dir.as_ref())
                 .is_none()
         {
-            return Err(
+            return Err(GitSvnError::invalid_invocation(
                 "svn+ssh dcommit requires --config-dir or svn-remote.<name>.config-dir for a configured non-interactive tunnel"
                     .to_string(),
-            );
+            ));
         }
         crate::path_url::validate_dcommit_write_urls(target_url, &tracked.config.url)?;
     }
@@ -122,10 +139,10 @@ pub fn run_in_work_tree(
                 .and_then(|value| value.active.as_ref())
                 .is_none()
         {
-            return Err(
+            return Err(GitSvnError::invalid_invocation(
                 "--adopt-revision requires an unfinished dcommit journal with an in-flight submission"
                     .to_string(),
-            );
+            ));
         }
         let may_submit = discovery
             .as_ref()
@@ -136,41 +153,42 @@ pub fn run_in_work_tree(
                 })
             });
         if may_submit && !tracked.git.is_work_tree_clean()? {
-            return Err(
+            return Err(GitSvnError::invalid_invocation(
                 "dcommit requires a clean index and working tree before SVN write-back".to_string(),
-            );
+            ));
         }
         reject_completed_ledger_overlap(discovery.as_ref(), &commits)?;
         if target_url.starts_with("mock://") && tracked.config.url.starts_with("mock://") {
             if args.adopt_revision.is_some() {
-                return Err(
+                return Err(GitSvnError::unsupported(
                     "--adopt-revision is only implemented for real file:// and svn:// dcommit recovery"
                         .to_string(),
-                );
-            }
-            if let Some(active) = discovery.as_ref().and_then(|value| value.active.as_ref()) {
-                return Err(format!(
-                    "unfinished dcommit journal found at {}; mock recovery is not implemented",
-                    active.directory.display()
                 ));
             }
+            if let Some(active) = discovery.as_ref().and_then(|value| value.active.as_ref()) {
+                return Err(GitSvnError::metadata_corruption(format!(
+                    "unfinished dcommit journal found at {}; mock recovery is not implemented",
+                    active.directory.display()
+                )));
+            }
             if args.mergeinfo.is_some() {
-                return Err(
+                return Err(GitSvnError::unsupported(
                     "--mergeinfo write-back is only implemented for file:// URLs in v1".to_string(),
-                );
+                ));
             }
             return dcommit_mock(
                 MockDcommit {
                     git: &tracked.git,
                     refname: &tracked.refname,
-                    rev_map: tracked.open_rev_map()?,
+                    rev_map: tracked.open_rev_map_typed()?,
                     uuid: &tracked.uuid,
                     target_url: &tracked.config.url,
                     base_revision: revision,
                     no_rebase: args.no_rebase,
                 },
                 commits,
-            );
+            )
+            .map_err(GitSvnError::from);
         }
         if is_svn_cli_write_back_url(target_url) && is_svn_cli_write_back_url(&tracked.config.url) {
             let svn_options = resolved_dcommit_svn_options(&tracked, &args, target_url)?;
@@ -212,20 +230,22 @@ pub fn run_in_work_tree(
             );
         }
         {
-            return Err("dcommit write-back URL profile is unsupported".to_string());
+            return Err(GitSvnError::unsupported(
+                "dcommit write-back URL profile is unsupported",
+            ));
         }
     }
 
     let discovery =
         discover_repository_journals(&svn_metadata_root).map_err(|error| error.to_string())?;
     if let Some(active) = discovery.as_ref().and_then(|value| value.active.as_ref()) {
-        return Err(format!(
+        return Err(GitSvnError::metadata_corruption(format!(
             "unfinished dcommit journal found at {}; dcommit --dry-run is read-only and will not recover it",
             active.directory.display()
-        ));
+        )));
     }
     reject_completed_ledger_overlap(discovery.as_ref(), &commits)?;
-    dcommit_dry_run(&tracked, &args, &target, &commits)
+    dcommit_dry_run(&tracked, &args, &target, &commits).map_err(GitSvnError::from)
 }
 
 fn reject_read_mirror_dcommit(
@@ -484,7 +504,7 @@ fn dcommit_file_svn(
     ctx: FileSvnDcommit<'_>,
     commits: Vec<GitCommitSummary>,
     active: Option<LocatedJournal>,
-) -> Result<String, String> {
+) -> Result<String, GitSvnError> {
     if commits.is_empty() && active.is_none() {
         return Ok("No local commits to dcommit.\n".to_string());
     }
@@ -601,7 +621,8 @@ fn dcommit_file_svn(
         active.is_none(),
     )?;
     if plans.is_empty() && active.is_none() {
-        return finish_noop_dcommit(ctx.git, ctx.mapping_ref, ctx.no_rebase);
+        return finish_noop_dcommit(ctx.git, ctx.mapping_ref, ctx.no_rebase)
+            .map_err(GitSvnError::from);
     }
     let original_head = match &active {
         Some(located) => located.journal.original_head.clone(),
@@ -623,9 +644,9 @@ fn dcommit_file_svn(
     .map_err(|error| error.to_string())?;
     let journal_directory = if let Some(located) = active {
         if located.journal.target != target {
-            return Err(
+            return Err(GitSvnError::metadata_corruption(
                 "unfinished dcommit journal target does not match the resolved target".to_string(),
-            );
+            ));
         }
         let mut journal = located.journal;
         reconcile_recovery_config_fingerprint(
@@ -675,11 +696,9 @@ fn dcommit_file_svn(
     if let Some(revision) = ctx.adopt_revision {
         coordinator
             .adopt_in_flight(&mut prepared, revision)
-            .map_err(|error| error.to_string())?;
+            .map_err(GitSvnError::from)?;
     }
-    coordinator
-        .run(&mut prepared)
-        .map_err(|error| error.to_string())?;
+    coordinator.run(&mut prepared).map_err(GitSvnError::from)?;
 
     let mut out = format!(
         "Committed {} local Git commit(s)\n",
@@ -689,7 +708,11 @@ fn dcommit_file_svn(
         let revision = match entry.state {
             EntryState::Submitted { svn_revision }
             | EntryState::FetchedVerified { svn_revision, .. } => svn_revision,
-            _ => return Err("completed dcommit journal entry has no SVN revision".to_string()),
+            _ => {
+                return Err(GitSvnError::metadata_corruption(
+                    "completed dcommit journal entry has no SVN revision",
+                ));
+            }
         };
         let label = commits
             .iter()

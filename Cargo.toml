@@ -15,7 +15,6 @@ homepage = "https://github.com/OathMoon/rgs"
 readme = "README.md"
 
 [workspace.dependencies]
-anyhow = "1"
 assert_cmd = "2"
 chrono = "0.4"
 clap = { version = "4", features = ["derive", "env"] }

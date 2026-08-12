@@ -18,7 +18,6 @@ name = "git-svn-rs"
 path = "src/main.rs"
 
 [dependencies]
-anyhow.workspace = true
 clap.workspace = true
 git-svn-rs-core = { version = "0.1.0", path = "../git-svn-rs-core" }
 

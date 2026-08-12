@@ -1,6 +1,7 @@
 name: Frozen compatibility
 
 on:
+  workflow_call:
   workflow_dispatch:
 
 jobs:
@@ -8,6 +9,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       GIT_SVN_RS_STRICT_COMPAT: "1"
+      GIT_SVN_RS_TEST_TMPDIR: ${{ runner.temp }}/git-svn-rs-tests
       LC_ALL: C
       TZ: UTC
     steps:
@@ -77,9 +79,9 @@ jobs:
             grep -Fq '"status": "passed"' "$summary"
             grep -Fq '"execution": "executed"' "$summary"
             grep -Fq '"frozen_git_commit": "0b13e48a3a30cdfa94e8ef842e24d6045ab3d015"' "$summary"
+            grep -Fq '"comparison_backend": "svn-cli-vs-frozen-perl"' "$summary"
+            grep -Fq '"build_features": "default-svn-cli"' "$summary"
           done
-          printf '{\n  "schema_version": 1,\n  "status": "passed",\n  "required_scenario_count": %s\n}\n' \
-            "${#required_scenarios[@]}" > "$GIT_SVN_RS_COMPAT_ARTIFACT_DIR/release-summary.json"
 
       - name: Linked libsvn integration
         run: cargo test -p git-svn-rs-core --features svn-libsvn
@@ -90,10 +92,21 @@ jobs:
       - name: Linked libsvn CLI workflows
         run: cargo test -p git-svn-rs --features svn-libsvn --test clone_fetch_real_svn
 
+      - name: Linked libsvn dcommit workflows
+        run: cargo test -p git-svn-rs --features svn-libsvn --test dcommit_linear
+
       - name: Static gates
         run: |
           cargo fmt --all -- --check
           cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Write current-SHA release evidence
+        shell: bash
+        run: |
+          commit_sha="$(git rev-parse HEAD)"
+          test "$commit_sha" = "$GITHUB_SHA"
+          printf '{\n  "schema_version": 2,\n  "status": "passed",\n  "commit_sha": "%s",\n  "required_scenario_count": 8,\n  "scenario_backend": "svn-cli-vs-frozen-perl",\n  "scenario_build_features": "default-svn-cli",\n  "linked_backend_profiles": ["core-parallel", "core-serial", "cli-read-import", "cli-dcommit-post-fetch"]\n}\n' \
+            "$commit_sha" > "$GIT_SVN_RS_COMPAT_ARTIFACT_DIR/release-summary.json"
 
       - name: Upload compatibility artifacts
         if: ${{ always() }}

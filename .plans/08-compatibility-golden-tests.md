@@ -6,7 +6,9 @@ Prove the declared `git-svn-rs` profiles against the frozen Git `v2.54.0` Perl i
 
 ## Current State
 
-State: `release-pass` for the declared compatibility profiles.
+State: `behavior-pass` for the current working tree; the previous `release-pass`
+remains bound to commit `e2c90e8e576e7c22b86f9673b5fe4d632c18a362` until a new
+current-commit hosted artifact is produced.
 
 The exact harness now captures config, ref and graph identity, full rev_maps,
 HEAD/index/worktree state, modes, properties, readonly output, reset/rebase/gc,
@@ -16,12 +18,15 @@ failure. Linked libsvn passes both default-parallel and serial gates.
 
 Every scenario summary records execution status, frozen tag/commit, Git,
 git-svn, SVN/libsvn and Rust versions, OS/architecture/object format,
-timezone/locale, backend, and artifact profile. The manual-only hosted workflow
-validates the required summary set and publishes a release summary. Manual hosted
+timezone/locale, backend, build-feature identity, and artifact profile. The
+compatibility workflow is reusable by the release/tag workflow, audits all eight
+required summaries, runs the linked dcommit suite, and publishes a release summary
+bound to the tested commit SHA. Manual hosted
 run [#5](https://github.com/OathMoon/rgs/actions/runs/30790332534) passed every
 step for commit `e2c90e8e576e7c22b86f9673b5fe4d632c18a362`; artifact
 `frozen-compatibility-artifacts` contains the captured evidence and release
-summary. Automatic push/pull-request triggers remain disabled.
+summary. It is historical evidence, not evidence for the current uncommitted
+Phase 9 working tree.
 
 ## Normative References
 

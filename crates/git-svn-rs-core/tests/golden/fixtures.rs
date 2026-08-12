@@ -325,6 +325,7 @@ impl GoldenArtifactCapture {
                 "  \"timezone\": \"{}\",\n",
                 "  \"locale\": \"{}\",\n",
                 "  \"comparison_backend\": \"svn-cli-vs-frozen-perl\",\n",
+                "  \"build_features\": \"default-svn-cli\",\n",
                 "  \"artifact_profile\": \"exact-supported-subset-v1\"",
                 "{}\n",
                 "}}\n"

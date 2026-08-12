@@ -6,6 +6,28 @@ use tempfile::TempDir;
 
 const MISSING_TOOLS: &str = "svnadmin and svn are required";
 
+pub fn test_temp_root() -> Result<PathBuf, String> {
+    let root = ["GIT_SVN_RS_TEST_TMPDIR", "CARGO_TARGET_TMPDIR"]
+        .into_iter()
+        .find_map(|name| std::env::var_os(name).filter(|value| !value.is_empty()))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    std::fs::create_dir_all(&root).map_err(|error| {
+        format!(
+            "failed to create test temp root {}: {error}",
+            root.display()
+        )
+    })?;
+    Ok(root)
+}
+
+pub fn test_tempdir(prefix: &str) -> Result<TempDir, String> {
+    tempfile::Builder::new()
+        .prefix(prefix)
+        .tempdir_in(test_temp_root()?)
+        .map_err(|error| format!("failed to create {prefix} fixture: {error}"))
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SvnToolPolicy {
     Skip(String),
@@ -100,10 +122,7 @@ pub struct StandardSvnFixture {
 
 impl StandardSvnFixture {
     pub fn create() -> Result<Self, String> {
-        let tmp = tempfile::Builder::new()
-            .prefix("svn-fixture-")
-            .tempdir_in(std::env::current_dir().map_err(|e| e.to_string())?)
-            .map_err(|e| e.to_string())?;
+        let tmp = test_tempdir("svn-fixture-")?;
         let repo = tmp.path().join("repo");
         let wc = tmp.path().join("wc");
 
@@ -344,6 +363,109 @@ impl StandardSvnFixture {
                 "--non-interactive",
                 "-m",
                 "modify run script content",
+            ],
+        )?;
+        Ok(self.latest_revision())
+    }
+
+    #[allow(dead_code)]
+    pub fn add_trunk_executable_and_special(&self) -> Result<u32, String> {
+        let wc = self._tmp.path().join("add-native-properties-wc");
+        run(
+            self._tmp.path(),
+            "svn",
+            &[
+                "checkout",
+                "--non-interactive",
+                self.url().as_str(),
+                path_arg(&wc)?,
+            ],
+        )?;
+        std::fs::write(wc.join("trunk/tool.sh"), "#!/bin/sh\necho tool\n")
+            .map_err(|e| e.to_string())?;
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("src/lib.rs", wc.join("trunk/new-link"))
+            .map_err(|e| e.to_string())?;
+        #[cfg(not(unix))]
+        std::fs::write(wc.join("trunk/new-link"), "link src/lib.rs").map_err(|e| e.to_string())?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "add",
+                "--non-interactive",
+                "trunk/tool.sh",
+                "trunk/new-link",
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "propset",
+                "--non-interactive",
+                "svn:executable",
+                "*",
+                "trunk/tool.sh",
+            ],
+        )?;
+        #[cfg(not(unix))]
+        run(
+            &wc,
+            "svn",
+            &[
+                "propset",
+                "--non-interactive",
+                "svn:special",
+                "x",
+                "trunk/new-link",
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "commit",
+                "--non-interactive",
+                "-m",
+                "add executable and special files",
+            ],
+        )?;
+        Ok(self.latest_revision())
+    }
+
+    #[allow(dead_code)]
+    pub fn replace_trunk_symlink_with_regular_file(&self) -> Result<u32, String> {
+        let wc = self._tmp.path().join("replace-special-kind-wc");
+        run(
+            self._tmp.path(),
+            "svn",
+            &[
+                "checkout",
+                "--non-interactive",
+                self.url().as_str(),
+                path_arg(&wc)?,
+            ],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &["delete", "--non-interactive", "trunk/link-to-lib"],
+        )?;
+        std::fs::write(wc.join("trunk/link-to-lib"), "regular\n").map_err(|e| e.to_string())?;
+        run(
+            &wc,
+            "svn",
+            &["add", "--non-interactive", "trunk/link-to-lib"],
+        )?;
+        run(
+            &wc,
+            "svn",
+            &[
+                "commit",
+                "--non-interactive",
+                "-m",
+                "replace special link with regular file",
             ],
         )?;
         Ok(self.latest_revision())

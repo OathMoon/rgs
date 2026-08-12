@@ -1,27 +1,30 @@
 # git-svn-rs Implementation Progress Record
-Last audited: 2026-08-03
+Last audited: 2026-08-12
 Branch: `codex-execute-git-svn-rs-plans`
-Committed HEAD at audit: `e2c90e8 Fix hosted DAV loopback readiness`
+Committed base at audit: `1139ae497567d4ae787be849ae31d68b2552aed8 Fix Windows metadata command paths`
+Phase 9 P0/P1 changes are present in the working tree and are not yet committed.
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
 ## Current Overall State
 
-The repository provides an initially complete core workflow for covered `file://`,
-local `svn://`, configured and real loopback `svn+ssh`, mock, and authenticated
-loopback HTTP/HTTPS DAV reads and writes. Hosted CI remains available only by
-explicit manual dispatch.
+The repository provides the covered `file://`, local `svn://`, configured and real
+loopback `svn+ssh`, mock, and authenticated loopback HTTP/HTTPS DAV workflows. The
+2026-08-12 Phase 9 P0/P1 local closure fixes linked post-submit properties,
+portable fixtures, typed top-level errors, and protected release gates. It is not
+yet a release pass because no hosted artifact can be bound to uncommitted changes.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `release-pass` for declared v1 profiles | complete capability inventory, CLI/core/opt-in shim, diagnostics, output/exit boundaries, explicit unsupported no-mutation tests, hosted gate | future commands remain explicitly out of scope |
 | 2 config/mapping | `release-pass` for declared profiles | centralized config, relative/full layouts, globs, authors, filters, ref sanitization, metadata modes/auth precedence, exact hosted artifacts | broader future platform/remote profiles |
-| 3 metadata/rev_map | `behavior-pass` for covered local profiles | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, exact v0-v5 rejection | automatic migration/typed errors |
-| 4 SVN adapters | `behavior-pass` for covered file/svn/SSH/loopback-HTTP(S) profiles | shared replay, per-file RA-serf delta batons, audited FFI, byte-safe revprops, cache-first TTY auth, real OpenSSH and authenticated DAV E2E | broader remote/platform validation |
-| 5 import/clone/fetch | `behavior-pass` for covered local profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI parity | remaining obscure Fetcher semantics |
+| 3 metadata/rev_map | `behavior-pass` for declared layouts | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, typed resolver/rev_map/dcommit boundaries, exact v0-v5 rejection | automatic migration and broader internal typed-error migration |
+| 4 SVN adapters | `behavior-pass` for declared CLI/linked read profiles | shared replay, complete incremental add properties, per-file RA-serf batons, audited FFI, ADR, portable fixtures, parallel/serial linked gates | native write-back, module split, broader remote/platform validation |
+| 5 import/clone/fetch | `behavior-pass` for declared profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, linked CLI 48/48 parity | remaining obscure Fetcher semantics |
 | 6 readonly | `behavior-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, and PTY pager | broader platform terminal fidelity |
-| 7 dcommit | `behavior-pass` for covered profiles | typed plans, v4 recovery, stale-target preflight, file/svn/HTTP(S)/configured and real-SSH exact writes | broader remote faults |
-| 8 golden/release | `release-pass` for declared profiles | strict frozen Perl 2.54.0 suite, complete Linux protocol/linked gates, 8 required summaries, and hosted run #5 pass | forward-compat and broader profiles require separate gates |
+| 7 dcommit | `behavior-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, full linked dcommit 73/73 gate | native write-back and broader remote faults |
+| 8 golden/release | `behavior-pass` on current tree; historical hosted pass on `e2c90e8` | 41 scenarios, 8 required summaries, backend/build-feature identity, reusable same-SHA release workflow | current-commit hosted artifact |
+| 9 hardening | `local-p0-p1-pass` | linked property/recovery fixes, temp-root migration, ADR, typed errors, developer/backend/release gates | commit/push and execute hosted release evidence; P2 maintenance remains |
 
 ## Validated Capabilities
 
@@ -43,6 +46,9 @@ explicit manual dispatch.
   absolute paths, so later fetches resolve the same file with path-rich errors.
 - Global `-q`/`--quiet` and `-v`/`--verbose` fail explicitly instead of being
   parsed and silently ignored.
+- The CLI boundary uses `GitSvnError` categories for unsupported, authentication,
+  ambiguity, metadata corruption, partial write, external command, and invalid
+  invocation failures while preserving frozen text and nested error sources.
 - SHA-1/SHA-256 rev_maps support zero records, non-creating reads, append ordering,
   OS locks, fsync, reset, gitfiles, and commondir. All read/write entry points
   reject non-monotonic revisions and non-trailing zero OIDs before mutation.
@@ -65,12 +71,15 @@ explicit manual dispatch.
   ranges, and checkout/no-checkout.
 - CLI and linked libsvn use the common `RaSession`/`FetchEditor` coordinator.
   Linked stdlayout copy replay and direct subdirectory sessions pass the same
-  34-case CLI suite as the default backend.
+  48-case CLI suite as the default backend.
 - CLI `get_dir` returns immediate files/directories plus node properties; an empty
   nested branch inside an ancestor copy is discovered with its auxiliary parent.
 - Native update/switch handles initial and incremental text deltas, copy-only
   files, directory/file properties, checksums, absent nodes, deletes, and callback
   error conversion.
+- Incremental linked add replay supplies authoritative file properties before
+  close, preserving executable and special modes; removal and special-to-regular
+  transitions are covered by real native-backend fixtures.
 - Production libsvn callbacks validate required baton/output/pool and
   string-data/length pairs, return owned errors on invalid lifecycle state, catch
   log receiver panics, and avoid panic-based error construction. Non-null dangling
@@ -233,6 +242,9 @@ explicit manual dispatch.
   targets also receive read-only remote UUID and base-revision validation.
 - Dcommit target precedence is CLI `--commit-url`, persisted `commiturl`, `pushurl`
   plus mapping, then read URL; full URLs bind ref/rev_map/footer through recovery.
+- A real linked post-fetch failure after an executable-file SVN commit leaves the
+  submitted revision durable; retry performs fetch/verification only, creates no
+  second SVN revision, and publishes matching tree/ref/rev_map/footer state.
 
 ### Golden and release evidence
 
@@ -241,53 +253,49 @@ explicit manual dispatch.
   HEAD/index/worktree, tree contents/modes/properties, readonly outputs, clone
   output, local file/svn writes, submitted recovery, and dirty no-write behavior.
 - Each exact scenario writes a JSON summary with execution status, frozen source,
-  toolchain/platform, backend, and artifact-profile identity, and retains
+  toolchain/platform, backend, build-feature, and artifact-profile identity, and retains
   normalized Perl/Rust artifacts.
 - `.github/workflows/compatibility.yml` installs frozen Git/SVN/libsvn and runs
-  workspace, linked parallel/serial, linked CLI, formatting, clippy, and strict
-  compatibility gates. `scripts/verify.ps1 -StrictCompat` mirrors these local gates.
+  workspace, linked parallel/serial, linked CLI read/write, formatting, clippy,
+  and strict compatibility gates. The release/tag workflow calls that reusable
+  gate and rejects artifacts not bound to the current SHA.
 
 ## Current Verification
 
-Verified on 2026-08-03 in WSL Ubuntu 24.04 with `GIT_SVN_RS_STRICT_COMPAT=1`,
-`LC_ALL=C`, and `TZ=UTC`:
+Verified locally on 2026-08-12 in WSL from the repository root:
 
-- `cargo test --workspace`; core 171/171, readonly 82/82, dcommit 72/72,
-  real SVN CLI 48/48, and frozen Perl golden 41/41.
-- Authenticated HTTP/HTTPS clone/fetch and dcommit plus real OpenSSH clone/dcommit
-  executed and passed with the required services present; no strict-required Linux
-  protocol fixture was skipped.
-- Linked core 203/203 and backend 34/34 pass in parallel and serial runs; linked
-  CLI real SVN workflows pass 48/48.
-- `cargo fmt --all -- --check`; clippy with all targets/features; release workspace
-  build with all features; linked release diagnostics; `git diff --check`.
-- Required release-summary audit: all 8 clone/layout/write/recovery/no-write
-  scenarios executed, passed, and identify frozen commit
-  `0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`.
-- `cargo package` succeeds for core and shim. CLI packaging is publish-order
-  dependent and succeeds after `git-svn-rs-core` version `0.1.0` is available to
-  the registry.
-- The strict C-locale audit exposed and fixed fixture-only `svnadmin setrevprop`
-  native-encoding handling by giving that byte-preservation subprocess an explicit
-  UTF-8 locale; the focused regression and all full gates pass afterward.
-- Manual hosted Frozen compatibility
-  [run #5](https://github.com/OathMoon/rgs/actions/runs/30790332534) passed on
-  commit `e2c90e8e576e7c22b86f9673b5fe4d632c18a362`: strict workspace and summary
-  audit, linked libsvn parallel/serial, linked CLI, formatting, clippy, and
-  artifact upload. Artifact `frozen-compatibility-artifacts` contains the exact
-  scenario evidence and `release-summary.json`.
-- The hosted-only IPv6 localhost failure observed in run #4 was fixed by making
-  the DAV fixture listen on both supported loopback families and retaining the
-  exact SVN readiness error. HTTP/HTTPS reads and writes and the full 48-case CLI
-  suite passed locally before the successful rerun.
+- `cargo test --workspace`: core 177/177, readonly 82/82, dcommit 73/73,
+  real SVN CLI 48/48, and all 41 available golden scenarios passed.
+- `cargo test -p git-svn-rs-core --features svn-libsvn` and the same command with
+  `--test-threads=1`: linked core 209/209 and native backend 36/36 passed in both
+  parallel and serial runs. Feature-gated golden test functions also pass, but
+  their intentional linked skips are not counted as executed release scenarios.
+- Linked CLI real workflows passed clone/fetch 48/48 and dcommit 73/73, including
+  executable/special projection, type transition, and no-resubmit recovery.
+- A separate strict default-backend run with frozen Git/Perl 2.54.0 and
+  SVN/libsvn 1.14.3 executed all required comparisons: golden 41/41, with all
+  eight required summaries marked executed/passed and carrying the expected
+  frozen commit, backend, and build-feature identifiers.
+- Fixture creation used the centralized system temp root; the repository-root run
+  introduced no new random `golden-stdlayout-*` or `svn-fixture-*` directories.
+- Formatting, all-target/all-feature clippy with warnings denied, and
+  `git diff --check` passed for this working tree.
+- Historical hosted run
+  [#5](https://github.com/OathMoon/rgs/actions/runs/30790332534) remains valid only
+  for commit `e2c90e8e576e7c22b86f9673b5fe4d632c18a362`. A new hosted summary for
+  the current changes does not exist before commit/push and must not be inferred.
 
 ## Remaining Work
 
-Phases 1, 2, and 8 have no remaining issue inside the declared v1 compatibility
-profiles. Automatic `push` and `pull_request` compatibility triggers remain
-intentionally disabled; future hosted validation uses `workflow_dispatch` only.
-Broader remote/platform profiles, native libsvn write-back, migration, and other
-phase-specific deferred capabilities remain outside this release claim.
+P0/P1 implementation is locally complete. The remaining release action is to
+commit/push this working tree and let the release/tag path produce and verify the
+strict same-SHA hosted artifact. Phase 09 must not be marked `release-pass` before
+that artifact exists.
+
+P2 module splitting, import-loop optimization, public-API narrowing, and packaging
+hygiene remain maintenance work. Broader remote/platform profiles, native libsvn
+write-back, automatic migration, full Log.pm, and other deferred capabilities stay
+outside this release claim.
 
 ## Important Commit Anchors
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
@@ -329,9 +337,12 @@ phase-specific deferred capabilities remain outside this release claim.
 
 ## Next Steps
 
-1. Treat phases 1, 2, and 8 as closed for the declared v1 profiles.
-2. Decide separately whether to create a version tag/publish packages or expand a
-   currently deferred profile; neither is implied by this compatibility gate.
+1. Review and commit the Phase 9 working tree without staging the preserved
+   pre-existing untracked files.
+2. Push the commit and execute the protected release/strict workflow; archive the
+   same-SHA `release-summary.json`, then mark Phase 8/9 `release-pass`.
+3. Schedule P2 separately; do not expand deferred profiles as part of release
+   evidence collection.
 
 ## Handoff Notes
 
@@ -342,5 +353,8 @@ phase-specific deferred capabilities remain outside this release claim.
   Authenticated loopback HTTP/HTTPS DAV reads and writes passed locally on
   2026-08-01; linked libsvn covers reads while dcommit uses the CLI sink.
 - The linked backend is a read/import backend. Dcommit still uses the SVN CLI
-  working-copy sink for the covered local write profiles.
+  working-copy sink for the covered local write profiles, while linked builds use
+  libsvn for post-submit read/import verification and recovery.
+- Test fixtures default to the system temp directory; use
+  `GIT_SVN_RS_TEST_TMPDIR` for an explicit root in CI or diagnostics.
 - Migration remains inspection/rejection rather than automatic conversion.
