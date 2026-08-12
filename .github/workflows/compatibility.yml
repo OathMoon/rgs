@@ -9,7 +9,6 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       GIT_SVN_RS_STRICT_COMPAT: "1"
-      GIT_SVN_RS_TEST_TMPDIR: ${{ runner.temp }}/git-svn-rs-tests
       LC_ALL: C
       TZ: UTC
     steps:
@@ -17,7 +16,9 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Configure compatibility artifacts
-        run: echo "GIT_SVN_RS_COMPAT_ARTIFACT_DIR=$RUNNER_TEMP/compat-artifacts" >> "$GITHUB_ENV"
+        run: |
+          echo "GIT_SVN_RS_COMPAT_ARTIFACT_DIR=$RUNNER_TEMP/compat-artifacts" >> "$GITHUB_ENV"
+          echo "GIT_SVN_RS_TEST_TMPDIR=$RUNNER_TEMP/git-svn-rs-tests" >> "$GITHUB_ENV"
 
       - name: Install compatibility dependencies
         run: |
