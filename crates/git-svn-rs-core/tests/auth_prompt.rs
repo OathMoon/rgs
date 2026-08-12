@@ -95,6 +95,30 @@ fn askpass_requests_a_missing_username_before_the_password() {
     );
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn askpass_retries_while_the_program_is_temporarily_open_for_writing() {
+    let temp = tempfile::tempdir().unwrap();
+    let script = write_askpass_script(
+        temp.path(),
+        "temporarily-busy-askpass",
+        "#!/bin/sh\nprintf 'secret\\n'\n",
+    );
+    let writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&script)
+        .unwrap();
+    let release_writer = std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        drop(writer);
+    });
+
+    let result = AskpassAuthPrompt::new(script).simple(auth_request());
+    release_writer.join().unwrap();
+
+    assert_eq!(result.unwrap().password, "secret");
+}
+
 #[cfg(unix)]
 #[test]
 fn askpass_failure_and_empty_answer_are_secret_safe() {

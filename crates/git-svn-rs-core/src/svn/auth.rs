@@ -72,10 +72,17 @@ impl AuthPrompt for AskpassAuthPrompt {
 
 impl AskpassAuthPrompt {
     fn answer(&self, prompt: &str, kind: &str) -> Result<String, String> {
-        let output = Command::new(&self.program)
-            .arg(prompt)
-            .output()
-            .map_err(|error| format!("SVN askpass failed to start: {error}"))?;
+        let mut text_file_busy_retries = 0;
+        let output = loop {
+            match Command::new(&self.program).arg(prompt).output() {
+                Err(error) if is_text_file_busy(&error) && text_file_busy_retries < 10 => {
+                    text_file_busy_retries += 1;
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                result => break result,
+            }
+        }
+        .map_err(|error| format!("SVN askpass failed to start: {error}"))?;
         if !output.status.success() {
             return Err(format!("SVN askpass exited with status {}", output.status));
         }
@@ -83,6 +90,16 @@ impl AskpassAuthPrompt {
             .map_err(|_| format!("SVN askpass returned a non-UTF-8 {kind}"))
             .map(|answer| answer.trim_end_matches(['\r', '\n']).to_string())
     }
+}
+
+#[cfg(unix)]
+fn is_text_file_busy(error: &std::io::Error) -> bool {
+    error.raw_os_error() == Some(libc::ETXTBSY)
+}
+
+#[cfg(not(unix))]
+fn is_text_file_busy(_error: &std::io::Error) -> bool {
+    false
 }
 
 #[derive(Debug, Clone, Copy)]
