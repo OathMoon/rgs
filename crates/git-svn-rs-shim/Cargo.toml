@@ -8,6 +8,11 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "Opt-in git-svn compatibility shim for git-svn-rs"
+include = [
+    "/src/**",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+]
 
 [[bin]]
 name = "git-svn"

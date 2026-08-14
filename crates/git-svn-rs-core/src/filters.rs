@@ -1,5 +1,10 @@
 use fancy_regex::Regex;
 
+#[cfg(test)]
+thread_local! {
+    static REGEX_COMPILATION_COUNT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FilterDecision {
     Include,
@@ -43,11 +48,25 @@ impl PathFilters {
 
 fn compile_regex(pattern: Option<String>) -> Result<Option<Regex>, String> {
     match pattern {
-        Some(pattern) => Regex::new(&pattern)
-            .map(Some)
-            .map_err(|err| err.to_string()),
+        Some(pattern) => {
+            #[cfg(test)]
+            REGEX_COMPILATION_COUNT.with(|count| count.set(count.get() + 1));
+            Regex::new(&pattern)
+                .map(Some)
+                .map_err(|err| err.to_string())
+        }
         None => Ok(None),
     }
+}
+
+#[cfg(test)]
+pub(crate) fn reset_regex_compilation_count() {
+    REGEX_COMPILATION_COUNT.with(|count| count.set(0));
+}
+
+#[cfg(test)]
+pub(crate) fn regex_compilation_count() -> usize {
+    REGEX_COMPILATION_COUNT.with(std::cell::Cell::get)
 }
 
 fn matches_regex(regex: &Option<Regex>, path: &str) -> Result<bool, String> {

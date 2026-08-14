@@ -1,8 +1,9 @@
 # git-svn-rs Implementation Progress Record
 Last audited: 2026-08-12
 Branch: `codex-execute-git-svn-rs-plans`
-Phase 9 P0/P1 evidence commit: `c0dfb2067f75806935b2b36462d5819923652634`
-Protected hosted evidence: [release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
+Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634`
+Last proven release commit: `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`
+Protected hosted evidence: [release gate run #31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -13,7 +14,9 @@ loopback `svn+ssh`, mock, and authenticated loopback HTTP/HTTPS DAV workflows. T
 2026-08-12 Phase 9 P0/P1 local closure fixes linked post-submit properties,
 portable fixtures, typed top-level errors, and protected release gates. The
 protected hosted gate passed the same strict/linked/static matrix and independently
-verified the retained artifact against the evidence commit SHA.
+verified the retained artifact against the release commit SHA. Phase 10 now owns
+post-release maintainability and package-readiness work; its working SHA and local
+verification must remain distinct from this last proven release baseline.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
@@ -24,8 +27,9 @@ verified the retained artifact against the evidence commit SHA.
 | 5 import/clone/fetch | `release-pass` for declared profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, hosted linked CLI 48/48 parity | remaining obscure Fetcher semantics |
 | 6 readonly | `release-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, PTY pager, exact hosted artifacts | broader platform terminal fidelity |
 | 7 dcommit | `release-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, hosted linked dcommit 73/73 gate | native write-back and broader remote faults |
-| 8 golden/release | `release-pass` at `c0dfb20` | hosted 41 scenarios, 8 required summaries, backend/build-feature identity, same-SHA release summary and verifier | forward-compatibility runs remain separately scoped |
-| 9 hardening | `release-pass` for P0/P1 | linked property/recovery fixes, temp-root migration, ADR, typed errors, protected hosted release evidence | P2 maintenance remains |
+| 8 golden/release | `release-pass` at `6f22803` | hosted 41 scenarios, 8 required summaries, backend/build-feature identity, same-SHA release summary and verifier | forward-compatibility runs remain separately scoped |
+| 9 hardening | `release-pass` for P0/P1 at `6f22803` | linked property/recovery fixes, temp-root migration, ADR, typed errors, protected hosted release evidence | maintenance scope transferred to Phase 10 |
+| 10 maintainability/package | `in-progress`; initial slice `complete-local` | audited package isolation/licenses, import immutable runtime regression, Node 24 Actions update, independent execution plan | release documents/publish-order proof, module splits, API narrowing and final hosted revalidation |
 
 ## Validated Capabilities
 
@@ -263,8 +267,8 @@ verified the retained artifact against the evidence commit SHA.
   and strict compatibility gates. The release/tag workflow calls that reusable
   gate and rejects artifacts not bound to the current SHA.
 - Protected hosted release gate
-  [#31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
-  passed for `c0dfb2067f75806935b2b36462d5819923652634`; the downloaded schema-2
+  [#31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)
+  passed for `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`; the downloaded schema-2
   release summary records `status: passed`, eight required scenarios, the default
   SVN-CLI-vs-frozen-Perl profile, and all four linked backend profiles.
 
@@ -272,14 +276,23 @@ verified the retained artifact against the evidence commit SHA.
 
 Verified locally on 2026-08-12 in WSL from the repository root:
 
-- `cargo test --workspace`: core 177/177, readonly 82/82, dcommit 73/73,
+- `cargo test --workspace`: core 178/178, readonly 82/82, dcommit 73/73,
   real SVN CLI 48/48, and all 41 available golden scenarios passed.
 - `cargo test -p git-svn-rs-core --features svn-libsvn` and the same command with
-  `--test-threads=1`: linked core 209/209 and native backend 36/36 passed in both
+  `--test-threads=1`: linked core 210/210 and native backend 36/36 passed in both
   parallel and serial runs. Feature-gated golden test functions also pass, but
   their intentional linked skips are not counted as executed release scenarios.
 - Linked CLI real workflows passed clone/fetch 48/48 and dcommit 73/73, including
   executable/special projection, type transition, and no-resubmit recovery.
+- The Phase 10 import-runtime regression passed 1/1 and proves that 100 repeated
+  change applications compile the configured include/ignore regexes only twice;
+  final-tree import mock passed 25/25 and linked CLI clone/fetch passed 48/48.
+- All three package lists and offline archives contain README plus both licenses
+  and exclude generated fixture and `.svn` paths. The core archive passed an
+  isolated offline verification build. Cargo 1.97.1 cannot continue workspace
+  verification of the unpublished CLI sibling because its temporary registry has
+  no checksum for `git-svn-rs-core 0.1.0`; clean registry/publish-order validation
+  therefore remains a Phase 10-A3 condition rather than claimed evidence.
 - A separate strict default-backend run with frozen Git/Perl 2.54.0 and
   SVN/libsvn 1.14.3 executed all required comparisons: golden 41/41, with all
   eight required summaries marked executed/passed and carrying the expected
@@ -289,23 +302,27 @@ Verified locally on 2026-08-12 in WSL from the repository root:
 - Formatting, all-target/all-feature clippy with warnings denied, and
   `git diff --check` passed for this working tree.
 - Hosted release gate
-  [#31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
-  completed in 6m39s: strict comparison, eight-summary audit, linked core
+  [#31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)
+  completed successfully: strict comparison, eight-summary audit, linked core
   parallel/serial, linked CLI clone/fetch/dcommit, static gates, artifact upload,
   and the separate same-SHA verifier all passed. The downloaded
   `release-summary.json` is bound to
-  `c0dfb2067f75806935b2b36462d5819923652634`.
+  `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`.
 
 ## Remaining Work
 
-Phase 9 P0/P1 implementation and protected hosted evidence are complete. Any
-subsequent release-candidate commit must rerun the protected workflow so its
-artifact remains bound to the candidate SHA; older artifacts are never inherited.
+Phase 9 P0/P1 implementation and protected hosted evidence are complete. Its former
+P2 scope is now governed by `.plans/10-maintainability-and-package-readiness.md`.
+Phase 10's smallest package/runtime/CI hygiene slice is complete locally. Release
+documents, clean-registry publish-order validation, large module splitting,
+public-API narrowing, and final hosted revalidation remain. The Phase 10 working
+tree has not been committed or pushed, so the hosted evidence above still applies
+only to `6f22803` and must not be attributed to these changes.
 
-P2 module splitting, import-loop optimization, public-API narrowing, and packaging
-hygiene remain maintenance work. Broader remote/platform profiles, native libsvn
-write-back, automatic migration, full Log.pm, and other deferred capabilities stay
-outside this release claim.
+Any subsequent release-candidate commit must rerun the protected workflow so its
+artifact remains bound to the candidate SHA; older artifacts are never inherited.
+Broader remote/platform profiles, native libsvn write-back, automatic migration,
+full Log.pm, and other deferred capabilities stay outside this release claim.
 
 ## Important Commit Anchors
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
@@ -349,13 +366,17 @@ outside this release claim.
 - `991eef5`, `c0dfb20`: hosted compatibility environment correction and transient
   Unix askpass execution hardening; `c0dfb20` is validated by release gate
   #31561696796.
+- `6f22803`: Phase 9 hosted evidence reconciliation; validated by final release gate
+  #31562384493 and retained current-SHA artifact.
 
 ## Next Steps
 
-1. For every release candidate, execute the protected release workflow and retain
+1. Complete Phase 10-A2/A3 release documents and clean-registry publish-order proof.
+2. Continue Phase 10 in isolated module-split and API batches with focused plus
+   workspace/linked gates.
+3. For every release candidate, execute the protected release workflow and retain
    its same-SHA `release-summary.json` and scenario artifacts.
-2. Schedule P2 module/API/package maintenance separately.
-3. Do not expand deferred profiles as part of release evidence collection.
+4. Do not expand deferred profiles as part of maintenance or evidence collection.
 
 ## Handoff Notes
 

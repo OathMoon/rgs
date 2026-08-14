@@ -8,6 +8,13 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "Core compatibility library for git-svn-rs"
+include = [
+    "/build.rs",
+    "/src/**",
+    "/tests/**",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+]
 
 [features]
 default = []

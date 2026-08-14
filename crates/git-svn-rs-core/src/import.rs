@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::PathBuf;
@@ -40,6 +41,38 @@ pub struct ImportSummary {
     pub imported_revisions: Vec<u32>,
 }
 
+#[derive(Default)]
+struct ImportRuntime {
+    authors: OnceCell<Result<AuthorMapper, String>>,
+    filters: OnceCell<Result<PathFilters, String>>,
+}
+
+struct MappingImportContext<'a> {
+    git: &'a GitCli,
+    config: &'a SvnRemoteConfig,
+    uuid: &'a str,
+    all_mappings: &'a [RefMapping],
+    runtime: &'a ImportRuntime,
+}
+
+impl ImportRuntime {
+    fn authors<'a>(&'a self, config: &SvnRemoteConfig) -> Result<&'a AuthorMapper, String> {
+        self.authors
+            .get_or_init(|| author_mapper(config))
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+
+    fn filters<'a>(&'a self, config: &SvnRemoteConfig) -> Result<&'a PathFilters, String> {
+        self.filters
+            .get_or_init(|| {
+                PathFilters::new(config.include_paths.clone(), config.ignore_paths.clone())
+            })
+            .as_ref()
+            .map_err(Clone::clone)
+    }
+}
+
 pub fn import_mock_revisions(
     backend: &impl SvnBackend,
     git: &GitCli,
@@ -56,6 +89,25 @@ pub fn import_mock_revisions_for_ref(
     options: ImportOptions,
     selected_ref: Option<&str>,
 ) -> Result<ImportSummary, String> {
+    let runtime = ImportRuntime::default();
+    import_mock_revisions_for_ref_with_runtime(
+        backend,
+        git,
+        config,
+        options,
+        selected_ref,
+        &runtime,
+    )
+}
+
+fn import_mock_revisions_for_ref_with_runtime(
+    backend: &impl SvnBackend,
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    options: ImportOptions,
+    selected_ref: Option<&str>,
+    runtime: &ImportRuntime,
+) -> Result<ImportSummary, String> {
     config.validate_mapping_destinations()?;
     if let Some(window_size) = config.log_window_size {
         return import_mock_revisions_in_windows(
@@ -65,6 +117,7 @@ pub fn import_mock_revisions_for_ref(
             options,
             selected_ref,
             window_size,
+            runtime,
         );
     }
     crate::import_transaction::recover_pending(git)?;
@@ -117,6 +170,13 @@ pub fn import_mock_revisions_for_ref(
     validate_ref_storage_collisions(git, &batch_refs)?;
     begin_or_resume_batch(git, &uuid, &batch_refs)?;
 
+    let import_context = MappingImportContext {
+        git,
+        config,
+        uuid: &uuid,
+        all_mappings: &mappings,
+        runtime,
+    };
     let mut completed_refs = BTreeSet::new();
     for mapping in selected_mappings {
         let mut mapping_revisions = revisions_for_mapping(&revisions, &mapping.svn_path);
@@ -124,14 +184,8 @@ pub fn import_mock_revisions_for_ref(
             mapping_revisions.retain(|revision| revision.revision >= *start);
         }
         if !mapping_revisions.is_empty() {
-            let summary = import_revisions_for_mapping(
-                git,
-                config,
-                &uuid,
-                mapping,
-                &mappings,
-                &mapping_revisions,
-            )?;
+            let summary =
+                import_revisions_for_mapping(&import_context, mapping, &mapping_revisions)?;
             all_imported_revisions.extend(summary.imported_revisions);
         }
         if marker_refnames.contains(&mapping.git_ref) {
@@ -169,6 +223,18 @@ pub fn import_ra_revisions_for_ref(
     options: ImportOptions,
     selected_ref: Option<&str>,
 ) -> Result<ImportSummary, String> {
+    let runtime = ImportRuntime::default();
+    import_ra_revisions_for_ref_with_runtime(session, git, config, options, selected_ref, &runtime)
+}
+
+fn import_ra_revisions_for_ref_with_runtime(
+    session: &impl RaSession,
+    git: &GitCli,
+    config: &SvnRemoteConfig,
+    options: ImportOptions,
+    selected_ref: Option<&str>,
+    runtime: &ImportRuntime,
+) -> Result<ImportSummary, String> {
     config.validate_mapping_destinations()?;
     if let Some(window_size) = config.log_window_size {
         return import_ra_revisions_in_windows(
@@ -178,6 +244,7 @@ pub fn import_ra_revisions_for_ref(
             options,
             selected_ref,
             window_size,
+            runtime,
         );
     }
     crate::import_transaction::recover_pending(git)?;
@@ -226,6 +293,13 @@ pub fn import_ra_revisions_for_ref(
     batch_refs.dedup();
     validate_ref_storage_collisions(git, &batch_refs)?;
     begin_or_resume_batch(git, &uuid, &batch_refs)?;
+    let import_context = MappingImportContext {
+        git,
+        config,
+        uuid: &uuid,
+        all_mappings: &mappings,
+        runtime,
+    };
     let mut completed_refs = BTreeSet::new();
     for mapping in selected_mappings {
         let mut mapping_revisions = revisions_for_mapping(&revisions, &mapping.svn_path);
@@ -234,11 +308,8 @@ pub fn import_ra_revisions_for_ref(
         }
         if !mapping_revisions.is_empty() {
             let summary = import_ra_revisions_for_mapping(
-                git,
-                config,
-                &uuid,
+                &import_context,
                 mapping,
-                &mappings,
                 &mapping_revisions,
                 session,
             )?;
@@ -270,13 +341,21 @@ fn import_mock_revisions_in_windows(
     options: ImportOptions,
     selected_ref: Option<&str>,
     window_size: u32,
+    runtime: &ImportRuntime,
 ) -> Result<ImportSummary, String> {
     let options = ImportOptions {
         end_revision: Some(options.end_revision.unwrap_or(backend.latest_revnum()?)),
         ..options
     };
     import_in_windows(config, options, window_size, |window_config, options| {
-        import_mock_revisions_for_ref(backend, git, window_config, options, selected_ref)
+        import_mock_revisions_for_ref_with_runtime(
+            backend,
+            git,
+            window_config,
+            options,
+            selected_ref,
+            runtime,
+        )
     })
 }
 
@@ -287,13 +366,21 @@ fn import_ra_revisions_in_windows(
     options: ImportOptions,
     selected_ref: Option<&str>,
     window_size: u32,
+    runtime: &ImportRuntime,
 ) -> Result<ImportSummary, String> {
     let options = ImportOptions {
         end_revision: Some(options.end_revision.unwrap_or(session.latest_revnum()?)),
         ..options
     };
     import_in_windows(config, options, window_size, |window_config, options| {
-        import_ra_revisions_for_ref(session, git, window_config, options, selected_ref)
+        import_ra_revisions_for_ref_with_runtime(
+            session,
+            git,
+            window_config,
+            options,
+            selected_ref,
+            runtime,
+        )
     })
 }
 
@@ -340,13 +427,17 @@ fn import_in_windows(
 }
 
 fn import_revisions_for_mapping(
-    git: &GitCli,
-    config: &SvnRemoteConfig,
-    uuid: &str,
+    context: &MappingImportContext<'_>,
     mapping: &RefMapping,
-    all_mappings: &[RefMapping],
     revisions: &[RevisionEvent],
 ) -> Result<ImportSummary, String> {
+    let MappingImportContext {
+        git,
+        config,
+        uuid,
+        all_mappings,
+        runtime,
+    } = context;
     let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
     let mut stream = FastImportStream::new();
     let mut imported_revisions = Vec::new();
@@ -355,7 +446,7 @@ fn import_revisions_for_mapping(
         .rev_parse(&mapping.git_ref)
         .ok()
         .map(|commit| commit.trim().to_string());
-    let authors = author_mapper(config)?;
+    let authors = runtime.authors(config)?;
     let metadata_uuid = config.metadata_uuid(uuid)?;
     let staging_ref = next_import_staging_ref();
 
@@ -363,7 +454,7 @@ fn import_revisions_for_mapping(
         if revision.revision <= max_imported_revision {
             continue;
         }
-        let changes = changes_for_revision(revision, &strip_prefix, config)?;
+        let changes = changes_for_revision(revision, &strip_prefix, config, runtime)?;
         if changes.is_empty()
             && !imports_initial_mapping_root(
                 revision,
@@ -388,8 +479,8 @@ fn import_revisions_for_mapping(
         stream = stream.commit(&FastImportCommit {
             mark: imported_revisions.len() as u32,
             refname: staging_ref.clone(),
-            author: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
-            committer: author_ident(&revision.author, metadata_uuid, Some(&authors))?,
+            author: author_ident(&revision.author, metadata_uuid, Some(authors))?,
+            committer: author_ident(&revision.author, metadata_uuid, Some(authors))?,
             timestamp: timestamp.seconds,
             timezone_offset: timestamp.offset,
             message: commit_message(config, revision, uuid, &mapping.svn_path)?,
@@ -422,14 +513,18 @@ fn import_revisions_for_mapping(
 }
 
 fn import_ra_revisions_for_mapping(
-    git: &GitCli,
-    config: &SvnRemoteConfig,
-    uuid: &str,
+    context: &MappingImportContext<'_>,
     mapping: &RefMapping,
-    all_mappings: &[RefMapping],
     revisions: &[RevisionEvent],
     session: &impl RaSession,
 ) -> Result<ImportSummary, String> {
+    let MappingImportContext {
+        git,
+        config,
+        uuid,
+        all_mappings,
+        runtime,
+    } = context;
     let strip_prefix = strip_prefix_for(config, &mapping.svn_path);
     let mut stream = FastImportStream::new();
     let mut imported_revisions = Vec::new();
@@ -445,7 +540,7 @@ fn import_ra_revisions_for_mapping(
         .rev_parse(&mapping.git_ref)
         .ok()
         .map(|commit| commit.trim().to_string());
-    let authors = author_mapper(config)?;
+    let authors = runtime.authors(config)?;
     let staging_ref = next_import_staging_ref();
 
     for revision in revisions {
@@ -476,8 +571,8 @@ fn import_ra_revisions_for_mapping(
         let plan = FetchCommitPlan {
             mark: imported_revisions.len() as u32 + 1,
             refname: staging_ref.clone(),
-            author: author_ident(&revision.author, &identity.uuid, Some(&authors))?,
-            committer: author_ident(&revision.author, &identity.uuid, Some(&authors))?,
+            author: author_ident(&revision.author, &identity.uuid, Some(authors))?,
+            committer: author_ident(&revision.author, &identity.uuid, Some(authors))?,
             timestamp: timestamp.seconds,
             timezone_offset: timestamp.offset,
             message: commit_message_with_identity(config, revision, &identity)?,
@@ -499,10 +594,10 @@ fn import_ra_revisions_for_mapping(
         .with_path_prefix(&mapping.svn_path)
         .with_owned_placeholders(owned_placeholders.clone());
 
-        let filters = PathFilters::new(config.include_paths.clone(), config.ignore_paths.clone())?;
+        let filters = runtime.filters(config)?;
         let mut filtered_editor = FilteredFetchEditor {
             inner: &mut editor,
-            filters: &filters,
+            filters,
         };
         let base_revision = imported_revisions
             .last()
@@ -522,7 +617,7 @@ fn import_ra_revisions_for_mapping(
         let result = editor.into_result()?;
         owned_placeholders = result.owned_placeholders;
         let mut commit = result.commit;
-        commit.changes = finalize_ra_changes(commit.changes, revision, &strip_prefix, config)?;
+        commit.changes = finalize_ra_changes(commit.changes, revision, &strip_prefix, filters)?;
         if commit.changes.iter().any(|change| match change {
             FileChange::Modify { path, .. } | FileChange::Delete { path } => path.is_empty(),
         }) {
@@ -719,16 +814,15 @@ fn finalize_ra_changes(
     changes: Vec<FileChange>,
     _revision: &RevisionEvent,
     strip_prefix: &str,
-    config: &SvnRemoteConfig,
+    filters: &PathFilters,
 ) -> Result<Vec<FileChange>, String> {
-    let filters = PathFilters::new(config.include_paths.clone(), config.ignore_paths.clone())?;
     let mut filtered = Vec::new();
     for change in changes {
         let git_path = match &change {
             FileChange::Modify { path, .. } | FileChange::Delete { path } => path,
         };
         let svn_path = svn_path_for_git_path(strip_prefix, git_path);
-        if path_is_included(&filters, &svn_path)? {
+        if path_is_included(filters, &svn_path)? {
             filtered.push(change);
         }
     }
@@ -1542,11 +1636,12 @@ fn changes_for_revision(
     revision: &RevisionEvent,
     strip_prefix: &str,
     config: &SvnRemoteConfig,
+    runtime: &ImportRuntime,
 ) -> Result<Vec<FileChange>, String> {
     if revision.changed_paths.is_empty() {
         return Ok(mock_fixture_changes(revision.revision));
     }
-    let filters = PathFilters::new(config.include_paths.clone(), config.ignore_paths.clone())?;
+    let filters = runtime.filters(config)?;
 
     let mut file_paths = Vec::new();
     for changed_path in &revision.changed_paths {
@@ -1554,7 +1649,7 @@ fn changes_for_revision(
             changed_path.action,
             ChangeAction::Add | ChangeAction::Modify | ChangeAction::Replace
         ) && changed_path.kind == NodeKind::File
-            && path_is_included(&filters, &changed_path.path)?
+            && path_is_included(filters, &changed_path.path)?
             && let Some(path) = import_path(&changed_path.path, strip_prefix)
         {
             file_paths.push(path);
@@ -1563,7 +1658,7 @@ fn changes_for_revision(
 
     let mut changes = Vec::new();
     for changed_path in &revision.changed_paths {
-        if !path_is_included(&filters, &changed_path.path)? {
+        if !path_is_included(filters, &changed_path.path)? {
             continue;
         }
         let Some(path) = import_path(&changed_path.path, strip_prefix) else {
@@ -1600,7 +1695,7 @@ fn changes_for_revision(
             {
                 continue;
             }
-            if !path_is_included(&filters, &changed_path.path)? {
+            if !path_is_included(filters, &changed_path.path)? {
                 continue;
             }
             let Some(path) = import_path(&changed_path.path, strip_prefix) else {
@@ -1881,9 +1976,10 @@ fn svn_git_timestamp(value: &str, localtime: bool) -> Result<GitTimestamp, Strin
 #[allow(clippy::items_after_test_module)]
 mod timestamp_tests {
     use super::{
-        apply_placeholder_log, author_ident, commit_message, imports_initial_mapping_root,
-        max_imported_revision, most_specific_mapping_for_path, rev_map_path, svn_git_timestamp,
-        validate_mapping_ref_collisions, validate_refname_namespace,
+        ImportRuntime, apply_placeholder_log, author_ident, changes_for_revision, commit_message,
+        imports_initial_mapping_root, max_imported_revision, most_specific_mapping_for_path,
+        rev_map_path, svn_git_timestamp, validate_mapping_ref_collisions,
+        validate_refname_namespace,
     };
     use crate::config::SvnRemoteConfig;
     use crate::git::GitCli;
@@ -2004,6 +2100,63 @@ r4
         assert_eq!(
             author_ident("alice", "repo-uuid", None).unwrap(),
             "alice <alice@repo-uuid>"
+        );
+    }
+
+    #[test]
+    fn immutable_import_state_is_initialized_once() {
+        let mut config = SvnRemoteConfig::new(
+            "svn",
+            "file:///repo".to_string(),
+            crate::mapping::LayoutMappings {
+                fetch: Vec::new(),
+                branches: Vec::new(),
+                tags: Vec::new(),
+            },
+        );
+        config.include_paths = Some("^trunk/".to_string());
+        config.ignore_paths = Some("^trunk/generated/".to_string());
+        let authors_dir = tempfile::tempdir().unwrap();
+        let authors_path = authors_dir.path().join("authors.txt");
+        std::fs::write(&authors_path, "alice = Alice Example <alice@example.com>\n").unwrap();
+        config.authors_file = Some(authors_path.display().to_string());
+
+        let revision = RevisionEvent {
+            revision: 1,
+            author: "alice".to_string(),
+            message: "change".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            changed_paths: vec![ChangedPath {
+                path: "/trunk/src/lib.rs".to_string(),
+                action: ChangeAction::Modify,
+                copy_from_path: None,
+                copy_from_rev: None,
+                kind: NodeKind::File,
+                properties_modified: false,
+                content_modified: true,
+                properties: BTreeMap::new(),
+                content: Some(b"pub fn value() -> u8 { 1 }\n".to_vec()),
+            }],
+        };
+        let runtime = ImportRuntime::default();
+
+        crate::filters::reset_regex_compilation_count();
+        for _ in 0..100 {
+            assert_eq!(
+                changes_for_revision(&revision, "trunk", &config, &runtime)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert_eq!(crate::filters::regex_compilation_count(), 2);
+
+        let first_authors = runtime.authors(&config).unwrap();
+        let second_authors = runtime.authors(&config).unwrap();
+        assert!(std::ptr::eq(first_authors, second_authors));
+        assert_eq!(
+            author_ident("alice", "repo-uuid", Some(first_authors)).unwrap(),
+            "Alice Example <alice@example.com>"
         );
     }
 

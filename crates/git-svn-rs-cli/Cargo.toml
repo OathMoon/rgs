@@ -8,6 +8,12 @@ repository.workspace = true
 homepage.workspace = true
 readme.workspace = true
 description = "A Rust implementation of core git svn workflows"
+include = [
+    "/src/**",
+    "/tests/**",
+    "/LICENSE-APACHE",
+    "/LICENSE-MIT",
+]
 
 [features]
 default = []

@@ -19,7 +19,7 @@
 ## Current State
 
 State: `release-pass` for the Phase 09 P0/P1 scope at
-`c0dfb2067f75806935b2b36462d5819923652634`.
+`6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`.
 
 审阅基线：`1139ae497567d4ae787be849ae31d68b2552aed8`。
 
@@ -37,7 +37,7 @@ State: `release-pass` for the Phase 09 P0/P1 scope at
    高风险路径迁移已完成；
 6. default workspace、linked core parallel/serial、linked CLI read/write 本地
    矩阵通过；protected hosted
-   [release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
+   [release gate run #31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)
    也完成相同 strict/linked/static 矩阵、artifact 上传和独立 same-SHA 校验。
 
 最小根因：`svn_ra_do_update3` 在该 incremental add 路径没有可靠投递
@@ -222,45 +222,14 @@ ADR 通过前不得扩张新的 raw FFI surface。
 
 若出于成本继续保留 strict manual dispatch，则 release/tag 工作流必须校验同一 SHA 的成功 strict run 和 artifact，不能仅依赖人工说明。
 
-### P2: Maintainability and release hygiene
+### P2: Transferred to Phase 10
 
-预计用时：1–2 周，可分批交付；每次拆分必须保持行为和测试不变。
+原 P2 的大模块拆分、import 不变状态、公共 API 收紧和发布仓库卫生已经迁移到
+[Phase 10: Maintainability and Package Readiness](10-maintainability-and-package-readiness.md)。
 
-#### P2-1. Split only the proven large boundaries
-
-建议拆分顺序：
-
-1. `svn/libsvn.rs`：`ffi`、`runtime`、`auth`、`ra`，保留 `native_delta`；
-2. `import.rs`：discovery/planning、revision replay、publication；
-3. `commands/dcommit.rs`：target/preflight、planning、working-copy runtime、post-submit verify；
-4. `commands/fetch.rs`：runtime config/backend factory 与 command orchestration。
-
-拆分约束：
-
-- 不引入只有一个实现的 speculative trait；
-- 不同时改变行为和模块布局；
-- 每个提交只拆一个边界并运行相关 focused tests 加 workspace gate。
-
-#### P2-2. Hoist immutable import state out of revision loops
-
-- `PathFilters` 在 mapping/import loop 外构造一次；
-- authors mapping、placeholder 配置和不变 URL/path prefix 同样只解析一次；
-- 对长 revision history 增加简单 benchmark 或计数回归，证明 regex 编译次数不随 revision 数增长。
-
-#### P2-3. Narrow the core public API
-
-- 记录 CLI crate 实际消费的 core symbols；
-- 将 import internals、journal internals、fetch editor implementation 和内部 builders 收紧为 `pub(crate)`；
-- 为真正稳定的库入口增加 crate/module 文档；
-- 不在 v0.1 承诺未设计的稳定公共 Rust API。
-
-#### P2-4. Complete release repository hygiene
-
-- 添加 MIT 和 Apache-2.0 LICENSE 文本；
-- 添加 CHANGELOG 和 release checklist；
-- 验证 core、CLI、shim 的 `cargo package`/publish 顺序；
-- 记录 minimum Rust/libsvn/SVN/Git/Perl versions；
-- 校验 README、crate metadata 和 repository URL 一致。
+Phase 9 仅保留 P0/P1 的冻结发布证据，不再在本文件内推进维护提交。Phase 10
+必须单独记录 working SHA，并在最终候选上重新取得 same-SHA hosted artifact；
+不能继承 Phase 9 artifact 作为新 HEAD 的证据。
 
 ## Verification Matrix
 
@@ -303,12 +272,7 @@ P1：
 - 顶层错误分类和首批高风险路径迁移；
 - 可执行的 developer/backend/release 门槛。
 
-P2：
-
-- 分批模块拆分；
-- filters/import 不变状态性能修复；
-- 收紧的 core API；
-- LICENSE、CHANGELOG、release checklist 和 package 验证。
+P2：已迁移到独立 Phase 10，不属于 Phase 9 release-pass 的完成条件。
 
 ### Delivery status (2026-08-12)
 
@@ -318,14 +282,15 @@ P2：
 | P0 submitted recovery | complete locally | executable post-fetch failure resumes with one SVN revision |
 | P0 portable fixtures | complete locally | centralized temp root; root workspace run leaves no new fixture directory |
 | P0 linked/strict gates | implemented and locally exercised | linked parallel/serial plus CLI 48/48 and 73/73 |
-| P0 hosted current-SHA artifact | complete | run #31561696796 retained a passed release summary for `c0dfb2067f75806935b2b36462d5819923652634` |
+| P0 hosted current-SHA artifact | complete | run #31562384493 retained a passed release summary for `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47` |
 | P0 status reconciliation | complete | Phase 3–9, README, inventory, and progress record aligned |
 | P1 libsvn ADR | complete | `adr/0001-libsvn-binding-strategy.md` |
 | P1 structured errors | complete for planned first boundary | stable categories at CLI/resolver/rev_map/dcommit boundaries |
 | P1 enforceable release gate | complete in repository | developer, reusable backend, and release/tag workflows |
 
 All P0/P1 completion criteria below are satisfied for the recorded evidence
-commit. P2 remains explicit post-release maintenance scope.
+commit. The transferred P2 work remains explicit post-release maintenance scope
+under Phase 10.
 
 ## Completion Definition
 
@@ -341,4 +306,6 @@ commit. P2 remains explicit post-release maintenance scope.
 8. 进度记录、Phase 3–8、README 和 capability inventory 状态一致；
 9. 范围外能力仍明确拒绝或标记 deferred，没有被本计划暗中扩张。
 
-P2 的大模块拆分和 API 收紧可以在首发后继续，但不得以此为理由延后 P0 正确性修复；若 P2 未全部完成，应在进度记录中作为维护性债务明确保留。
+Phase 10 中的大模块拆分和 API 收紧在首发后独立推进，其未完成
+项应继续在进度记录中作为维护性债务保留，不回写 Phase 9 的 P0/P1
+完成条件。

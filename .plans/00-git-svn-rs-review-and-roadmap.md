@@ -2,7 +2,11 @@
 
 ## Role of This File
 
-This is the architecture bus and execution order for all `.plans/01-*` through `.plans/08-*` files. The product contract is `.plans/git-svn-rs-plan.md`; the evidence-backed correction is `.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
+This is the architecture bus and execution order for the phase plans. Phase 9 closes
+the first release gates; Phase 10 separately owns post-release maintainability and
+package readiness. The product contract is `.plans/git-svn-rs-plan.md`; the
+evidence-backed correction is
+`.plans/git-svn-rs-plan-code-architecture-review-2026-07-10.md`.
 
 Old task-by-task recipes were removed because they mixed specification, sample implementation, and stale completion checkboxes. Current phase files define outcomes and gates; implementation details are chosen only after a failing compatibility test or a documented design decision.
 

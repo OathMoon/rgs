@@ -13,7 +13,7 @@ jobs:
       TZ: UTC
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Configure compatibility artifacts
         run: |
@@ -111,7 +111,7 @@ jobs:
 
       - name: Upload compatibility artifacts
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: frozen-compatibility-artifacts
           path: ${{ runner.temp }}/compat-artifacts

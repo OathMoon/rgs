@@ -118,6 +118,9 @@ An unsupported or deferred combination must fail explicitly. Silently accepting 
 4. Phase 7 safe dcommit: first-parent target, clean/linear preflight, shared plan, recovery.
 5. Phase 6 metadata/read-only completion.
 6. Phase 8 non-skippable strict release gate.
+7. Phase 9 release hardening and protected same-SHA evidence closure.
+8. Phase 10 post-release maintainability and package readiness, without expanding
+   the declared compatibility profiles.
 
 P0 correctness work takes precedence over additional callback, protocol, property, or command breadth.
 
