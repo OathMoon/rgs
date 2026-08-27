@@ -11,6 +11,12 @@ release evidence. This is not a general replacement for every `git svn` workflow
 The exact command, option, and protocol boundary is recorded in the
 [release capability inventory](.plans/release-capability-inventory.md).
 
+Rust 1.95 is the minimum supported compiler. Subversion/libsvn 1.14 is the
+minimum for the optional linked backend, while frozen Git/Perl `git svn` 2.54.0
+is the compatibility oracle used by the strict tests rather than a runtime
+dependency. Release changes are recorded in [CHANGELOG.md](CHANGELOG.md), and
+package candidates follow the [release checklist](.plans/release-checklist.md).
+
 ## Verification
 
 On Windows, run the local verification script from the repository root:
@@ -59,8 +65,8 @@ The strict golden suite passes 41/41 covered scenarios against the frozen Perl
 The Phase 9 closure executes all 41 covered golden scenarios and the linked
 matrices in parallel and serial modes, including 48/48 real clone/fetch and 73/73
 dcommit cases. Protected hosted
-[release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796)
-passed for commit `c0dfb2067f75806935b2b36462d5819923652634`. Its
+[release gate run #31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)
+passed for commit `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`. Its
 `frozen-compatibility-artifacts` download contains eight executed/passed required
 scenario summaries and a `release-summary.json` bound to that exact SHA. The
 release/tag workflow calls the strict compatibility workflow and independently
