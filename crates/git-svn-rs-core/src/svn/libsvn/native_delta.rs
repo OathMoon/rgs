@@ -3,9 +3,27 @@
     allow(clippy::unnecessary_fallible_conversions)
 )]
 
-use super::*;
 use crate::path_url::add_path_to_url;
+use crate::svn::editor::FetchEditor;
+use crate::svn::ra::{RaSession, SvnNodeKind, UpdateRequest};
+use crate::svn::{ChangeAction, NodeKind};
 use md5::{Digest, Md5};
+use std::collections::{BTreeMap, BTreeSet};
+use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_long, c_void};
+use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::{ptr, slice};
+
+use super::{
+    AprPoolT, LibSvnBackend, SVN_DEPTH_INFINITY, SvnDeltaEditorT, SvnRaReporter3T,
+    SvnTxdeltaStreamOpenFunc, SvnTxdeltaWindowHandlerFunc, callback_error_message,
+    editor_copy_from, editor_path, get_file, remapped_editor_path, stringbuf_bytes, svn_call,
+    svn_delta_default_editor, svn_error_t, svn_ra_do_switch3, svn_ra_do_update3, svn_ra_reparent,
+    svn_stream_empty, svn_stream_from_stringbuf, svn_string_t, svn_stringbuf_create_empty,
+    svn_stringbuf_ncreate, svn_stringbuf_t, svn_txdelta_apply, svn_txdelta_next_window,
+};
+#[cfg(test)]
+use super::{AprRuntime, svn_error_clear, svn_error_detail};
 
 struct FileBaton {
     update_baton: *mut c_void,
