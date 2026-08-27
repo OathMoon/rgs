@@ -1,5 +1,5 @@
 # git-svn-rs Implementation Progress Record
-Last audited: 2026-08-12
+Last audited: 2026-08-27
 Branch: `codex-execute-git-svn-rs-plans`
 Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634`
 Last proven release commit: `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`
@@ -29,7 +29,7 @@ verification must remain distinct from this last proven release baseline.
 | 7 dcommit | `release-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, hosted linked dcommit 73/73 gate | native write-back and broader remote faults |
 | 8 golden/release | `release-pass` at `6f22803` | hosted 41 scenarios, 8 required summaries, backend/build-feature identity, same-SHA release summary and verifier | forward-compatibility runs remain separately scoped |
 | 9 hardening | `release-pass` for P0/P1 at `6f22803` | linked property/recovery fixes, temp-root migration, ADR, typed errors, protected hosted release evidence | maintenance scope transferred to Phase 10 |
-| 10 maintainability/package | `in-progress`; initial slice `complete-local` | audited package isolation/licenses, import immutable runtime regression, Node 24 Actions update, independent execution plan | release documents/publish-order proof, module splits, API narrowing and final hosted revalidation |
+| 10 maintainability/package | `in-progress`; package/docs slice `complete-local` | `8aa0ac6` baseline plus `42d0a6f` CHANGELOG/checklist and isolated registry proof; import runtime regression; Node 24 Actions | module splits, API narrowing and final hosted revalidation |
 
 ## Validated Capabilities
 
@@ -287,12 +287,13 @@ Verified locally on 2026-08-12 in WSL from the repository root:
 - The Phase 10 import-runtime regression passed 1/1 and proves that 100 repeated
   change applications compile the configured include/ignore regexes only twice;
   final-tree import mock passed 25/25 and linked CLI clone/fetch passed 48/48.
-- All three package lists and offline archives contain README plus both licenses
-  and exclude generated fixture and `.svn` paths. The core archive passed an
-  isolated offline verification build. Cargo 1.97.1 cannot continue workspace
-  verification of the unpublished CLI sibling because its temporary registry has
-  no checksum for `git-svn-rs-core 0.1.0`; clean registry/publish-order validation
-  therefore remains a Phase 10-A3 condition rather than claimed evidence.
+- All three package lists and archives contain README plus both licenses and
+  exclude generated fixture and `.svn` paths. The package-readiness script mirrors
+  the locked dependency set into a temporary `file:` registry, uses an isolated
+  workspace and clean Cargo home, and verifies core → CLI → shim order. The CLI
+  package downloads the registered `git-svn-rs-core 0.1.0`, then both Cargo's
+  package verification and an extracted-package check pass. No registry publish
+  or tag is performed.
 - A separate strict default-backend run with frozen Git/Perl 2.54.0 and
   SVN/libsvn 1.14.3 executed all required comparisons: golden 41/41, with all
   eight required summaries marked executed/passed and carrying the expected
@@ -313,11 +314,11 @@ Verified locally on 2026-08-12 in WSL from the repository root:
 
 Phase 9 P0/P1 implementation and protected hosted evidence are complete. Its former
 P2 scope is now governed by `.plans/10-maintainability-and-package-readiness.md`.
-Phase 10's smallest package/runtime/CI hygiene slice is complete locally. Release
-documents, clean-registry publish-order validation, large module splitting,
-public-API narrowing, and final hosted revalidation remain. The Phase 10 working
-tree has not been committed or pushed, so the hosted evidence above still applies
-only to `6f22803` and must not be attributed to these changes.
+Phase 10's package/runtime/CI hygiene and release-document/publish-order slices are
+complete locally at `8aa0ac6` and `42d0a6f`. Large module splitting, public-API
+narrowing, and final hosted revalidation remain. These Phase 10 commits have no
+hosted current-SHA evidence, so the hosted evidence above still applies only to
+`6f22803` and must not be attributed to them.
 
 Any subsequent release-candidate commit must rerun the protected workflow so its
 artifact remains bound to the candidate SHA; older artifacts are never inherited.
@@ -368,15 +369,17 @@ full Log.pm, and other deferred capabilities stay outside this release claim.
   #31561696796.
 - `6f22803`: Phase 9 hosted evidence reconciliation; validated by final release gate
   #31562384493 and retained current-SHA artifact.
+- `8aa0ac6`: Phase 10 governance, package isolation/licenses, Actions runtime,
+  and immutable import runtime baseline.
+- `42d0a6f`: release documents and isolated core → CLI → shim registry proof.
 
 ## Next Steps
 
-1. Complete Phase 10-A2/A3 release documents and clean-registry publish-order proof.
-2. Continue Phase 10 in isolated module-split and API batches with focused plus
+1. Continue Phase 10 in isolated module-split and API batches with focused plus
    workspace/linked gates.
-3. For every release candidate, execute the protected release workflow and retain
+2. For every release candidate, execute the protected release workflow and retain
    its same-SHA `release-summary.json` and scenario artifacts.
-4. Do not expand deferred profiles as part of maintenance or evidence collection.
+3. Do not expand deferred profiles as part of maintenance or evidence collection.
 
 ## Handoff Notes
 

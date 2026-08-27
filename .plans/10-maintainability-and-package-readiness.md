@@ -29,7 +29,7 @@ workflow 后，新的 HEAD 才能替代该发布基线。
 
 State: `in-progress`.
 
-首个最小维护集合已完成本地实现和验证：
+package/runtime 基线与发布文档批次已完成本地实现和验证：
 
 1. 三个 crate 使用显式 package 内容白名单，随机 golden/SVN fixture 不再进入
    `cargo package` 清单；
@@ -38,10 +38,13 @@ State: `in-progress`.
    `PathFilters`，同一次 windowed/multi-mapping import 不再按 revision 重建；
 4. GitHub-hosted workflow 的 checkout/artifact actions 切换到 Node 24 运行时的
    稳定 major；
-5. Phase 9 P2 的其余结构/API/发布文档工作由本计划单独跟踪。
+5. CHANGELOG、release checklist、版本基线和回滚规则已经记录；
+6. 临时 clean registry 按 core → CLI → shim 顺序验证三个归档，CLI 的
+   normalized manifest 从 registry 解析同版本 core 后完成 Cargo 自验证和独立 check；
+7. Phase 9 P2 的其余结构/API 工作由本计划单独跟踪。
 
 以上变更不增加命令、协议、native write-back 或兼容性声明。
-当前工作树尚未提交或推送，因此不存在与它绑定的 hosted
+Phase 10 本地提交 `8aa0ac6` 和 `42d0a6f` 均未取得与其绑定的 hosted
 current-SHA artifact；`6f22803` 仍是最后一个已证明发布基线。
 
 | Initial item | Local status | Evidence boundary |
@@ -50,7 +53,8 @@ current-SHA artifact；`6f22803` 仍是最后一个已证明发布基线。
 | 10-A1 package isolation/licenses | `complete-local` | 三个包清单及归档内容已审计，core 已从隔离包离线构建 |
 | Actions runtime maintenance | `complete-local` | workflow YAML 已更新；未宣称 hosted 运行证据 |
 | 10-B immutable import runtime | `complete-local` | 计数回归、import mock 和 linked CLI clone/fetch 已通过 |
-| 10-A2/A3 and 10-C–10-G | `pending` | 按下方独立批次推进 |
+| 10-A2/A3 release docs/order | `complete-local` | `42d0a6f`；本地 registry 证明 core → CLI → shim 归档、自验证和独立构建 |
+| 10-C–10-G | `pending` | 按下方独立批次推进 |
 
 ## Scope
 
@@ -127,16 +131,18 @@ cargo package -p git-svn-rs-shim --allow-dirty --list
 三个清单必须包含双许可证，且不得出现 `golden-stdlayout-`、`svn-fixture-`、
 `.svn/` 或工作区私有目录。
 
-首个最小集合的本地结果：
+当前本地结果：
 
 - 三个 `cargo package --list` 和 `--no-verify --offline` 归档成功；每个
   `.crate` 均包含 README 与双许可证，且无 fixture/`.svn` 污染；
 - `git-svn-rs-core` 已通过 `cargo package --allow-dirty --offline` 的隔离
   验证构建；
-- Cargo 1.97.1 在同一未发布 workspace 中继续验证 CLI 时，其临时
-  registry 报告 `no hash listed for git-svn-rs-core v0.1.0`。这不影响
-  归档内容审计，但 CLI/shim 只有在相同版本 core 可从干净 registry
-  解析并完成隔离构建后，才能标记为 publish-ready。
+- `scripts/verify-package-readiness.ps1` 把锁定依赖镜像到临时 `file:`
+  registry，在隔离工作区和全新 Cargo home 中依次打包 core、CLI 和 shim；
+- core 加入临时 registry 后，CLI 的 normalized manifest 从该 registry
+  下载 `git-svn-rs-core 0.1.0`，Cargo 自验证和解包后的独立 check 均通过；
+- 三个归档的本地 registry SHA-256 已输出，shim 只在 CLI 验证完成后加入
+  registry。该证据不执行真实 crates.io publish，也不授权发布或创建 tag。
 
 ### 10-B. Immutable import runtime
 
