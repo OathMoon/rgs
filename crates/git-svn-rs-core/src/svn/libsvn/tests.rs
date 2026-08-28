@@ -2,14 +2,22 @@
 use super::super::auth::AuthRequest;
 #[cfg(git_svn_rs_libsvn_linked)]
 use super::auth::{SimplePromptBaton, prompt_simple_credentials};
+#[cfg(git_svn_rs_libsvn_linked)]
+use super::ra::{get_file, receive_log_entry, stringbuf_bytes};
 use super::*;
+#[cfg(git_svn_rs_libsvn_linked)]
+use crate::svn::{ChangeAction, NodeKind};
 
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::fs;
 #[cfg(git_svn_rs_libsvn_linked)]
+use std::os::raw::{c_char, c_void};
+#[cfg(git_svn_rs_libsvn_linked)]
 use std::path::Path;
 #[cfg(git_svn_rs_libsvn_linked)]
 use std::process::Command;
+#[cfg(git_svn_rs_libsvn_linked)]
+use std::slice;
 
 #[test]
 fn backend_without_url_reports_expected_error() {
