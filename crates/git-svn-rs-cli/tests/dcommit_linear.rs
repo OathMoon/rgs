@@ -2111,8 +2111,10 @@ fn dcommit_writes_through_a_configured_svn_ssh_tunnel_when_tools_exist() {
     assert!(!lines.is_empty());
     assert!(
         lines
-            .chunks_exact(3)
-            .all(|args| args == ["fixture", "svnserve", "-t"])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|args| *args == ["fixture", "svnserve", "-t"])
     );
 }
 

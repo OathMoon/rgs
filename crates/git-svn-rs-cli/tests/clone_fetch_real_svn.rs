@@ -1492,8 +1492,10 @@ fn clone_and_incremental_fetch_use_real_svn_ssh_tunnel() {
     assert!(!lines.is_empty());
     assert!(
         lines
-            .chunks_exact(3)
-            .all(|args| args == ["fixture", "svnserve", "-t"])
+            .as_chunks::<3>()
+            .0
+            .iter()
+            .all(|args| *args == ["fixture", "svnserve", "-t"])
     );
 }
 
