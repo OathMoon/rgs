@@ -73,10 +73,12 @@ fn clone_uses_mock_import_shell_for_mock_urls() {
         git.run_for_test(["rev-parse", "refs/remotes/git-svn"])
             .unwrap()
     );
+    let worktree_source = std::fs::read_to_string(work.join("src/lib.rs")).unwrap();
     assert_eq!(
-        std::fs::read_to_string(work.join("src/lib.rs")).unwrap(),
-        "pub fn answer() -> u8 { 42 }\n"
+        worktree_source.lines().collect::<Vec<_>>(),
+        ["pub fn answer() -> u8 { 42 }"]
     );
+    assert!(worktree_source.ends_with('\n'));
     assert_eq!(
         git.run_for_test(["show", "-s", "--format=%at %ct %ai %ci", "HEAD"])
             .unwrap()
