@@ -2,8 +2,8 @@
 Last audited: 2026-08-28
 Branch: `codex-execute-git-svn-rs-plans`
 Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634`
-Last proven release commit: `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`
-Protected hosted evidence: [release gate run #31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)
+Last proven release commit: `ffb2e227f182be7b3afadbd0d2fcdf3744842e0e`
+Protected hosted evidence: [release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -14,9 +14,9 @@ loopback `svn+ssh`, mock, and authenticated loopback HTTP/HTTPS DAV workflows. T
 2026-08-12 Phase 9 P0/P1 local closure fixes linked post-submit properties,
 portable fixtures, typed top-level errors, and protected release gates. The
 protected hosted gate passed the same strict/linked/static matrix and independently
-verified the retained artifact against the release commit SHA. Phase 10 now owns
-post-release maintainability and package-readiness work; its working SHA and local
-verification must remain distinct from this last proven release baseline.
+verified the retained artifact against the release commit SHA. Phase 10 completed
+the maintainability and package-readiness scope at `ffb2e22`; deferred capabilities
+remain outside the release claim.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
@@ -29,7 +29,7 @@ verification must remain distinct from this last proven release baseline.
 | 7 dcommit | `release-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, hosted linked dcommit 73/73 gate | native write-back and broader remote faults |
 | 8 golden/release | `release-pass` at `6f22803` | hosted 41 scenarios, 8 required summaries, backend/build-feature identity, same-SHA release summary and verifier | forward-compatibility runs remain separately scoped |
 | 9 hardening | `release-pass` for P0/P1 at `6f22803` | linked property/recovery fixes, temp-root migration, ADR, typed errors, protected hosted release evidence | maintenance scope transferred to Phase 10 |
-| 10 maintainability/package | `release-candidate`; hosted evidence pending | package registry proof; libsvn/import/dcommit/fetch splits through `cc3e690`; API allowlist/narrowing at `3c1eff1`; final strict/linked/static local matrix | protected same-SHA hosted artifact |
+| 10 maintainability/package | `release-pass` at `ffb2e22` | package registry proof; libsvn/import/dcommit/fetch splits; API narrowing; local and hosted strict/linked/static gates; exact same-SHA artifact | future maintenance remains separately scoped |
 
 ## Validated Capabilities
 
@@ -271,6 +271,12 @@ verification must remain distinct from this last proven release baseline.
   passed for `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`; the downloaded schema-2
   release summary records `status: passed`, eight required scenarios, the default
   SVN-CLI-vs-frozen-Perl profile, and all four linked backend profiles.
+- Phase 10 protected release gate
+  [#33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
+  passed for `ffb2e227f182be7b3afadbd0d2fcdf3744842e0e`. Its independent verifier
+  passed, and the downloaded artifact digest
+  `b160bce332f2072cf2ebf80f23b94a3fec21f296d6f017c97990952ddb2523db`
+  matches GitHub's recorded digest.
 
 ## Current Verification
 
@@ -310,26 +316,22 @@ Verified locally on 2026-08-28 in WSL from the repository root:
 - Formatting, all-target/all-feature clippy with warnings denied, and
   `git diff --check` passed for this working tree.
 - Hosted release gate
-  [#31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)
+  [#33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
   completed successfully: strict comparison, eight-summary audit, linked core
-  parallel/serial, linked CLI clone/fetch/dcommit, static gates, artifact upload,
-  and the separate same-SHA verifier all passed. The downloaded
-  `release-summary.json` is bound to
-  `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`.
+  parallel/serial, linked CLI clone/fetch/dcommit, Rust 1.98 static gates,
+  artifact upload, and the separate same-SHA verifier all passed. The downloaded
+  schema-2 `release-summary.json` is bound to
+  `ffb2e227f182be7b3afadbd0d2fcdf3744842e0e`, records the expected backend,
+  features and four linked profiles, and came from a ZIP whose SHA-256 matches
+  GitHub's artifact digest.
 
 ## Remaining Work
 
-Phase 9 P0/P1 implementation and protected hosted evidence are complete. Its former
-P2 scope is governed by `.plans/10-maintainability-and-package-readiness.md`.
-Phase 10's package/runtime/CI hygiene, release documents, module splits, API
-narrowing, and final local matrix are complete. Only the protected workflow and
-downloaded same-SHA artifact audit remain. Until that succeeds, hosted evidence
-still applies only to `6f22803` and must not be attributed to the Phase 10 candidate.
-
-Any subsequent release-candidate commit must rerun the protected workflow so its
-artifact remains bound to the candidate SHA; older artifacts are never inherited.
-Broader remote/platform profiles, native libsvn write-back, automatic migration,
-full Log.pm, and other deferred capabilities stay outside this release claim.
+Phase 9 P0/P1 and Phase 10 are complete with protected hosted evidence. Any future
+release-candidate commit must rerun the protected workflow so its artifact remains
+bound to that candidate SHA; older artifacts are never inherited. Broader
+remote/platform profiles, native libsvn write-back, automatic migration, full
+Log.pm, and other deferred capabilities stay outside this release claim.
 
 ## Important Commit Anchors
 - `7f531ee`, `ab52ef1`, `edb9161`: workspace/config and SHA-256 foundations.
@@ -384,14 +386,15 @@ full Log.pm, and other deferred capabilities stay outside this release claim.
 - `2f6cc8f`, `cc3e690`: dcommit and fetch command-boundary splits.
 - `3c1eff1`: v0.1 public API allowlist and implementation visibility narrowing.
 - `34fc415`: Phase 10 structural completion recorded before final release gates.
+- `39bf24f`, `ffb2e22`: Rust 1.98 static-gate compatibility; `ffb2e22` is
+  validated by protected release gate #33155854101 and its retained same-SHA artifact.
 
 ## Next Steps
 
-1. Commit and push the Phase 10 release candidate, execute the protected release
-   workflow, and retain its same-SHA `release-summary.json` and scenario artifacts.
-2. Mark Phase 10 `release-pass` and update the last proven release SHA only after
-   the downloaded artifact audit succeeds.
-3. Do not expand deferred profiles as part of evidence collection.
+1. Treat `ffb2e22` and run #33155854101 as the Phase 10 release baseline.
+2. Rerun the full protected gate for any later release candidate; do not inherit
+   this artifact across SHAs.
+3. Keep deferred profiles outside maintenance-only follow-up work.
 
 ## Handoff Notes
 

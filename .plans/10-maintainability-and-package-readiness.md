@@ -19,15 +19,14 @@ Rust API，并把三个 crate 推进到内容可审计、许可完整、发布�
 - [libsvn binding ADR](adr/0001-libsvn-binding-strategy.md)
 - [2026-08-12 审阅报告](../docs/项目审阅报告-2026-08-12.md)
 
-最后一个完整 hosted release 基线是
-`6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`，对应 protected
-[release gate run #31562384493](https://github.com/OathMoon/rgs/actions/runs/31562384493)。
-Phase 10 工作提交必须与该基线分开记录；只有重新完成同一 SHA 的 protected
-workflow 后，新的 HEAD 才能替代该发布基线。
+Phase 10 最终候选
+`ffb2e227f182be7b3afadbd0d2fcdf3744842e0e` 已通过 protected
+[release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)，
+并替代 Phase 9 的 `6f22803` 发布基线。
 
 ## Current State
 
-State: `release-candidate`; protected same-SHA evidence pending.
+State: `release-pass` at `ffb2e22`.
 
 package/runtime、模块边界与 API 批次已完成本地实现和验证：
 
@@ -51,8 +50,9 @@ package/runtime、模块边界与 API 批次已完成本地实现和验证：
     `pub(crate)`，稳定 facade re-export 保持不变。
 
 以上变更不增加命令、协议、native write-back 或兼容性声明。
-Phase 10 最终本地矩阵已经通过，但当前提交尚未取得与候选 SHA 绑定的 hosted
-artifact；`6f22803` 仍是最后一个已证明发布基线。
+Phase 10 最终本地矩阵与候选 SHA 的 protected hosted artifact 均已通过。
+下载的 schema-2 `release-summary.json` 精确绑定 `ffb2e22`，并由独立 verifier
+job 核对。
 
 | Initial item | Local status | Evidence boundary |
 |---|---|---|
@@ -65,7 +65,7 @@ artifact；`6f22803` 仍是最后一个已证明发布基线。
 | 10-D import split | `complete-local` | `6e03aa3`；25 import mock、41 golden、48 linked CLI 通过 |
 | 10-E command split | `complete-local` | `2f6cc8f`、`cc3e690`；dcommit 73/73、clone/fetch 48/48 通过 |
 | 10-F public API | `complete-local` | `3c1eff1`；allowlist、private implementation modules、full-feature clippy 通过 |
-| 10-G final release revalidation | `release-candidate` | clean package、strict frozen、linked/static 本地矩阵通过；same-SHA hosted artifact 待执行 |
+| 10-G final release revalidation | `release-pass` | clean package、strict frozen、linked/static 本地矩阵与 same-SHA hosted artifact 全部通过 |
 
 ## Scope
 
@@ -253,8 +253,15 @@ panic/secret safety 不得因移动而放宽。
 - `cargo fmt --all -- --check`、全 target/full-feature clippy（warnings denied）
   与 `git diff --check` 通过。
 
-上述证据只把当前工作树提升为 release candidate；在 protected workflow 的
-same-SHA artifact 通过前不得标记 `release-pass`。
+Protected run `#33155854101` 随后在 `ffb2e22` 上通过 strict、summary audit、
+linked parallel/serial、linked CLI read/write、Rust 1.98 static gates、artifact
+upload 和独立 current-SHA verifier。下载归档 SHA-256 为
+`b160bce332f2072cf2ebf80f23b94a3fec21f296d6f017c97990952ddb2523db`；其中
+schema-2 summary 记录 `status: passed`、exact candidate SHA、8 个 required
+scenarios、`svn-cli-vs-frozen-perl`、`default-svn-cli` 与四个 linked profiles。
+
+Phase 10 的 completion definition 已全部满足；未执行 crates.io publish、tag
+或 deferred capability 扩展。
 
 ## Verification Matrix
 
