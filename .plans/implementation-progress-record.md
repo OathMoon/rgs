@@ -1,5 +1,5 @@
 # git-svn-rs Implementation Progress Record
-Last audited: 2026-08-27
+Last audited: 2026-08-28
 Branch: `codex-execute-git-svn-rs-plans`
 Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634`
 Last proven release commit: `6f22803c8fdacd9a7217cbb0dda339fb03bcfe47`
@@ -29,7 +29,7 @@ verification must remain distinct from this last proven release baseline.
 | 7 dcommit | `release-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, hosted linked dcommit 73/73 gate | native write-back and broader remote faults |
 | 8 golden/release | `release-pass` at `6f22803` | hosted 41 scenarios, 8 required summaries, backend/build-feature identity, same-SHA release summary and verifier | forward-compatibility runs remain separately scoped |
 | 9 hardening | `release-pass` for P0/P1 at `6f22803` | linked property/recovery fixes, temp-root migration, ADR, typed errors, protected hosted release evidence | maintenance scope transferred to Phase 10 |
-| 10 maintainability/package | `in-progress`; package/docs slice `complete-local` | `8aa0ac6` baseline plus `42d0a6f` CHANGELOG/checklist and isolated registry proof; import runtime regression; Node 24 Actions | module splits, API narrowing and final hosted revalidation |
+| 10 maintainability/package | `in-progress`; 10-A–10-F `complete-local` | package registry proof; libsvn/import/dcommit/fetch splits through `cc3e690`; API allowlist/narrowing at `3c1eff1`; linked CLI 48/48 and 73/73 | final clean package, strict frozen and same-SHA hosted revalidation |
 
 ## Validated Capabilities
 

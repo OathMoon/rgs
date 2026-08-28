@@ -29,7 +29,7 @@ workflow 后，新的 HEAD 才能替代该发布基线。
 
 State: `in-progress`.
 
-package/runtime 基线与发布文档批次已完成本地实现和验证：
+package/runtime、模块边界与 API 批次已完成本地实现和验证：
 
 1. 三个 crate 使用显式 package 内容白名单，随机 golden/SVN fixture 不再进入
    `cargo package` 清单；
@@ -41,10 +41,17 @@ package/runtime 基线与发布文档批次已完成本地实现和验证：
 5. CHANGELOG、release checklist、版本基线和回滚规则已经记录；
 6. 临时 clean registry 按 core → CLI → shim 顺序验证三个归档，CLI 的
    normalized manifest 从 registry 解析同版本 core 后完成 Cargo 自验证和独立 check；
-7. Phase 9 P2 的其余结构/API 工作由本计划单独跟踪。
+7. libsvn 按 tests/native delta/FFI/runtime/auth/RA 拆分，safe facade 收敛到
+   534 行；每个边界均通过 linked parallel/serial gate；
+8. import 按 discovery/replay/publication 拆分，公开入口与 window/batch
+   coordination 保留在 434 行 facade；
+9. dcommit 与 fetch 分别按计划命令边界拆分，linked CLI 73/73 与 48/48
+   场景通过；
+10. v0.1 public API allowlist 已建立，dcommit 实现模块转为 private 或
+    `pub(crate)`，稳定 facade re-export 保持不变。
 
 以上变更不增加命令、协议、native write-back 或兼容性声明。
-Phase 10 本地提交 `8aa0ac6` 和 `42d0a6f` 均未取得与其绑定的 hosted
+Phase 10 当前本地提交均未取得与最终候选绑定的 hosted
 current-SHA artifact；`6f22803` 仍是最后一个已证明发布基线。
 
 | Initial item | Local status | Evidence boundary |
@@ -54,7 +61,11 @@ current-SHA artifact；`6f22803` 仍是最后一个已证明发布基线。
 | Actions runtime maintenance | `complete-local` | workflow YAML 已更新；未宣称 hosted 运行证据 |
 | 10-B immutable import runtime | `complete-local` | 计数回归、import mock 和 linked CLI clone/fetch 已通过 |
 | 10-A2/A3 release docs/order | `complete-local` | `42d0a6f`；本地 registry 证明 core → CLI → shim 归档、自验证和独立构建 |
-| 10-C–10-G | `pending` | 按下方独立批次推进 |
+| 10-C libsvn split | `complete-local` | `7395e90`–`40352a3`；linked parallel/serial、29 internal、36 backend、48 CLI 通过 |
+| 10-D import split | `complete-local` | `6e03aa3`；25 import mock、41 golden、48 linked CLI 通过 |
+| 10-E command split | `complete-local` | `2f6cc8f`、`cc3e690`；dcommit 73/73、clone/fetch 48/48 通过 |
+| 10-F public API | `complete-local` | `3c1eff1`；allowlist、private implementation modules、full-feature clippy 通过 |
+| 10-G final release revalidation | `in-progress` | clean package、strict frozen、same-SHA hosted artifact 待最终候选执行 |
 
 ## Scope
 
