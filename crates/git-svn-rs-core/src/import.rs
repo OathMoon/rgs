@@ -2478,7 +2478,7 @@ fn apply_placeholder_log(
             revision = value.parse::<u32>().ok();
             continue;
         }
-        if !revision.is_some_and(|value| value <= max_revision) {
+        if revision.is_none_or(|value| value > max_revision) {
             continue;
         }
         let (present, encoded) = if let Some(path) = line.strip_prefix("  +empty_dir: ") {

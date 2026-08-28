@@ -20,6 +20,7 @@ const PERL_GIT_SVN_REQUIRED: &str = "Perl git-svn is required";
 const FROZEN_GIT_SVN_VERSION: &str = "2.54.0";
 const FROZEN_GIT_COMMIT: &str = "0b13e48a3a30cdfa94e8ef842e24d6045ab3d015";
 const SVN_TOOLS_REQUIRED: &str = "svnadmin and svn are required";
+#[cfg(unix)]
 const SVNSERVE_REQUIRED: &str = "svnserve is required";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -135,6 +136,7 @@ pub struct FilePropertyArtifact {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg(unix)]
 pub struct DcommitWriteArtifacts {
     pub svn_revision: u32,
     pub svn_uuid: String,
@@ -366,6 +368,7 @@ pub struct GoldenComparison {
     capture: GoldenArtifactCapture,
 }
 
+#[cfg(unix)]
 pub struct DcommitGoldenComparison {
     pub perl: DcommitWriteArtifacts,
     pub rust: DcommitWriteArtifacts,
@@ -383,6 +386,7 @@ impl GoldenComparison {
     }
 }
 
+#[cfg(unix)]
 impl DcommitGoldenComparison {
     pub fn assert_write_artifacts_match(&self) -> Result<(), String> {
         let comparison = if self.perl == self.rust {
@@ -481,6 +485,7 @@ pub fn require_svn_tools() -> Result<(), CompatDecision> {
     }
 }
 
+#[cfg(unix)]
 pub fn require_golden_svnserve() -> Result<(), CompatDecision> {
     if command_succeeds("svnserve", &["--version"]) {
         Ok(())

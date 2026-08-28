@@ -1,4 +1,6 @@
-use git_svn_rs_core::svn::auth::{AskpassAuthPrompt, AuthPrompt, AuthRequest, MockAuthPrompt};
+#[cfg(unix)]
+use git_svn_rs_core::svn::auth::AskpassAuthPrompt;
+use git_svn_rs_core::svn::auth::{AuthPrompt, AuthRequest, MockAuthPrompt};
 
 #[test]
 fn username_option_overrides_default_username() {

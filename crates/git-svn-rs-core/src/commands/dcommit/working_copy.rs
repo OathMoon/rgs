@@ -194,6 +194,7 @@ fn make_writable(path: &Path) -> Result<(), String> {
         permissions.set_mode(permissions.mode() | 0o200);
     }
     #[cfg(not(unix))]
+    #[allow(clippy::permissions_set_readonly_false)]
     permissions.set_readonly(false);
     std::fs::set_permissions(path, permissions)
         .map_err(|error| format!("failed to make {} writable: {error}", path.display()))
