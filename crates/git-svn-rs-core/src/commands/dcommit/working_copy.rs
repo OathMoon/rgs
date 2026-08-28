@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use crate::dcommit::diff_planner::normalize_commit_path;
+use crate::dcommit::normalize_commit_path;
 use crate::svn::editor::CommitEditor;
 
 use super::*;
@@ -484,13 +484,9 @@ pub(super) fn dcommit_file_svn(
     };
     let config_fingerprint = recovery_config_fingerprint(recovery_fingerprint_input);
     let legacy_config_fingerprint_v2 =
-        crate::dcommit::fingerprint::legacy_recovery_config_fingerprint_v2(
-            recovery_fingerprint_input,
-        );
+        crate::dcommit::legacy_recovery_config_fingerprint_v2(recovery_fingerprint_input);
     let legacy_config_fingerprint_v3 =
-        crate::dcommit::fingerprint::legacy_recovery_config_fingerprint_v3(
-            recovery_fingerprint_input,
-        );
+        crate::dcommit::legacy_recovery_config_fingerprint_v3(recovery_fingerprint_input);
     let new_base = active
         .is_none()
         .then(|| {

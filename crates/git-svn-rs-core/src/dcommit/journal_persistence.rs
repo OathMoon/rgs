@@ -18,10 +18,12 @@ impl JournalStorePersistence {
         })
     }
 
+    #[cfg(test)]
     pub fn load(&self) -> Result<Option<DcommitJournal>, JournalError> {
         self.store.load()
     }
 
+    #[cfg(test)]
     pub fn last_generation(&self) -> Option<u64> {
         self.last_generation
     }

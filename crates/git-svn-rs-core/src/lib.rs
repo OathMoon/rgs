@@ -1,3 +1,10 @@
+//! Core parsing, repository, SVN transport, import, and command orchestration for
+//! `git-svn-rs`.
+//!
+//! The supported v0.1 API is intentionally facade-oriented. Internal recovery,
+//! planning, FFI, and publication modules may change without preserving their
+//! module paths; see `.plans/public-api-allowlist.md` in the source repository.
+
 pub mod authors;
 pub mod cli;
 pub mod commands;
