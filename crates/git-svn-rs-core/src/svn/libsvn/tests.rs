@@ -1,3 +1,7 @@
+#[cfg(git_svn_rs_libsvn_linked)]
+use super::super::auth::AuthRequest;
+#[cfg(git_svn_rs_libsvn_linked)]
+use super::auth::{SimplePromptBaton, prompt_simple_credentials};
 use super::*;
 
 #[cfg(git_svn_rs_libsvn_linked)]
