@@ -29,5 +29,7 @@ git-svn-rs-core = { version = "0.1.0", path = "../git-svn-rs-core" }
 
 [dev-dependencies]
 assert_cmd.workspace = true
+chrono.workspace = true
+md-5.workspace = true
 predicates.workspace = true
 tempfile.workspace = true

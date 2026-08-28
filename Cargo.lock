@@ -421,8 +421,10 @@ name = "git-svn-rs"
 version = "0.1.0"
 dependencies = [
  "assert_cmd",
+ "chrono",
  "clap",
  "git-svn-rs-core",
+ "md-5",
  "predicates",
  "tempfile",
 ]

@@ -1,4 +1,6 @@
 use assert_cmd::Command;
+use chrono::{Local, TimeZone};
+use md5::{Digest, Md5};
 use predicates::prelude::*;
 
 #[test]
@@ -577,6 +579,10 @@ fn info_prints_tracked_url_and_revision() {
 fn info_reports_normal_file_and_directory_paths() {
     let temp = tempfile::tempdir().unwrap();
     let work = clone_mock_repo(temp.path());
+    let worktree_checksum = format!(
+        "{:x}",
+        Md5::digest(std::fs::read(work.join("src/lib.rs")).unwrap())
+    );
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -596,9 +602,9 @@ fn info_reports_normal_file_and_directory_paths() {
         .stdout(predicate::str::contains("Last Changed Rev: 2\n"))
         .stdout(predicate::str::contains("Last Changed Date: "))
         .stdout(predicate::str::contains("Text Last Updated: "))
-        .stdout(predicate::str::contains(
-            "Checksum: 0e0ddbdb0a003bc8b612b2c340d0ed1f\n",
-        ));
+        .stdout(predicate::str::contains(format!(
+            "Checksum: {worktree_checksum}\n"
+        )));
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -1247,6 +1253,12 @@ fn log_applies_author_timezone_like_frozen_log_pm() {
     let commit = git_output(work, ["rev-parse", "HEAD"]).trim().to_string();
     write_rev_map_for_short_ref(work, "git-svn", &[(1, &commit)]);
     git(work, ["update-ref", "refs/remotes/git-svn", &commit]);
+    let expected_date = Local
+        .timestamp_opt(1_767_225_600 + 8 * 60 * 60, 0)
+        .single()
+        .unwrap()
+        .format("%Y-%m-%d %H:%M:%S %z (%a, %d %b %Y)")
+        .to_string();
 
     Command::cargo_bin("git-svn-rs")
         .unwrap()
@@ -1255,9 +1267,7 @@ fn log_applies_author_timezone_like_frozen_log_pm() {
         .args(["log", "--revision", "1"])
         .assert()
         .success()
-        .stdout(predicate::str::contains(
-            "2026-01-01 08:00:00 +0000 (Thu, 01 Jan 2026)",
-        ));
+        .stdout(predicate::str::contains(expected_date));
 }
 
 #[test]
@@ -2773,18 +2783,15 @@ fn rebase_merges_preserves_local_merge_topology() {
         .trim(),
         "1"
     );
-    assert_eq!(
-        std::fs::read_to_string(work.join("side.txt")).unwrap(),
-        "side\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(work.join("topic.txt")).unwrap(),
-        "topic\n"
-    );
-    assert_eq!(
-        std::fs::read_to_string(work.join("upstream.txt")).unwrap(),
-        "upstream\n"
-    );
+    for (path, expected_line) in [
+        ("side.txt", "side"),
+        ("topic.txt", "topic"),
+        ("upstream.txt", "upstream"),
+    ] {
+        let contents = std::fs::read_to_string(work.join(path)).unwrap();
+        assert_eq!(contents.lines().collect::<Vec<_>>(), [expected_line]);
+        assert!(contents.ends_with('\n'));
+    }
 }
 
 #[test]
