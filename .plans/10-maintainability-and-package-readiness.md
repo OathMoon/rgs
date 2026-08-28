@@ -27,7 +27,7 @@ workflow 后，新的 HEAD 才能替代该发布基线。
 
 ## Current State
 
-State: `in-progress`.
+State: `release-candidate`; protected same-SHA evidence pending.
 
 package/runtime、模块边界与 API 批次已完成本地实现和验证：
 
@@ -51,8 +51,8 @@ package/runtime、模块边界与 API 批次已完成本地实现和验证：
     `pub(crate)`，稳定 facade re-export 保持不变。
 
 以上变更不增加命令、协议、native write-back 或兼容性声明。
-Phase 10 当前本地提交均未取得与最终候选绑定的 hosted
-current-SHA artifact；`6f22803` 仍是最后一个已证明发布基线。
+Phase 10 最终本地矩阵已经通过，但当前提交尚未取得与候选 SHA 绑定的 hosted
+artifact；`6f22803` 仍是最后一个已证明发布基线。
 
 | Initial item | Local status | Evidence boundary |
 |---|---|---|
@@ -65,7 +65,7 @@ current-SHA artifact；`6f22803` 仍是最后一个已证明发布基线。
 | 10-D import split | `complete-local` | `6e03aa3`；25 import mock、41 golden、48 linked CLI 通过 |
 | 10-E command split | `complete-local` | `2f6cc8f`、`cc3e690`；dcommit 73/73、clone/fetch 48/48 通过 |
 | 10-F public API | `complete-local` | `3c1eff1`；allowlist、private implementation modules、full-feature clippy 通过 |
-| 10-G final release revalidation | `in-progress` | clean package、strict frozen、same-SHA hosted artifact 待最终候选执行 |
+| 10-G final release revalidation | `release-candidate` | clean package、strict frozen、linked/static 本地矩阵通过；same-SHA hosted artifact 待执行 |
 
 ## Scope
 
@@ -239,6 +239,22 @@ panic/secret safety 不得因移动而放宽。
 - 提交并推送候选 SHA 后运行 protected release workflow；
 - 下载并核对 `release-summary.json` 的 exact SHA、backend、features 和 scenario 数；
 - 只有该 artifact 成功后才更新 last proven release SHA。
+
+当前候选的本地证据（2026-08-28）：
+
+- clean temporary registry 按 core → CLI → shim 完成 Cargo 自验证和独立 check；
+  归档 SHA-256 分别为 `a1c17054…81ac`、`592e3602…c5cd`、
+  `09fe17da…f3d`；
+- 冻结 Git/git-svn 2.54.0 与 SVN 1.14.3 下 strict workspace 通过，golden
+  41/41，八个 required summaries 全部为 `executed`/`passed`，并匹配冻结
+  commit、`svn-cli-vs-frozen-perl` backend 和 `default-svn-cli` features；
+- linked parallel/serial 均通过 core 210/210 与 backend 36/36；linked CLI
+  clone/fetch 48/48、dcommit 73/73 通过；
+- `cargo fmt --all -- --check`、全 target/full-feature clippy（warnings denied）
+  与 `git diff --check` 通过。
+
+上述证据只把当前工作树提升为 release candidate；在 protected workflow 的
+same-SHA artifact 通过前不得标记 `release-pass`。
 
 ## Verification Matrix
 

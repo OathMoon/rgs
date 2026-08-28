@@ -29,7 +29,7 @@ verification must remain distinct from this last proven release baseline.
 | 7 dcommit | `release-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, hosted linked dcommit 73/73 gate | native write-back and broader remote faults |
 | 8 golden/release | `release-pass` at `6f22803` | hosted 41 scenarios, 8 required summaries, backend/build-feature identity, same-SHA release summary and verifier | forward-compatibility runs remain separately scoped |
 | 9 hardening | `release-pass` for P0/P1 at `6f22803` | linked property/recovery fixes, temp-root migration, ADR, typed errors, protected hosted release evidence | maintenance scope transferred to Phase 10 |
-| 10 maintainability/package | `in-progress`; 10-A–10-F `complete-local` | package registry proof; libsvn/import/dcommit/fetch splits through `cc3e690`; API allowlist/narrowing at `3c1eff1`; linked CLI 48/48 and 73/73 | final clean package, strict frozen and same-SHA hosted revalidation |
+| 10 maintainability/package | `release-candidate`; hosted evidence pending | package registry proof; libsvn/import/dcommit/fetch splits through `cc3e690`; API allowlist/narrowing at `3c1eff1`; final strict/linked/static local matrix | protected same-SHA hosted artifact |
 
 ## Validated Capabilities
 
@@ -274,7 +274,7 @@ verification must remain distinct from this last proven release baseline.
 
 ## Current Verification
 
-Verified locally on 2026-08-12 in WSL from the repository root:
+Verified locally on 2026-08-28 in WSL from the repository root:
 
 - `cargo test --workspace`: core 178/178, readonly 82/82, dcommit 73/73,
   real SVN CLI 48/48, and all 41 available golden scenarios passed.
@@ -298,6 +298,13 @@ Verified locally on 2026-08-12 in WSL from the repository root:
   SVN/libsvn 1.14.3 executed all required comparisons: golden 41/41, with all
   eight required summaries marked executed/passed and carrying the expected
   frozen commit, backend, and build-feature identifiers.
+- Final Phase 10 linked revalidation passed core 210/210 and native backend 36/36
+  in both parallel and serial modes, then linked CLI clone/fetch 48/48 and
+  dcommit 73/73. The final static gate passed formatting, all-target/all-feature
+  clippy with warnings denied, and `git diff --check`.
+- Final package-readiness revalidation passed core → CLI → shim in an isolated
+  temporary registry. Archive SHA-256 values were `a1c17054…81ac`,
+  `592e3602…c5cd`, and `09fe17da…f3d`, respectively.
 - Fixture creation used the centralized system temp root; the repository-root run
   introduced no new random `golden-stdlayout-*` or `svn-fixture-*` directories.
 - Formatting, all-target/all-feature clippy with warnings denied, and
@@ -313,12 +320,11 @@ Verified locally on 2026-08-12 in WSL from the repository root:
 ## Remaining Work
 
 Phase 9 P0/P1 implementation and protected hosted evidence are complete. Its former
-P2 scope is now governed by `.plans/10-maintainability-and-package-readiness.md`.
-Phase 10's package/runtime/CI hygiene and release-document/publish-order slices are
-complete locally at `8aa0ac6` and `42d0a6f`. Large module splitting, public-API
-narrowing, and final hosted revalidation remain. These Phase 10 commits have no
-hosted current-SHA evidence, so the hosted evidence above still applies only to
-`6f22803` and must not be attributed to them.
+P2 scope is governed by `.plans/10-maintainability-and-package-readiness.md`.
+Phase 10's package/runtime/CI hygiene, release documents, module splits, API
+narrowing, and final local matrix are complete. Only the protected workflow and
+downloaded same-SHA artifact audit remain. Until that succeeds, hosted evidence
+still applies only to `6f22803` and must not be attributed to the Phase 10 candidate.
 
 Any subsequent release-candidate commit must rerun the protected workflow so its
 artifact remains bound to the candidate SHA; older artifacts are never inherited.
@@ -372,14 +378,20 @@ full Log.pm, and other deferred capabilities stay outside this release claim.
 - `8aa0ac6`: Phase 10 governance, package isolation/licenses, Actions runtime,
   and immutable import runtime baseline.
 - `42d0a6f`: release documents and isolated core → CLI → shim registry proof.
+- `7395e90`–`40352a3`: incremental libsvn tests/native-delta/FFI/runtime/auth/RA
+  split with linked boundary verification.
+- `6e03aa3`: import discovery/replay/publication split.
+- `2f6cc8f`, `cc3e690`: dcommit and fetch command-boundary splits.
+- `3c1eff1`: v0.1 public API allowlist and implementation visibility narrowing.
+- `34fc415`: Phase 10 structural completion recorded before final release gates.
 
 ## Next Steps
 
-1. Continue Phase 10 in isolated module-split and API batches with focused plus
-   workspace/linked gates.
-2. For every release candidate, execute the protected release workflow and retain
-   its same-SHA `release-summary.json` and scenario artifacts.
-3. Do not expand deferred profiles as part of maintenance or evidence collection.
+1. Commit and push the Phase 10 release candidate, execute the protected release
+   workflow, and retain its same-SHA `release-summary.json` and scenario artifacts.
+2. Mark Phase 10 `release-pass` and update the last proven release SHA only after
+   the downloaded artifact audit succeeds.
+3. Do not expand deferred profiles as part of evidence collection.
 
 ## Handoff Notes
 
