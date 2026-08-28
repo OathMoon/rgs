@@ -620,8 +620,10 @@ fn decode_base64(value: &str) -> Result<Vec<u8>, String> {
         return Err("length is not a multiple of four".to_string());
     }
     let mut decoded = Vec::with_capacity(input.len() / 4 * 3);
-    for (index, chunk) in input.chunks_exact(4).enumerate() {
-        let last = index + 1 == input.len() / 4;
+    let (chunks, remainder) = input.as_chunks::<4>();
+    debug_assert!(remainder.is_empty());
+    for (index, chunk) in chunks.iter().enumerate() {
+        let last = index + 1 == chunks.len();
         let a = base64_digit(chunk[0])?;
         let b = base64_digit(chunk[1])?;
         let c = if chunk[2] == b'=' {
