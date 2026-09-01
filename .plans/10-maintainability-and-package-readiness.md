@@ -18,6 +18,7 @@ Rust API，并把三个 crate 推进到内容可审计、许可完整、发布�
 - [能力边界清单](release-capability-inventory.md)
 - [libsvn binding ADR](adr/0001-libsvn-binding-strategy.md)
 - [2026-08-12 审阅报告](../docs/项目审阅报告-2026-08-12.md)
+- [2026-08-31 复核报告](../docs/项目审阅报告-2026-08-31.md)
 
 Phase 10 最终候选
 `ffb2e227f182be7b3afadbd0d2fcdf3744842e0e` 已通过 protected
@@ -27,6 +28,37 @@ Phase 10 最终候选
 ## Current State
 
 State: `release-pass` at `ffb2e22`.
+
+2026-08-31 复核关联任务“推进可维护性与打包计划”和 GitHub run/jobs API：
+后续 Windows 断言修复 `daf5fc8`、`4b49af6` 已完成，当前维护 HEAD
+`4b49af6` 的 [Windows #23](https://github.com/OathMoon/rgs/actions/runs/33158740460)
+与 [Developer gate #11](https://github.com/OathMoon/rgs/actions/runs/33158740456)
+均成功。Windows #23 是 push 运行，`Verify strict compatibility` 实际为
+`skipped`，更正关联任务最终回复中“包含严格兼容验证”的表述。
+这两次普通 CI 关闭了 Windows 回归，但不替代 `ffb2e22` 的 protected
+same-SHA artifact，也不重开已完成的 Phase 10。正式 publish/tag 仍未执行。
+
+同日后续 WSL 复验已完整通过：默认 strict workspace（golden 41/41、8 个
+必需摘要）、linked 并行/串行（core 210/210、backend 36/36）、linked CLI
+clone/fetch 48/48 与 dcommit 73/73，以及格式和全特性 clippy。诊断确认
+实际 `linked`。测试基于 `4b49af6` 源码及待提交的文档改动，结果保留在
+`target/wsl-audit-20260831-BkgAae/`；这是本地证据，不升级 hosted 发布基线。
+
+修复前按 Windows 原生 + WSL 严格对照的实测，WSL 九项门禁再次全部通过，
+新摘要为 `target/wsl-audit-20260831-KC6jbX/verification-summary.json`。
+Windows 本机发现 TortoiseSVN 将 `propset` 的 `*` 属性值展开为路径，导致
+执行属性恢复用例在 post-submit 之前失败；修订属性 fixture 的 UTF-8 写入和
+CLI 输出换行也未满足字节保真断言。该次配置的原生门禁不能标为通过，
+也不能由既有 hosted/WSL 结果代替。仓库内 TEMP 引起的 Git 非仓库断言失败
+另归为验证环境问题。详见[审阅报告第 7 节](../docs/项目审阅报告-2026-08-31.md)
+和[双环境验证步骤](../docs/windows-wsl-verification.md)。
+
+上述属性问题已在后续工作树修复中关闭：属性值通过文件传递并明确 UTF-8，
+fixture 使用字节安全的 revprop 写入，CLI 修订属性使用逐项 XML 读取和正确的
+字符引用/换行解析。Windows 与 WSL 各九项门禁全部通过，原四个失败用例及
+新增中文、混合换行和二进制回归通过。证据为 `target/windows-audit-20260831-185524/`
+与 `target/wsl-audit-20260831-Vm2KR3/`，两边源码指纹相同并经独立审计。
+这证明本机修复后的配置，不扩展协议/平台声明，也不升级 protected 发布基线。
 
 package/runtime、模块边界与 API 批次已完成本地实现和验证：
 
@@ -58,7 +90,7 @@ job 核对。
 |---|---|---|
 | 10-0 governance | `complete-local` | Phase 9 冻结，Phase 10 独立计划/进度记录已建立 |
 | 10-A1 package isolation/licenses | `complete-local` | 三个包清单及归档内容已审计，core 已从隔离包离线构建 |
-| Actions runtime maintenance | `complete-local` | workflow YAML 已更新；未宣称 hosted 运行证据 |
+| Actions runtime maintenance | `release-pass` | workflow YAML 已更新，并通过 `ffb2e22` 的 protected hosted run #33155854101 |
 | 10-B immutable import runtime | `complete-local` | 计数回归、import mock 和 linked CLI clone/fetch 已通过 |
 | 10-A2/A3 release docs/order | `complete-local` | `42d0a6f`；本地 registry 证明 core → CLI → shim 归档、自验证和独立构建 |
 | 10-C libsvn split | `complete-local` | `7395e90`–`40352a3`；linked parallel/serial、29 internal、36 backend、48 CLI 通过 |

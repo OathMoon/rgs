@@ -5,12 +5,18 @@ Baseline: Git `v2.54.0` (`0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`)
 This inventory is the Phase 1/2 release boundary. Every parsed command and option
 is either implemented for a named gate or rejected before repository mutation.
 
-Evidence state (2026-08-12): the Phase 9 P0/P1 closure at
-`c0dfb2067f75806935b2b36462d5819923652634` passes the full local default and
+Evidence state (reconciled 2026-08-31): the Phase 10 closure at
+`ffb2e227f182be7b3afadbd0d2fcdf3744842e0e` passes the full local default and
 linked matrix and protected hosted
-[release gate run #31561696796](https://github.com/OathMoon/rgs/actions/runs/31561696796).
+[release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101).
 The retained `frozen-compatibility-artifacts` release summary is passed and bound
 to that exact commit SHA.
+
+Maintenance follow-up `4b49af6` passes
+[Windows #23](https://github.com/OathMoon/rgs/actions/runs/33158740460) and
+[Developer gate #11](https://github.com/OathMoon/rgs/actions/runs/33158740456).
+The Windows strict step was skipped; neither run expands this capability
+inventory or replaces the protected release baseline.
 
 ## Command surface
 

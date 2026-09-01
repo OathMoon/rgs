@@ -126,16 +126,26 @@ fn linked_backend_revision_properties_preserve_multibyte_utf8_bytes() {
     }
 
     let fixture = StandardSvnFixture::create().unwrap();
-    let value = "svnsync 来源\n".as_bytes();
-    fixture
-        .set_revision_property(0, "git-svn-rs:binary", value)
-        .unwrap();
     let backend = LibSvnBackend::for_url(fixture.url());
-
-    assert_eq!(
-        backend.rev_properties(0).unwrap()["git-svn-rs:binary"],
-        value
-    );
+    for value in [
+        "svnsync 来源\n".as_bytes(),
+        "来源\r\n".as_bytes(),
+        b"bare\rCR and LF\n and CRLF\r\n",
+        b"literal &amp; <xml> * ?",
+        b"binary\0\xff\r\n",
+        b"",
+    ] {
+        fixture
+            .set_revision_property(0, "git-svn-rs:binary", value)
+            .unwrap();
+        assert_eq!(
+            backend.rev_properties(0).unwrap()["git-svn-rs:binary"],
+            value
+        );
+    }
+    let log = "提交日志\n".as_bytes();
+    fixture.set_revision_property(1, "svn:log", log).unwrap();
+    assert_eq!(backend.rev_properties(1).unwrap()["svn:log"], log);
 }
 
 #[test]

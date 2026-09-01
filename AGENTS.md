@@ -37,6 +37,7 @@ When updating progress:
 - `.plans/git-svn-rs-plan.md`: top-level implementation plan.
 - `.plans/00-git-svn-rs-review-and-roadmap.md`: review and roadmap context.
 - `.plans/01-foundation-cli-workspace.md` through `.plans/08-compatibility-golden-tests.md`: phase plans.
+- `.plans/09-release-hardening-and-quality.md` and `.plans/10-maintainability-and-package-readiness.md`: completed release hardening and package-readiness scope.
 
 ## Development Guidelines
 
@@ -45,7 +46,7 @@ When updating progress:
 - Prefer existing helpers and patterns in `git-svn-rs-core` over adding parallel abstractions.
 - Do not silently change compatibility behavior; add or update focused tests when changing git-svn semantics.
 - Fixtures and golden compatibility tests may skip when external Subversion or Perl `git-svn` tools are unavailable unless strict compatibility mode is enabled.
-- The `svn-libsvn` feature currently compiles a not-linked backend shell; default builds do not require libsvn.
+- The `svn-libsvn` feature provides a production linked RA/delta read/import backend when platform libraries are found; otherwise it reports `not-linked`. Default builds do not require libsvn. Dcommit still writes through the SVN CLI working-copy sink, including in linked builds.
 
 ## Verification
 
@@ -64,6 +65,8 @@ For strict compatibility checks where external tools are expected:
 
 ## Current High-Level Scope
 
-- Completed foundation: CLI workspace, config/mapping/authors/filters, Git metadata, rev_map primitives, SVN abstractions, fixtures, mock import, and much of SVN CLI replay.
-- Implemented supported flows: local `file://` and local `svn://` clone/fetch replay coverage, readonly commands for supported metadata/rev_map layouts, local/mock dcommit write-back, and broad golden artifact comparisons.
-- Remaining major work: real `svn-libsvn` backend integration, remote SVN/libsvn dcommit write-back, broader remote replay validation, full `Log.pm` compatibility modes, and stricter Rust-vs-Perl golden comparisons.
+- Phases 1–10 are complete for the declared v1 profiles, including exact frozen Perl comparisons, linked read/import, durable dcommit recovery, module splits, public API boundaries, and isolated package verification.
+- Implemented profiles include CLI local `file://` and authenticated `svn://` read/write, linked read/import, and configured/loopback SSH and authenticated HTTP/HTTPS DAV fixtures. These are not general remote/platform support claims.
+- Last proven protected release SHA: `ffb2e22` (run #33155854101). Follow-up `4b49af6` passes Windows #23 and Developer gate #11; the Windows strict step was skipped. A later release candidate needs its own protected same-SHA artifact.
+- Local 2026-08-31 working-tree property repairs pass all nine Windows native/linked and all nine WSL strict/linked gates; the WSL default run supplies 41 golden tests and eight required summaries. These source-fingerprinted local results do not replace protected release evidence. See the progress record and dated review.
+- Deferred scope: native libsvn write-back, broader remote/platform validation, automatic legacy metadata migration, full `Log.pm`, and non-core commands. Package readiness does not imply a registry publish or tag.

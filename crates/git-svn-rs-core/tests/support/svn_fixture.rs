@@ -264,18 +264,39 @@ impl StandardSvnFixture {
     ) -> Result<(), String> {
         let value_path = self._tmp.path().join("revision-property-value");
         std::fs::write(&value_path, value).map_err(|error| error.to_string())?;
-        run_utf8(
-            self._tmp.path(),
-            "svnadmin",
-            &[
-                "setrevprop",
-                path_arg(&self.repo)?,
-                "-r",
-                &revision.to_string(),
-                name,
-                path_arg(&value_path)?,
-            ],
+        // svnadmin setrevprop transcodes through the native locale on Windows.
+        // propset --file preserves custom property bytes, including binary data.
+        #[cfg(windows)]
+        std::fs::write(
+            self.repo.join("hooks/pre-revprop-change.bat"),
+            b"@exit /b 0\r\n",
         )
+        .map_err(|error| error.to_string())?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let hook = self.repo.join("hooks/pre-revprop-change");
+            std::fs::write(&hook, b"#!/bin/sh\nexit 0\n").map_err(|error| error.to_string())?;
+            std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755))
+                .map_err(|error| error.to_string())?;
+        }
+        let revision = revision.to_string();
+        let url = self.url();
+        let mut args = vec![
+            "propset",
+            "--non-interactive",
+            "--revprop",
+            "-r",
+            &revision,
+            name,
+            "--file",
+            path_arg(&value_path)?,
+            &url,
+        ];
+        if name.starts_with("svn:") {
+            args.extend(["--encoding", "UTF-8"]);
+        }
+        run(self._tmp.path(), "svn", &args)
     }
 
     #[allow(dead_code)]
@@ -398,6 +419,8 @@ impl StandardSvnFixture {
                 "trunk/new-link",
             ],
         )?;
+        let executable_value = self._tmp.path().join("executable-property-value");
+        std::fs::write(&executable_value, b"*").map_err(|error| error.to_string())?;
         run(
             &wc,
             "svn",
@@ -405,7 +428,8 @@ impl StandardSvnFixture {
                 "propset",
                 "--non-interactive",
                 "svn:executable",
-                "*",
+                "--file",
+                path_arg(&executable_value)?,
                 "trunk/tool.sh",
             ],
         )?;
@@ -1200,17 +1224,6 @@ fn strict_compat() -> bool {
 fn run(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
     let output = Command::new(program)
         .current_dir(cwd)
-        .args(args)
-        .output()
-        .map_err(|e| format!("{program} failed to start: {e}"))?;
-
-    command_result(program, output)
-}
-
-fn run_utf8(cwd: &Path, program: &str, args: &[&str]) -> Result<(), String> {
-    let output = Command::new(program)
-        .current_dir(cwd)
-        .env("LC_ALL", "C.UTF-8")
         .args(args)
         .output()
         .map_err(|e| format!("{program} failed to start: {e}"))?;

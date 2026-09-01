@@ -358,17 +358,36 @@ impl RaSession for SvnCliBackend {
 
     fn rev_properties(&self, revision: u32) -> Result<BTreeMap<String, Vec<u8>>, String> {
         let target = crate::svn::target_without_peg_revision(&self.url);
+        let revision = revision.to_string();
         let xml = self.run_text(&[
             "proplist",
             "--revprop",
             "--xml",
-            "--verbose",
             "--non-interactive",
             "-r",
-            &revision.to_string(),
+            &revision,
             &target,
         ])?;
-        parse_proplist_xml_bytes(&xml)
+        // proplist --verbose and plain propget translate standard svn:* values
+        // to the native locale/EOLs even when proplist emits XML. propget --xml
+        // preserves the stored value; only XML text decoding is needed.
+        let mut properties = parse_proplist_xml_bytes(&xml)?;
+        for (name, value) in &mut properties {
+            let xml = self.run_text(&[
+                "propget",
+                "--revprop",
+                "--xml",
+                "--non-interactive",
+                "-r",
+                &revision,
+                name,
+                &target,
+            ])?;
+            *value = parse_proplist_xml_bytes(&xml)?
+                .remove(name)
+                .ok_or_else(|| format!("svn propget XML omitted revision property {name}"))?;
+        }
+        Ok(properties)
     }
 
     fn check_path(&self, path: &str, revision: u32) -> Result<Option<SvnNodeKind>, String> {
@@ -567,7 +586,7 @@ fn parse_proplist_xml_bytes(xml: &str) -> Result<BTreeMap<String, Vec<u8>>, Stri
             + value_start;
         let raw_value = &rest[value_start..value_end];
         let value = match attr(header, "encoding").as_deref() {
-            None => xml_unescape(raw_value).into_bytes(),
+            None => decode_property_xml_text(raw_value)?.into_bytes(),
             Some("base64") => decode_base64(raw_value)
                 .map_err(|error| format!("invalid base64 SVN property {name}: {error}"))?,
             Some(encoding) => {
@@ -580,6 +599,45 @@ fn parse_proplist_xml_bytes(xml: &str) -> Result<BTreeMap<String, Vec<u8>>, Stri
         rest = &rest[value_end + "</property>".len()..];
     }
     Ok(properties)
+}
+
+fn decode_property_xml_text(text: &str) -> Result<String, String> {
+    // Normalize XML's literal line endings before decoding character references.
+    // SVN escapes an original CR as &#13;, including the CR in a CRLF value.
+    // This also removes Windows stdout translation without changing property EOLs.
+    let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
+    let mut rest = normalized.as_str();
+    let mut decoded = String::with_capacity(rest.len());
+    while let Some(start) = rest.find('&') {
+        decoded.push_str(&rest[..start]);
+        rest = &rest[start + 1..];
+        let end = rest
+            .find(';')
+            .ok_or_else(|| "invalid SVN property XML: unterminated reference".to_string())?;
+        let entity = &rest[..end];
+        let character = match entity {
+            "amp" => Some('&'),
+            "lt" => Some('<'),
+            "gt" => Some('>'),
+            "quot" => Some('"'),
+            "apos" => Some('\''),
+            _ => {
+                let codepoint = if let Some(hex) = entity.strip_prefix("#x") {
+                    u32::from_str_radix(hex, 16).ok()
+                } else {
+                    entity
+                        .strip_prefix('#')
+                        .and_then(|value| value.parse().ok())
+                };
+                codepoint.and_then(char::from_u32)
+            }
+        }
+        .ok_or_else(|| format!("invalid SVN property XML reference &{entity};"))?;
+        decoded.push(character);
+        rest = &rest[end + 1..];
+    }
+    decoded.push_str(rest);
+    Ok(decoded)
 }
 
 fn parse_list_xml(xml: &str) -> Result<BTreeMap<String, DirEntry>, String> {
@@ -908,6 +966,27 @@ mod tests {
             b"hello & goodbye"
         );
         assert_eq!(properties.get("custom:empty").unwrap(), b"");
+    }
+
+    #[test]
+    fn property_xml_preserves_original_newlines_and_decodes_references_once() {
+        for newline in ["\n", "\r\n"] {
+            let xml = format!(
+                "<property name=\"custom:text\">来源{newline}CRLF&#13;{newline}CR&#xD; TAB&#9; &amp;#13; &lt;&gt;&quot;&apos;</property>"
+            );
+            assert_eq!(
+                parse_proplist_xml_bytes(&xml).unwrap()["custom:text"],
+                "来源\nCRLF\r\nCR\r TAB\t &#13; <>\"'".as_bytes()
+            );
+        }
+    }
+
+    #[test]
+    fn property_xml_rejects_invalid_character_references() {
+        for reference in ["&broken", "&unknown;", "&#xD800;", "&#1114112;"] {
+            let xml = format!("<property name=\"custom:text\">{reference}</property>");
+            assert!(parse_proplist_xml_bytes(&xml).is_err(), "{reference}");
+        }
     }
 
     #[test]

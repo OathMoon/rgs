@@ -66,20 +66,28 @@ The names are conceptual boundaries, not a requirement to add a trait for every 
 
 Each phase has exactly one current state: `not-started`, `in-progress`, `structural-pass`, `behavior-pass`, or `release-pass`. Profile-specific qualification may be added, for example `behavior-pass(file://-cli)`.
 
-Current audited state:
+Audited state reconciled on 2026-08-31. The old July implementation snapshot is
+superseded by the [progress record](implementation-progress-record.md).
 
-| Phase | Current state | Why it is not further along |
+| Phase | State for declared profiles | Scope boundary |
 |---|---|---|
-| 1 workspace/CLI | `structural-pass` | global verbosity and inert-option policy are incomplete |
-| 2 config/mapping | `structural-pass` | URL/session path model, full layout URLs, metadata runtime semantics are incomplete |
-| 3 metadata/rev_map | `structural-pass` | migration, ambiguity, transaction, and recovery are incomplete |
-| 4 SVN backend | `in-progress` | public libsvn update is log replay; native adapter is test-only; parallel FFI tests are unstable |
-| 5 clone/fetch | `in-progress` | single-path clone, timestamps, checkout, option semantics, and unified Fetcher behavior are incomplete |
-| 6 readonly | `in-progress` | supported subset works; multi-ref scope, optional tree-ish, and remaining Log modes are incomplete |
-| 7 dcommit | `in-progress` | local prototype bypasses shared editor plan and target resolution is unsafe |
-| 8 golden/release | `structural-pass` | strict Perl run skips and object/clone state differences are normalized away |
+| 1 workspace/CLI | `release-pass` | unsupported commands/options fail explicitly |
+| 2 config/mapping | `release-pass` | broader remote/platform profiles remain deferred |
+| 3 metadata/rev_map | `release-pass` | legacy metadata is inspected/rejected, not automatically migrated |
+| 4 SVN backend | `release-pass` for CLI and linked read/import | native write-back remains deferred |
+| 5 clone/fetch | `release-pass` | covered shared replay and exact graph/state comparisons |
+| 6 readonly | `release-pass` for the documented subset | full Log.pm and broader terminal fidelity remain deferred |
+| 7 dcommit | `release-pass` for safe-linear profiles | SVN CLI write sink, including linked builds |
+| 8 golden/release | `release-pass` | frozen 41-scenario and required-summary gate |
+| 9 hardening | `release-pass` for P0/P1 | maintenance scope completed separately in Phase 10 |
+| 10 maintainability/package | `release-pass` at `ffb2e22` | package readiness, not registry publication |
 
-The progress record may move a state only when it cites the exact gate command and result.
+The last proven protected release SHA is `ffb2e22` (run #33155854101). Maintenance
+HEAD `4b49af6` additionally passed Windows #23 and Developer gate #11; the Windows
+strict step was skipped. These results do not transfer release evidence across
+SHAs. Exact commands, run links, and deferred scope remain in the progress record.
+The progress record may move a state only when it cites the exact gate command
+and result.
 
 ## Capability Matrix
 
@@ -87,9 +95,9 @@ The progress record may move a state only when it cites the exact gate command a
 |---|---|---|---|
 | `file://` + SVN CLI | single-path and stdlayout | linear dcommit | strict Perl graph/state/write comparison |
 | local `svn://` + SVN CLI | explicit/authenticated fetch | authenticated linear dcommit | strict fixture comparison and recovery scenarios |
-| linked libsvn `file://`/`svn://` | true RA delta, not log replay | deferred until CommitSink plan exists | default-parallel linked integration gate |
-| `http://`/`https://` | authenticated remote read | commiturl/pushurl write | repeatable remote fixture or declared environment gate |
-| `svn+ssh://` | deferred | deferred | explicit support decision and repeatable fixture |
+| linked libsvn `file://`/`svn://` | true RA delta through the shared editor | CLI sink only; native sink deferred | linked parallel/serial and post-submit verification gates |
+| `http://`/`https://` | authenticated loopback DAV, CLI and linked | CLI working-copy sink | validated loopback fixtures; no arbitrary remote infrastructure claim |
+| `svn+ssh://` | configured tunnel and real loopback OpenSSH | CLI working-copy sink | repeatable configured/loopback fixtures; broader profiles deferred |
 | `mock://` | test only | test only | never user-facing support |
 
 ## Corrected Execution Order

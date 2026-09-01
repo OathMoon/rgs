@@ -3400,21 +3400,20 @@ fn dcommit_writes_explicit_mergeinfo_to_file_svn_when_tools_exist() {
             "dcommit",
             "--no-rebase",
             "--mergeinfo",
-            "/branches/main:1-2",
+            "/branches/来源:1-2",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("write explicit mergeinfo"));
 
-    assert_eq!(
-        svn_stdout(&[
-            "propget",
-            "--strict",
-            "svn:mergeinfo",
-            &format!("{}/trunk", fixture.url())
-        ]),
-        "/branches/main:1-2"
-    );
+    // Plain propget translates standard properties to the native locale.
+    let xml = svn_stdout(&[
+        "propget",
+        "--xml",
+        "svn:mergeinfo",
+        &format!("{}/trunk", fixture.url()),
+    ]);
+    assert!(xml.contains(">/branches/来源:1-2</property>"), "{xml}");
 }
 
 #[test]

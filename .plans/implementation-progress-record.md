@@ -1,6 +1,7 @@
 # git-svn-rs Implementation Progress Record
-Last audited: 2026-08-28
+Last audited: 2026-08-31
 Branch: `codex-execute-git-svn-rs-plans`
+Audited maintenance HEAD: `4b49af688ceaf64350bfce8ad98549581cca6785`
 Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634`
 Last proven release commit: `ffb2e227f182be7b3afadbd0d2fcdf3744842e0e`
 Protected hosted evidence: [release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
@@ -16,14 +17,23 @@ portable fixtures, typed top-level errors, and protected release gates. The
 protected hosted gate passed the same strict/linked/static matrix and independently
 verified the retained artifact against the release commit SHA. Phase 10 completed
 the maintainability and package-readiness scope at `ffb2e22`; deferred capabilities
-remain outside the release claim.
+remain outside the release claim. Follow-up Windows portability fixes at
+`4b49af6` pass the Windows and Developer gates; they do not replace the protected
+release baseline. The Windows strict compatibility step was skipped, not passed.
+The 2026-08-31 local WSL revalidation additionally passed the complete strict and
+linked matrix on the maintenance source; it is not a new hosted release artifact.
+The initial local Windows matrix exposed native TortoiseSVN argument expansion
+and revision-property encoding/newline failures. Working-tree repairs now pass
+all nine Windows gates and all nine WSL strict/linked/static gates. Both bind the
+same verified source fingerprint; this local evidence does not upgrade the
+protected release baseline.
 
 | Phase | State | Current evidence | Main gap |
 |---|---|---|---|
 | 1 workspace/CLI | `release-pass` for declared v1 profiles | complete capability inventory, CLI/core/opt-in shim, diagnostics, output/exit boundaries, explicit unsupported no-mutation tests, hosted gate | future commands remain explicitly out of scope |
 | 2 config/mapping | `release-pass` for declared profiles | centralized config, relative/full layouts, globs, authors, filters, ref sanitization, metadata modes/auth precedence, exact hosted artifacts | broader future platform/remote profiles |
 | 3 metadata/rev_map | `release-pass` for declared layouts | SHA-1/SHA-256 maps, locks/fsync, canonical paths, identity resolution, recovery, typed resolver/rev_map/dcommit boundaries, exact v0-v5 rejection | automatic migration and broader internal typed-error migration |
-| 4 SVN adapters | `release-pass` for declared CLI/linked read profiles | shared replay, complete incremental add properties, per-file RA-serf batons, audited FFI, ADR, portable fixtures, hosted parallel/serial linked gates | native write-back, module split, broader remote/platform validation |
+| 4 SVN adapters | `release-pass` for declared CLI/linked read profiles | shared replay, complete incremental add properties, per-file RA-serf batons, audited FFI, ADR, Phase 10 module split, portable fixtures, hosted parallel/serial linked gates | native write-back, broader remote/platform validation |
 | 5 import/clone/fetch | `release-pass` for declared profiles | stdlayout/direct URL replay, copies/follow-parent, bounded fetch, collisions, hosted linked CLI 48/48 parity | remaining obscure Fetcher semantics |
 | 6 readonly | `release-pass` for covered profiles | scoped queries/log/reset/gc, option-complete rebase with streamed progress, PTY pager, exact hosted artifacts | broader platform terminal fidelity |
 | 7 dcommit | `release-pass` for declared profiles | typed plans, v4 recovery, linked property/readback recovery, CLI sink profiles, hosted linked dcommit 73/73 gate | native write-back and broader remote faults |
@@ -280,6 +290,93 @@ remain outside the release claim.
 
 ## Current Verification
 
+### Windows property repairs (2026-08-31, verified working tree)
+
+- Fixed file-based dcommit property values with explicit UTF-8 for `svn:*`,
+  revprop fixture writes, per-property XML reads, and XML newline/reference
+  decoding. Plans/journals, dependencies, tool versions and formal gates are
+  unchanged. Details: `docs/项目审阅报告-2026-08-31.md`, section 8.
+- Windows: all nine gates pass. Default workspace includes read 42/42, dcommit
+  63/63, readonly 79/79, core 175/175 and SVN fixture 5/5. Linked parallel and
+  serial each pass core 207/207, backend 36/36 and fixture 5/5; linked CLI read
+  42/42 and write 63/63, linked diagnose, fmt, clippy and diff check pass.
+- WSL: all nine gates pass. Default strict golden 41/41 plus eight executed/passed
+  frozen summaries; linked parallel/serial core 212/212 and backend 36/36;
+  linked CLI read 48/48 and write 73/73; linked diagnose/static checks pass.
+- Evidence: `target/windows-audit-20260831-185524/` and
+  `target/wsl-audit-20260831-Vm2KR3/`, each with `verification-summary.json`,
+  `source-manifest.json`, `verified-source.patch` and `independent-audit.json`.
+  Source fingerprint: `f1bc127e4e5206eaa415f245fc70d42bfa61ed5a125ff355d82e979f8ad22288`;
+  base HEAD `4b49af6` plus uncommitted repairs. Both start/end checks agree.
+- The four prior Windows failures are closed without relaxing assertions.
+  Regressions cover UTF-8 mergeinfo/log, LF/CRLF/CR, empty/binary values, and
+  XML references. Windows Perl comparisons still skip; only the default WSL
+  strict run supplies frozen comparison evidence. This is not a release artifact.
+
+### Earlier split-verification findings (2026-08-31, before repair)
+
+- Windows `target/windows-audit-20260831-111849/` recorded five passing/four
+  failing gates with four distinct failed tests. Wildcard argument expansion and
+  fixture/property encoding failures are superseded by the repaired matrix above.
+  Earlier WSL proof remains in `target/wsl-audit-20260831-KC6jbX/`.
+- Keep the Windows Cargo target separate and TEMP outside any Git repository.
+  The local sandbox causes SVN E720005 on the user temp path; approved normal
+  path access resolves it without system changes. Environment failures and
+  interrupted/invalid-collector attempts are not final compatibility evidence.
+
+### WSL strict and linked revalidation (2026-08-31)
+
+- Verified source at `4b49af688ceaf64350bfce8ad98549581cca6785` with only the
+  pending status-document edits. The audit retains that tracked patch and its
+  SHA-256; production code, tests, manifests, lockfile and workflows match HEAD.
+- WSL2 Ubuntu Linux x86_64, Rust/Cargo 1.97.1, frozen Git/Perl 2.54.0,
+  SVN/libsvn 1.14.3; `LC_ALL=C`, `TZ=UTC`, Linux `/tmp` fixture root.
+- `GIT_SVN_RS_STRICT_COMPAT=1 cargo test --workspace --locked` passed, including
+  core 178/178, readonly 82/82, real clone/fetch 48/48, dcommit 73/73 and golden
+  41/41. All eight required summaries were independently checked as executed and
+  passed with the frozen commit, default backend and build-feature identifiers.
+- Linked core passed both parallel and `--test-threads=1`: core 210/210 and
+  native backend 36/36 in each run. Linked CLI clone/fetch passed 48/48 and
+  dcommit passed 73/73. Linked-feature golden functions are not counted as a
+  second executed frozen comparison; the default strict run supplies that proof.
+- `diagnose` reported `platform: linux/x86_64`, `libsvn feature: enabled`, and
+  `libsvn link: linked`. Formatting, all-target/all-feature clippy with warnings
+  denied, and `git diff --check` passed.
+- Local logs, per-gate commands, default compatibility artifacts and
+  `verification-summary.json` are retained under
+  `target/wsl-audit-20260831-BkgAae/`. All nine gates passed. This is local WSL
+  evidence with pending documentation edits, not protected hosted release
+  evidence; the last proven release SHA remains `ffb2e22`.
+
+### Maintenance follow-up audit (2026-08-31)
+
+- Reconciled the task `推进可维护性与打包计划`
+  (`01a04285-f30b-7763-81a6-cd1b0ef7324e`) with repository changes and GitHub's
+  public run/jobs API. The updated review is in
+  `docs/项目审阅报告-2026-08-31.md`.
+- `daf5fc8` and `4b49af6` fix Windows CRLF, working-tree checksum, and local-time
+  test assertions; production sources are unchanged from `ffb2e22`.
+- [Windows #23](https://github.com/OathMoon/rgs/actions/runs/33158740460) and
+  [Developer gate #11](https://github.com/OathMoon/rgs/actions/runs/33158740456)
+  both succeeded on `4b49af688ceaf64350bfce8ad98549581cca6785`. The Windows run
+  was a `push`: `Verify` succeeded, but `Verify strict compatibility` was
+  `skipped`. This corrects the linked task's final description of that step.
+- The linked task records local Windows readonly 79/79, formatting, and
+  all-feature clippy passing. This audit additionally passed CLI smoke 5/5,
+  clone/fetch smoke 19/19, and Windows real-SVN clone/fetch 42/42 after selecting
+  an explicit long-path temporary root. The full workspace run was stopped in
+  the dcommit suite and is not counted as a complete pass.
+- This audit passed formatting, all-target/all-feature clippy, `git diff --check`,
+  and all three package-list checks (README, both licenses, no generated fixture
+  paths). The local native link probe lacked `VCPKGRS_DYNAMIC`; no linked or
+  strict Windows result is claimed. PDB-cache and SVN short-temp-path failures
+  were environment issues, not evidence reopening the completed Phase 10 scope.
+- The API also reconfirmed protected run #33155854101 and its independent
+  verifier succeeded at `ffb2e22`. Artifact content/digest evidence below comes
+  from the original task's download audit; this audit did not redownload it.
+
+### Phase 10 release baseline (2026-08-28)
+
 Verified locally on 2026-08-28 in WSL from the repository root:
 
 - `cargo test --workspace`: core 178/178, readonly 82/82, dcommit 73/73,
@@ -329,7 +426,10 @@ Verified locally on 2026-08-28 in WSL from the repository root:
 
 Phase 9 P0/P1 and Phase 10 are complete with protected hosted evidence. Any future
 release-candidate commit must rerun the protected workflow so its artifact remains
-bound to that candidate SHA; older artifacts are never inherited. Broader
+bound to that candidate SHA; older artifacts are never inherited. `4b49af6` has
+successful maintenance CI, but no replacement protected artifact is established
+by this audit. Publishing crates and creating a tag remain separate release
+actions; `0.1.0` is still recorded as unreleased. Broader
 remote/platform profiles, native libsvn write-back, automatic migration, full
 Log.pm, and other deferred capabilities stay outside this release claim.
 
@@ -388,13 +488,19 @@ Log.pm, and other deferred capabilities stay outside this release claim.
 - `34fc415`: Phase 10 structural completion recorded before final release gates.
 - `39bf24f`, `ffb2e22`: Rust 1.98 static-gate compatibility; `ffb2e22` is
   validated by protected release gate #33155854101 and its retained same-SHA artifact.
+- `0cb5cd6`: Phase 10 hosted-evidence documentation; `daf5fc8`, `4b49af6`:
+  Windows test portability closure, validated by Windows #23 and Developer #11.
 
 ## Next Steps
 
 1. Treat `ffb2e22` and run #33155854101 as the Phase 10 release baseline.
-2. Rerun the full protected gate for any later release candidate; do not inherit
-   this artifact across SHAs.
+2. Keep `4b49af6`'s successful Windows/developer evidence distinct from the release
+   baseline. Rerun the full protected gate for any later release candidate; do
+   not inherit artifacts across SHAs or count the skipped Windows strict step.
 3. Keep deferred profiles outside maintenance-only follow-up work.
+4. Preserve the verified working-tree property repairs and their source-bound
+   local evidence. Any later release candidate still needs its own protected
+   same-SHA gate; do not substitute WSL evidence for native Windows coverage.
 
 ## Handoff Notes
 

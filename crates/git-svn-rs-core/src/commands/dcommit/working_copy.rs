@@ -69,12 +69,27 @@ impl<'a> WorkingCopyPlanEditor<'a> {
 
     fn change_prop(&self, path: &str, name: &str, value: Option<&str>) -> Result<(), String> {
         let target = self.property_target(path)?;
-        let mut args = match value {
-            Some(value) => vec![
+        // Native Windows SVN can expand a literal `*` argument itself. Keep
+        // property contents out of argv, without changing the plan or journal.
+        let value_file = value
+            .map(|value| {
+                let file = tempfile::NamedTempFile::new()
+                    .map_err(|error| format!("failed to create property value file: {error}"))?
+                    .into_temp_path();
+                std::fs::write(&file, value.as_bytes())
+                    .map_err(|error| format!("failed to write property value file: {error}"))?;
+                Ok::<_, String>(file)
+            })
+            .transpose()?;
+        let mut args = match &value_file {
+            Some(file) => vec![
                 "propset".to_string(),
                 "--non-interactive".to_string(),
                 name.to_string(),
-                value.to_string(),
+                "--file".to_string(),
+                strip_windows_verbatim_prefix(file.to_path_buf())
+                    .to_string_lossy()
+                    .into_owned(),
             ],
             None => vec![
                 "propdel".to_string(),
@@ -82,6 +97,11 @@ impl<'a> WorkingCopyPlanEditor<'a> {
                 name.to_string(),
             ],
         };
+        if value_file.is_some() && name.starts_with("svn:") {
+            // SVN-controlled text properties are translated from the native
+            // locale by default, but the value file always contains UTF-8.
+            args.extend(["--encoding".to_string(), "UTF-8".to_string()]);
+        }
         args.push(svn_target(&target));
         run_svn(Some(&self.wc), self.svn_options, &args)
     }
