@@ -7,6 +7,7 @@ Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634
 Last proven release-candidate commit: `8496b12b12aecec537e7310c1a4fed7c5ddda522`
 Prior protected hosted evidence: [release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
 Current protected candidate evidence: [release gate run #33467284345](https://github.com/OathMoon/rgs/actions/runs/33467284345)
+Release tag: `v0.1.0` on `main` at `6d57caa5c53645adaf627bb44c92f8bc128b2534`
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -387,8 +388,32 @@ protected release baseline.
   `passed`, `executed`, and bound to frozen Git commit
   `0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`.
 - This establishes protected same-SHA release-gate evidence for the candidate.
-  No registry publish, version tag, or public release has been performed;
-  those remain separate release actions.
+  No registry publish or public GitHub Release has been performed; the version
+  tag is recorded separately below.
+
+### v0.1.0 main tag and local release build (2026-09-01)
+
+- The verified development branch was made available as remote `main`, and
+  annotated tag `v0.1.0` was created and pushed at
+  `6d57caa5c53645adaf627bb44c92f8bc128b2534`. The local checkout now tracks
+  `main`; pre-existing untracked audit directories remain untouched.
+- Tag push triggered [protected release gate #33476999908](https://github.com/OathMoon/rgs/actions/runs/33476999908),
+  which completed successfully in 6m 49s. Both strict frozen compatibility and
+  same-SHA evidence verification passed. Its artifact digest is
+  `sha256:5e7f0fa1f3d07649942b95dcc38cd985ddeaeb9bc02af5b7bb6e378b0b5abb0c`;
+  the downloaded ZIP has the identical SHA-256, and its release summary binds
+  to `6d57caa5c53645adaf627bb44c92f8bc128b2534`.
+- Local Windows release build passed with
+  `CARGO_TARGET_DIR=target/release-v0.1.0` and
+  `cargo build --workspace --release --locked`. Generated files are
+  `target/release-v0.1.0/release/git-svn-rs.exe` (4,926,976 bytes),
+  `git-svn.exe` (230,400 bytes), `git_svn_rs.pdb` (3,166,208 bytes), and
+  `git_svn.pdb` (1,544,192 bytes). Their SHA-256 values are, respectively,
+  `3734e815023c5c61a0e2057a9d3cb06d0fd5da7f6b5c71b9114cd4d6c51060c8`,
+  `19e6f720e9aea2bdfb73dc333276b914c27f18877d970304c8162c6cb7c9d63c`,
+  `75690585fa5bdd7ce4059645b76cfdc2ac553bf53b19a4bee99c3b82b5c61fac`, and
+  `95b07e650e939fb3120a6d07bf567fb61a2aad495f4f3e5cea9c79074d926361`.
+- No `cargo publish`, registry upload, or public GitHub Release was performed.
 
 ### Maintenance follow-up audit (2026-08-31)
 
@@ -467,10 +492,9 @@ Verified locally on 2026-08-28 in WSL from the repository root:
 ## Remaining Work
 
 Phase 9 P0/P1 and Phase 10 are complete with protected hosted evidence. The current
-release candidate is `8496b12`; its WSL/Unix strict gate, protected workflow, and
-same-SHA artifact verification all passed on 2026-09-01. The candidate is release
-gate verified, but no registry publish, version tag, or public release has been
-performed.
+release candidate `8496b12` and the tagged main release `v0.1.0` both have their
+own successful protected same-SHA evidence. The local release binaries are built;
+no registry publish or public GitHub Release has been performed.
 Any future release-candidate commit must rerun the protected workflow so its artifact
 remains bound to that candidate SHA; older artifacts are never inherited. `4b49af6`
 has successful maintenance CI, but no replacement protected artifact is established
@@ -539,9 +563,9 @@ Log.pm, and other deferred capabilities stay outside this release claim.
 
 ## Next Steps
 
-1. Treat `8496b12` and protected run #33467284345 as the current release-gate
-   verified candidate. Keep registry publishing, version tagging, and public
-   release as explicit separate actions.
+1. Treat `v0.1.0` at `6d57caa` and protected run #33476999908 as the tagged,
+   release-gate verified baseline. Keep registry publishing and public GitHub
+   Release as explicit separate actions.
 2. Keep `4b49af6`'s successful Windows/developer evidence distinct from both the
    release baseline and candidate evidence. Do not inherit artifacts across SHAs or
    count a skipped Windows strict step.
