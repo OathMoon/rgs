@@ -1,7 +1,8 @@
 # git-svn-rs Implementation Progress Record
-Last audited: 2026-08-31
+Last audited: 2026-09-01
 Branch: `codex-execute-git-svn-rs-plans`
 Audited maintenance HEAD: `4b49af688ceaf64350bfce8ad98549581cca6785`
+Release candidate SHA: `8496b12b12aecec537e7310c1a4fed7c5ddda522`
 Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634`
 Last proven release commit: `ffb2e227f182be7b3afadbd0d2fcdf3744842e0e`
 Protected hosted evidence: [release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
@@ -424,10 +425,12 @@ Verified locally on 2026-08-28 in WSL from the repository root:
 
 ## Remaining Work
 
-Phase 9 P0/P1 and Phase 10 are complete with protected hosted evidence. Any future
-release-candidate commit must rerun the protected workflow so its artifact remains
-bound to that candidate SHA; older artifacts are never inherited. `4b49af6` has
-successful maintenance CI, but no replacement protected artifact is established
+Phase 9 P0/P1 and Phase 10 are complete with protected hosted evidence. The current
+release candidate is `8496b12`; its WSL/Unix strict gate, protected workflow, and
+same-SHA artifact verification are being refreshed by the 2026-09-01 release audit.
+Any future release-candidate commit must rerun the protected workflow so its artifact
+remains bound to that candidate SHA; older artifacts are never inherited. `4b49af6`
+has successful maintenance CI, but no replacement protected artifact is established
 by this audit. Publishing crates and creating a tag remain separate release
 actions; `0.1.0` is still recorded as unreleased. Broader
 remote/platform profiles, native libsvn write-back, automatic migration, full
@@ -493,10 +496,12 @@ Log.pm, and other deferred capabilities stay outside this release claim.
 
 ## Next Steps
 
-1. Treat `ffb2e22` and run #33155854101 as the Phase 10 release baseline.
-2. Keep `4b49af6`'s successful Windows/developer evidence distinct from the release
-   baseline. Rerun the full protected gate for any later release candidate; do
-   not inherit artifacts across SHAs or count the skipped Windows strict step.
+1. Treat `8496b12` as the current release candidate, pending its own protected
+   same-SHA artifact; retain `ffb2e22` and run #33155854101 as the last proven
+   release baseline until that audit completes.
+2. Keep `4b49af6`'s successful Windows/developer evidence distinct from both the
+   release baseline and candidate evidence. Do not inherit artifacts across SHAs or
+   count a skipped Windows strict step.
 3. Keep deferred profiles outside maintenance-only follow-up work.
 4. Preserve the verified working-tree property repairs and their source-bound
    local evidence. Any later release candidate still needs its own protected
