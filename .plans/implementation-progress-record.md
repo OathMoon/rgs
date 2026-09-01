@@ -349,6 +349,25 @@ protected release baseline.
   evidence with pending documentation edits, not protected hosted release
   evidence; the last proven release SHA remains `ffb2e22`.
 
+### Release candidate strict audit (2026-09-01)
+
+- Candidate `8496b12b12aecec537e7310c1a4fed7c5ddda522` was checked in a clean
+  WSL-native detached clone. The WSL login environment resolved
+  `/home/oathmoon/.local/bin/git`: Git/git-svn 2.54.0, SVN/libsvn 1.14.3,
+  Rust/Cargo 1.97.1, with `LC_ALL=C` and `TZ=UTC`.
+- `GIT_SVN_RS_STRICT_COMPAT=1 cargo test --workspace --locked` passed. The
+  frozen Perl comparison executed all 41 golden tests; all eight required
+  scenario summaries were `status=passed`, `execution=executed`, and bound to
+  frozen Git commit `0b13e48a3a30cdfa94e8ef842e24d6045ab3d015` with the expected
+  `svn-cli-vs-frozen-perl` and `default-svn-cli` identifiers.
+- Linked core passed both parallel and serial runs. Linked CLI clone/fetch
+  passed 48/48 and dcommit passed 73/73. `diagnose` reported Linux/x86_64,
+  enabled libsvn and `libsvn link: linked`; fmt, all-target/all-feature clippy
+  with warnings denied, and `git diff --check` passed.
+- This is candidate-bound local WSL evidence only. The protected hosted run and
+  its same-SHA artifact verifier remain required; the last proven release SHA
+  remains `ffb2e22` until those hosted checks pass.
+
 ### Maintenance follow-up audit (2026-08-31)
 
 - Reconciled the task `推进可维护性与打包计划`
@@ -426,8 +445,8 @@ Verified locally on 2026-08-28 in WSL from the repository root:
 ## Remaining Work
 
 Phase 9 P0/P1 and Phase 10 are complete with protected hosted evidence. The current
-release candidate is `8496b12`; its WSL/Unix strict gate, protected workflow, and
-same-SHA artifact verification are being refreshed by the 2026-09-01 release audit.
+release candidate is `8496b12`; its WSL/Unix strict gate passed on 2026-09-01, while
+the protected workflow and same-SHA artifact verification remain pending.
 Any future release-candidate commit must rerun the protected workflow so its artifact
 remains bound to that candidate SHA; older artifacts are never inherited. `4b49af6`
 has successful maintenance CI, but no replacement protected artifact is established
