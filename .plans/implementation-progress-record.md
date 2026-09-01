@@ -4,8 +4,9 @@ Branch: `codex-execute-git-svn-rs-plans`
 Audited maintenance HEAD: `4b49af688ceaf64350bfce8ad98549581cca6785`
 Release candidate SHA: `8496b12b12aecec537e7310c1a4fed7c5ddda522`
 Phase 9 P0/P1 implementation evidence: `c0dfb2067f75806935b2b36462d5819923652634`
-Last proven release commit: `ffb2e227f182be7b3afadbd0d2fcdf3744842e0e`
-Protected hosted evidence: [release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
+Last proven release-candidate commit: `8496b12b12aecec537e7310c1a4fed7c5ddda522`
+Prior protected hosted evidence: [release gate run #33155854101](https://github.com/OathMoon/rgs/actions/runs/33155854101)
+Current protected candidate evidence: [release gate run #33467284345](https://github.com/OathMoon/rgs/actions/runs/33467284345)
 Product requirements and ordering live in `.plans/git-svn-rs-plan.md` and
 `.plans/00-git-svn-rs-review-and-roadmap.md`.
 
@@ -364,9 +365,30 @@ protected release baseline.
   passed 48/48 and dcommit passed 73/73. `diagnose` reported Linux/x86_64,
   enabled libsvn and `libsvn link: linked`; fmt, all-target/all-feature clippy
   with warnings denied, and `git diff --check` passed.
-- This is candidate-bound local WSL evidence only. The protected hosted run and
-  its same-SHA artifact verifier remain required; the last proven release SHA
-  remains `ffb2e22` until those hosted checks pass.
+- This is candidate-bound local WSL evidence only; it does not replace hosted
+  evidence. The protected same-SHA gate and artifact verifier are recorded in
+  the following section.
+
+### Protected candidate release gate (2026-09-01)
+
+- Protected release gate run [#33467284345](https://github.com/OathMoon/rgs/actions/runs/33467284345)
+  was manually dispatched from `release-candidate-8496b12` and completed
+  successfully in 7m 3s. Both `strict-compatibility / frozen-git-svn` and
+  `verify-current-sha-evidence` passed; the run page identifies the commit as
+  `8496b12b12aecec537e7310c1a4fed7c5ddda522`.
+- The uploaded `frozen-compatibility-artifacts` artifact is 123 KB and has
+  GitHub digest
+  `sha256:1e21a0dc52daa90f6257daac7963409fc3c65c6e3a8b2a94e6e05e6bb5d1cbda`.
+  The downloaded ZIP has the identical SHA-256.
+- Extracted `release-summary.json` reports schema 2, `status=passed`, the exact
+  candidate `commit_sha`, required scenario count 8, the expected
+  `svn-cli-vs-frozen-perl`/`default-svn-cli` identifiers, and all four linked
+  backend profiles. Each required scenario summary is independently present,
+  `passed`, `executed`, and bound to frozen Git commit
+  `0b13e48a3a30cdfa94e8ef842e24d6045ab3d015`.
+- This establishes protected same-SHA release-gate evidence for the candidate.
+  No registry publish, version tag, or public release has been performed;
+  those remain separate release actions.
 
 ### Maintenance follow-up audit (2026-08-31)
 
@@ -445,8 +467,10 @@ Verified locally on 2026-08-28 in WSL from the repository root:
 ## Remaining Work
 
 Phase 9 P0/P1 and Phase 10 are complete with protected hosted evidence. The current
-release candidate is `8496b12`; its WSL/Unix strict gate passed on 2026-09-01, while
-the protected workflow and same-SHA artifact verification remain pending.
+release candidate is `8496b12`; its WSL/Unix strict gate, protected workflow, and
+same-SHA artifact verification all passed on 2026-09-01. The candidate is release
+gate verified, but no registry publish, version tag, or public release has been
+performed.
 Any future release-candidate commit must rerun the protected workflow so its artifact
 remains bound to that candidate SHA; older artifacts are never inherited. `4b49af6`
 has successful maintenance CI, but no replacement protected artifact is established
@@ -515,9 +539,9 @@ Log.pm, and other deferred capabilities stay outside this release claim.
 
 ## Next Steps
 
-1. Treat `8496b12` as the current release candidate, pending its own protected
-   same-SHA artifact; retain `ffb2e22` and run #33155854101 as the last proven
-   release baseline until that audit completes.
+1. Treat `8496b12` and protected run #33467284345 as the current release-gate
+   verified candidate. Keep registry publishing, version tagging, and public
+   release as explicit separate actions.
 2. Keep `4b49af6`'s successful Windows/developer evidence distinct from both the
    release baseline and candidate evidence. Do not inherit artifacts across SHAs or
    count a skipped Windows strict step.
